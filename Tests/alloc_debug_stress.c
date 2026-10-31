@@ -7,10 +7,11 @@
  *
  * Build & run (from repo root; GCCINC auto-detects the compiler headers):
  *   GCCINC=$(cc -print-file-name=include)
+ *   mkdir -p obj
  *   cc -std=c11 -O2 -Wall -nostdinc -I Tests/stubs -I "$GCCINC" -I /usr/include \
  *      -I BaseHdr -D__XENEVA_DEBUG_ALLOC__ -DTLSF_HOST_TEST \
- *      Tests/alloc_debug_stress.c KernelAA64/Mm/tlsf.c -o /tmp/opencode/alloc_stress
- *   /tmp/opencode/alloc_stress
+ *      Tests/alloc_debug_stress.c KernelAA64/Mm/tlsf.c -o obj/alloc_stress
+ *   ./obj/alloc_stress
  * Flag-off churn (same PRNG/ops, detectors compiled out):
  *   same command without -D__XENEVA_DEBUG_ALLOC__.
  * Extras: -DSTRESS_TRACE (per-op stderr log), -DCHURN_ITERS=N,

@@ -34,6 +34,18 @@
 #include <sys/socket.h>
 #include <_xeneva.h>
 
+#ifndef INADDR_ANY
+#define INADDR_ANY       ((in_addr_t)0x00000000)
+#define INADDR_BROADCAST ((in_addr_t)0xFFFFFFFF)
+#define INADDR_NONE      ((in_addr_t)0xFFFFFFFF)
+#define INADDR_LOOPBACK  ((in_addr_t)0x7F000001)
+#endif
+
+#ifndef INET_ADDRSTRLEN
+#define INET_ADDRSTRLEN  16
+#define INET6_ADDRSTRLEN 46
+#endif
+
 #ifdef __cplusplus
 XE_EXTERN {
 #endif

@@ -99,7 +99,7 @@ cfu_fail:
 }
 
 long __bordoisila_copy_to_user(void* udst, const void* src, size_t n) {
-	if (!_validate_upointer_range(src, n))
+	if (!_validate_upointer_range(udst, n))
 		return -1;
 
 	uint8_t* d = udst;

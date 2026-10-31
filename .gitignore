@@ -76,3 +76,6 @@ Tools/platform-tools/
 # Commercial Doom IWADs must never be committed (copyrighted, large binaries).
 # Place doom2.wad locally under Resources/resources/ or provide via Freedoom.
 *.wad
+
+# logs
+build/log

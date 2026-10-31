@@ -51,6 +51,9 @@
 #define MINIMP3_IMPLEMENTATION
 #include "minimp3.h"
 
+#define MINIID3_IMPLEMENTATION
+#include "miniid3.h"
+
 ChitralekhaApp* app;
 ChWindow* mainWin;
 ChCanvas* mainCanvas;
@@ -229,6 +232,70 @@ void DrawWallpaper(ChCanvas* canv, char* filename, int x, int y) {
 	_KeCloseFile(image);
 }
 
+/*
+ * DrawScaledJpeg -- decode a JPEG from memory and scale it (nearest-neighbour)
+ * to fill the rectangle (x, y, destW, destH) on the canvas.
+ * @param canv   -- target canvas
+ * @param jpgBuf -- raw JPEG bytes
+ * @param jpgLen -- byte count
+ * @param x, y   -- top-left destination corner on canvas
+ * @param destW  -- destination width  (pixels)
+ * @param destH  -- destination height (pixels)
+ */
+static void
+DrawScaledJpeg(ChCanvas* canv, uint8_t* jpgBuf, size_t jpgLen, int x, int y, int destW, int destH) {
+	Jpeg::Decoder* dec = new Jpeg::Decoder(jpgBuf, (int)jpgLen, malloc, free);
+	if (dec->GetResult() != Jpeg::Decoder::OK) {
+		_KePrint("AlbumArt: JPEG decode error\n");
+		delete dec;
+		return;
+	}
+
+	int srcW = dec->GetWidth();
+	int srcH = dec->GetHeight();
+	uint8_t* pixels = dec->GetImage(); /* RGB, 3 bytes per pixel */
+
+	/* nearest-neighbour scale to (destW x destH) */
+	for (int dy = 0; dy < destH; dy++) {
+		int sy = (dy * srcH) / destH;
+		for (int dx = 0; dx < destW; dx++) {
+			int sx = (dx * srcW) / destW;
+			int idx = sy * srcW + sx;
+			uint8_t r = pixels[idx * 3];
+			uint8_t g = pixels[idx * 3 + 1];
+			uint8_t b = pixels[idx * 3 + 2];
+			uint32_t rgba = 0xff000000 | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+			ChDrawPixel(canv, x + dx, y + dy, rgba);
+		}
+	}
+	delete dec;
+}
+
+/*
+ * DrawMusicBackground -- draw album art from the MP3 scaled to fill the
+ * wallpaper area, or fall back to /musicbk.jpg if no embedded art exists.
+ * Uses miniid3_read_album_art() from miniid3.h.
+ * @param canv    -- target canvas
+ * @param mp3Path -- full path to MP3 (may be NULL)
+ * @param x, y   -- top-left of destination rectangle
+ * @param w, h   -- size of destination rectangle
+ */
+void DrawMusicBackground(ChCanvas* canv, const char* mp3Path, int x, int y, int w, int h) {
+	if (mp3Path) {
+		uint8_t* artBuf = NULL;
+		size_t artLen = 0;
+		if (miniid3_read_album_art(mp3Path, &artBuf, &artLen)) {
+			_KePrint("AlbumArt: found %d bytes, drawing scaled JPEG\r\n", (int)artLen);
+			DrawScaledJpeg(canv, artBuf, artLen, x, y, w, h);
+			free(artBuf);
+			return;
+		}
+		_KePrint("AlbumArt: none found in %s, using fallback\r\n", mp3Path);
+	}
+	/* fallback: static music background image */
+	DrawWallpaper(canv, "/musicbk.jpg", x, y);
+}
+
 void UpdateHomeUI() {
 	mainWin->canv = mainCanvas;
 	mainWin->widgets = mainWidgetList;
@@ -272,6 +339,22 @@ void SelectButtonActionHandler(ChWidget* wid, ChWindow* win) {
 	}
 	_KeProcessSleep(100);
 	UpdateHomeUI();
+
+	/* redraw album art (or fallback) for the selected song */
+	if (selectedFile) {
+		char fullPath[64];
+		memset(fullPath, 0, sizeof(fullPath));
+		strcpy(fullPath, "/MUSIC/");
+		strcpy(fullPath + strlen("/MUSIC/"), selectedFile);
+
+		int artX = 10;
+		int artY = 64;
+		int artW = mainWin->info->width - 20;
+		int artH = mainWin->info->height - 100 - artY;
+		DrawMusicBackground(mainCanvas, fullPath, artX, artY, artW, artH);
+		ChWindowUpdate(mainWin, artX, artY, artW, artH, 1, 0);
+	}
+
 	_KeProcessSleep(100);
 }
 
@@ -569,7 +652,12 @@ int main(int argc, char* argv[]) {
 
 	ChWindowPaint(mainWin);
 
-	DrawWallpaper(mainWin->canv, "/musicbk.jpg", 10, 64);
+	/* wallpaper area: below menubar (y=64) and above transport buttons (height-100) */
+	int artX = 10;
+	int artY = 64;
+	int artW = mainWin->info->width - 20;		   /* 10px margin each side */
+	int artH = mainWin->info->height - 100 - artY; /* leave room for buttons */
+	DrawMusicBackground(mainWin->canv, "/music/charlie.mp3", artX, artY, artW, artH);
 	ChWindowUpdate(mainWin, 0, 0, mainWin->info->width, mainWin->info->height, 1, 0);
 
 	mainCanvas = mainWin->canv;
@@ -582,7 +670,8 @@ int main(int argc, char* argv[]) {
 
 	ChWindowBroadcastIcon(app, "/icons/media.bmp");
 
-	play_mp3("/music/asilu.mp3");
+	play_mp3("/music/charlie.mp3");
+
 	//int threadIdx = _KeCreateThread(PlayerThread, "accent");
 
 	PostEvent e;

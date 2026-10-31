@@ -52,16 +52,6 @@ set -e
 #                           and the image. Init skips the missing daemon.
 #   --no-audio              Drop the audio userspace (deoaud daemon and
 #                           AudioPlayer) from the build and the image.
-#   --bypass-virtgpu        Leave virtio-gpu-pci (1AF4:1050) to the
-#                           kernel-side driver: the image carries neither
-#                           virtgpu.dll nor its audrv.cnf entry, so the
-#                           internal in-tree driver never claims it. Off by
-#                           default; for bringing up the vendored DRM
-#                           virtio-gpu driver.
-#   --bypass-virtio-input   Leave the virtio keyboard/tablet functions
-#                           (1AF4:1052) to the vendored Linux input core and
-#                           virtio_input driver instead of the native
-#                           virtiokbd/virtiotablet pair.
 #   --no-virtio-serial      Skip the virtio-serial controller and its one
 #                           virtserialport, so the guest's virtio_console
 #                           driver has no device to probe. It is on by
@@ -76,8 +66,8 @@ set -e
 #   --clipboard             Force the clipboard port back on.
 #   --no-doom               Drop the Doom addon (doom.exe + doom2.wad) from
 #                           the image.
-#   --no-netsurf            Drop the NetSurf browser (netsurf.exe) from
-#                           the image.
+#   --no-netsurf            (Deprecated) Drop NetSurf browser from the image.
+#                           NetSurf is now automatically excluded when using --apps.
 #   --bt                    Attach Bluetooth on the second serial. The socket
 #                           is /tmp/bt-server-bredr (btproxy), or
 #                           /tmp/xeneva-bt-virt when XENEVA_BT_VIRT=1.
@@ -97,8 +87,6 @@ set -e
 #   --data-size-mb=N        Size of the persistent data.img virtio-blk disk
 #                           (default 256). Created once and reused, so files
 #                           written to /data survive across runs.
-#   GPUSRV=1                Run virtio-GPU from the supervised user-space
-#                           gpusrv server; kernel virtgpu remains handback.
 #   --no-data-disk          Don't attach the persistent data disk.
 #   --force-data-disk       Recreate data.img, wiping persisted files.
 #   --headless              Run QEMU with -display none, bounded by a timeout,
@@ -125,6 +113,9 @@ set -e
 #
 # Known gap: x86_64 (Boot/Kernel) has no QEMU boot path here yet.
 
+ORIG_PWD="$PWD"
+ORIG_ARGS=("$@")
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT_DIR="$REPO_ROOT/Scripts/Linux"
 USERSPACE_PROFILE_STAMP="$REPO_ROOT/Build/aarch64-userspace.profile"
@@ -135,6 +126,7 @@ source "$SCRIPT_DIR/lib/functions.sh"
 TOOLCHAIN=llvm
 SKIP_BUILD=0
 BUILD_USER_APPS=0
+USER_APPS=""
 FORCE_LEGACY_BUILD=0
 INSTALL_DEPS=0
 HEADLESS=0
@@ -158,7 +150,7 @@ XR_GAIN=20000
 XR_SCALE="sharp"
 XR_VNC=1
 XR_TELNET=0
-TERM=0
+TERM_MODE=0
 TERM_CMD=""
 TEST_MUSL=0
 INITRD_SIZE_MB=""
@@ -167,11 +159,6 @@ ISO_OUTPUT=""
 TUI=0
 NO_NETWORK=0
 NO_AUDIO=0
-# --bypass-virtgpu: keep the internal virtgpu.dll driver (and its audrv
-# entry) out of the image, so 1AF4:1050 is left to the kernel-side driver.
-BYPASS_VIRTGPU=0
-# --bypass-virtio-input: leave 1AF4:1052 to the vendored input core.
-BYPASS_VIRTIO_INPUT=0
 NO_BOOT_MENU=0
 NO_DOOM=0
 BT_SERIAL="${XENEVA_BT_SERIAL:-}"
@@ -194,7 +181,77 @@ CLIPBOARD=1
 DATA_SIZE_MB=256
 NO_DATA_DISK=0
 FORCE_DATA_DISK=0
-GPUSRV=${GPUSRV:-0}
+EXTRA_DISKS=()
+LOG_ENABLED=1
+LOG_DIR="${XENEVA_LOG_DIR:-}"
+LOG_KEEP=5
+LOG_FILE=""
+
+abs_path() {
+    case "$1" in
+        "~") printf '%s\n' "$HOME" ;;
+        "~/"*) printf '%s\n' "$HOME/${1#\~/}" ;;
+        /*) printf '%s\n' "$1" ;;
+        *) printf '%s\n' "$ORIG_PWD/$1" ;;
+    esac
+}
+
+add_extra_disk() {
+    local mode="$1" path="$2"
+    if [ -z "$path" ]; then
+        printf "${STY_RED}[%s]: --disk/--disk-ro needs a path.${STY_RST}\n" "$0"
+        exit 1
+    fi
+    EXTRA_DISKS+=("$mode:$(abs_path "$path")")
+}
+
+disk_format_for() {
+    local lower
+    lower="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    case "$lower" in
+        *.qcow2|*.qcow) echo qcow2 ;;
+        *.vmdk) echo vmdk ;;
+        *.vdi) echo vdi ;;
+        *.vhdx) echo vhdx ;;
+        *.vhd|*.vpc) echo vpc ;;
+        *) echo raw ;;
+    esac
+}
+
+rotate_logs() {
+    local dir="$1" keep="$2" i excess
+    local logs=()
+    local had_nullglob=0
+    shopt -q nullglob && had_nullglob=1
+    shopt -s nullglob
+    logs=("$dir"/run-*.log)
+    [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+    excess=$(( ${#logs[@]} - keep ))
+    for (( i = 0; i < excess; i++ )); do
+        rm -f -- "${logs[$i]}"
+    done
+}
+
+start_logging() {
+    [ "$LOG_ENABLED" -eq 1 ] || return 0
+    local dir="${LOG_DIR:-$REPO_ROOT/Build/logs}"
+    if ! mkdir -p "$dir" 2>/dev/null || [ ! -w "$dir" ]; then
+        printf "${STY_YELLOW}[%s]: cannot write logs to %s; continuing without a log file.${STY_RST}\n" "$0" "$dir"
+        return 0
+    fi
+    LOG_FILE="$dir/run-$(date +%Y%m%d-%H%M%S)-$$.log"
+    {
+        echo "=== XenevaOS build_and_run_qemu.sh ==="
+        echo "Started : $(date '+%Y-%m-%d %H:%M:%S %z')"
+        echo "Command : $0 ${ORIG_ARGS[*]}"
+        echo "Cwd     : $ORIG_PWD"
+        echo "Commit  : $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        echo "======================================"
+    } > "$LOG_FILE"
+    rotate_logs "$dir" "$LOG_KEEP"
+    exec > >(trap '' INT TERM; exec 9>&-; exec tee -a "$LOG_FILE") 2>&1
+    echo "[+] Logging this run to $LOG_FILE (keeping the last $LOG_KEEP)"
+}
 
 print_help(){
     printf "${STY_CYAN}"
@@ -217,7 +274,7 @@ run_build_tui() {
         runmode_choice="headless"
     elif [ "$EGL_HEADLESS" -eq 1 ]; then
         runmode_choice="egl-headless"
-    elif [ "$TERM" -eq 1 ]; then
+    elif [ "$TERM_MODE" -eq 1 ]; then
         runmode_choice="term"
     elif [ "$ISO" -eq 1 ]; then
         runmode_choice="iso"
@@ -294,12 +351,12 @@ run_build_tui() {
         [ "$profile_choice" = bleed ] && BLEED=1
         HEADLESS=0
         EGL_HEADLESS=0
-        TERM=0
+        TERM_MODE=0
         ISO=0
         case "$runmode_choice" in
             headless) HEADLESS=1 ;;
             egl-headless) EGL_HEADLESS=1 ;;
-            term) TERM=1 ;;
+            term) TERM_MODE=1 ;;
             iso) ISO=1 ;;
             xr-demo) OPENXR=1; XR_DEMO=1; XR_DEMO_MENU=1 ;;
         esac
@@ -423,6 +480,15 @@ while [ $# -gt 0 ]; do
         --gcc) TOOLCHAIN=gcc ;;
         --skip-build) SKIP_BUILD=1 ;;
         --force-user-apps) BUILD_USER_APPS=1 ;;
+        --apps=*|--user-apps=*)
+            BUILD_USER_APPS=1
+            USER_APPS="${1#*=}"
+            ;;
+        --apps|--user-apps)
+            BUILD_USER_APPS=1
+            shift
+            USER_APPS="$1"
+            ;;
 		--bleed) BLEED=1 ;;
 		--debug-alloc) DEBUG_ALLOC=1 ;;
 		--soak) SOAK=1 ;;
@@ -450,7 +516,7 @@ while [ $# -gt 0 ]; do
         --install-deps) INSTALL_DEPS=1 ;;
         --headless) HEADLESS=1 ;;
         --term)
-            TERM=1
+            TERM_MODE=1
             shift
             # Guest argv (ping -6, iptable -A, ...) may start with '-'.
             # Stop only at the next host option (--foo, -h, -xr-demo).
@@ -490,10 +556,11 @@ while [ $# -gt 0 ]; do
         --tui) TUI=1 ;;
         --no-network) NO_NETWORK=1 ;;
         --no-doom) NO_DOOM=1 ;;
-        --no-netsurf) NO_NETSURF=1 ;;
+        --no-netsurf)
+            printf "${STY_YELLOW}[%s]: Warning: --no-netsurf is deprecated. Use --apps to select specific applications (e.g. --apps=Solitaire), which automatically excludes other apps.${STY_RST}\n" "$0"
+            NO_NETSURF=1
+            ;;
         --no-audio) NO_AUDIO=1 ;;
-        --bypass-virtgpu) BYPASS_VIRTGPU=1 ;;
-        --bypass-virtio-input) BYPASS_VIRTIO_INPUT=1 ;;
         --no-boot-menu) NO_BOOT_MENU=1 ;;
         --bt) NO_BT=0 ;;
         --bt-serial) NO_BT=0; BT_SERIAL="/tmp/bt-server-bredr" ;;
@@ -509,15 +576,79 @@ while [ $# -gt 0 ]; do
         --data-size-mb=*) DATA_SIZE_MB="${1#--data-size-mb=}" ;;
         --no-data-disk) NO_DATA_DISK=1 ;;
         --force-data-disk) FORCE_DATA_DISK=1 ;;
+        --disk=*) add_extra_disk rw "${1#--disk=}" ;;
+        --disk-ro=*) add_extra_disk ro "${1#--disk-ro=}" ;;
+        --disk|--disk-ro)
+            mode=rw
+            [ "$1" = --disk-ro ] && mode=ro
+            add_extra_disk "$mode" "${2:-}"
+            [ $# -ge 2 ] && shift
+            ;;
+        --log-dir=*) LOG_DIR="${1#--log-dir=}" ;;
+        --log-keep=*) LOG_KEEP="${1#--log-keep=}" ;;
+        --no-log) LOG_ENABLED=0 ;;
         -h|--help) print_help; exit 0 ;;
         *)
-            printf "${STY_RED}[$0]: Unknown option \"$1\".${STY_RST}\n"
+            printf "${STY_RED}[%s]: Unknown option \"%s\".${STY_RST}\n" "$0" "$1"
             print_help
             exit 1
         ;;
     esac
     shift
 done
+
+[ -n "$ISO_OUTPUT" ] && ISO_OUTPUT="$(abs_path "$ISO_OUTPUT")"
+[ -n "$LOG_DIR" ] && LOG_DIR="$(abs_path "$LOG_DIR")"
+[ -n "$BT_SERIAL" ] && BT_SERIAL="$(abs_path "$BT_SERIAL")"
+if [ -n "${XENEVA_QEMU_FIRMWARE:-}" ]; then
+    XENEVA_QEMU_FIRMWARE="$(abs_path "$XENEVA_QEMU_FIRMWARE")"
+fi
+if [ -n "${XENEVA_XR_RUNTIME_JSON:-}" ]; then
+    XENEVA_XR_RUNTIME_JSON="$(abs_path "$XENEVA_XR_RUNTIME_JSON")"
+fi
+
+case "$LOG_KEEP" in
+    ''|*[!0-9]*|0)
+        printf "${STY_RED}[%s]: --log-keep must be a positive whole number.${STY_RST}\n" "$0"
+        exit 1
+    ;;
+esac
+
+if [ "${#EXTRA_DISKS[@]}" -gt 0 ]; then
+    seen_disks=" "
+    for entry in "${EXTRA_DISKS[@]}"; do
+        mode="${entry%%:*}"
+        path="${entry#*:}"
+        if [ ! -e "$path" ]; then
+            printf "${STY_RED}[%s]: --disk: %s does not exist.${STY_RST}\n" "$0" "$path"
+            exit 1
+        fi
+        if [ ! -f "$path" ] && [ ! -b "$path" ]; then
+            printf "${STY_RED}[%s]: --disk: %s is not a regular file or block device.${STY_RST}\n" "$0" "$path"
+            exit 1
+        fi
+        if [ ! -r "$path" ] || { [ "$mode" = rw ] && [ ! -w "$path" ]; }; then
+            printf "${STY_RED}[%s]: --disk: no permission to open %s %s.${STY_RST}\n" \
+                "$0" "$path" "$([ "$mode" = rw ] && echo read-write || echo read-only)"
+            [ "$mode" = rw ] && printf "${STY_YELLOW}[%s]: Use --disk-ro=PATH if the guest only needs to read it.${STY_RST}\n" "$0"
+            exit 1
+        fi
+        canon="$(readlink -f -- "$path")"
+        for own in fat.img initrd2.img data.img; do
+            if [ "$canon" = "$(readlink -f -- "$REPO_ROOT/$own")" ]; then
+                printf "${STY_RED}[%s]: --disk: %s is the script's own %s; pick a different image.${STY_RST}\n" "$0" "$path" "$own"
+                exit 1
+            fi
+        done
+        case "$seen_disks" in
+            *" $canon "*)
+                printf "${STY_RED}[%s]: --disk: %s was given twice.${STY_RST}\n" "$0" "$path"
+                exit 1
+            ;;
+        esac
+        seen_disks="$seen_disks$canon "
+    done
+fi
 
 # Interactive picker. Runs after flag parsing so CLI flags preselect menu
 # entries, and falls through into the normal flow (including the XR demo
@@ -591,6 +722,8 @@ if [ "$XR_DEMO_MENU" -eq 1 ]; then
     exec "$SCRIPT_DIR/xr-demo.sh"
 fi
 
+start_logging
+
 case "$XR_RESOLUTION" in
     1024x768|800x600|640x480|manual) ;;
     *)
@@ -615,6 +748,15 @@ case "$XR_SCALE" in
         exit 1
     ;;
 esac
+
+if [ "$STATIC_COMPONENTS" = 1 ] && [ "$TOOLCHAIN" != llvm ]; then
+    printf "${STY_RED}[%s]: --static-components is supported only by the LLVM build.${STY_RST}\n" "$0"
+    exit 1
+fi
+
+if [ "$ISO" -eq 1 ] && [ "${#EXTRA_DISKS[@]}" -gt 0 ]; then
+    printf "${STY_YELLOW}[%s]: --disk is ignored with --iso (the ISO holds only the ESP).${STY_RST}\n" "$0"
+fi
 
 if [ "$BLEED" -eq 1 ]; then
     if [ "$TOOLCHAIN" != llvm ]; then
@@ -675,24 +817,19 @@ if [ "$TEST_MUSL" -eq 1 ] && [ "$FORCE_LEGACY_BUILD" -eq 1 ]; then
 	exit 1
 fi
 
-if { [ "$NO_NETWORK" -eq 1 ] || [ "$NO_AUDIO" -eq 1 ] || [ "$NO_DOOM" -eq 1 ] || [ "$NO_NETSURF" -eq 1 ] || [ "$BYPASS_VIRTGPU" -eq 1 ] || [ "$BYPASS_VIRTIO_INPUT" -eq 1 ]; } && [ "$FORCE_LEGACY_BUILD" -eq 1 ]; then
-	printf "${STY_RED}[$0]: --no-network/--no-audio/--no-doom/--no-netsurf/--bypass-virtgpu/--bypass-virtio-input need a freshly packed initrd; they cannot be combined with --force-legacy-build.${STY_RST}\n"
+if { [ "$NO_NETWORK" -eq 1 ] || [ "$NO_AUDIO" -eq 1 ] || [ "$NO_DOOM" -eq 1 ] || [ "$NO_NETSURF" -eq 1 ]; } && [ "$FORCE_LEGACY_BUILD" -eq 1 ]; then
+	printf "${STY_RED}[$0]: --no-network/--no-audio/--no-doom/--no-netsurf need a freshly packed initrd; they cannot be combined with --force-legacy-build.${STY_RST}\n"
 	exit 1
 fi
 
 if [ "$XR_DEMO" -eq 1 ] && { [ "$HEADLESS" -eq 1 ] || [ "$EGL_HEADLESS" -eq 1 ] ||
-	[ "$TERM" -eq 1 ] || [ "$ISO" -eq 1 ]; }; then
+	[ "$TERM_MODE" -eq 1 ] || [ "$ISO" -eq 1 ]; }; then
 	printf "${STY_RED}[$0]: -xr-demo/--xr-demo owns the display and cannot be combined with --headless, --egl-headless, --term, or --iso.${STY_RST}\n"
 	exit 1
 fi
 
 if [ "$HEADLESS" -eq 1 ] && [ "$EGL_HEADLESS" -eq 1 ]; then
 	printf "${STY_RED}[$0]: --headless and --egl-headless are mutually exclusive.${STY_RST}\n"
-	exit 1
-fi
-
-if [ "$STATIC_COMPONENTS" -eq 1 ] && [ "$GPUSRV" -eq 1 ]; then
-	printf "${STY_RED}[$0]: --static-components and GPUSRV=1 are mutually exclusive; the GPU must be unloadable for user-space handoff.${STY_RST}\n"
 	exit 1
 fi
 
@@ -707,11 +844,7 @@ if [ "$UNIKERNEL" -eq 1 ]; then
 	requested_userspace_profile="${requested_userspace_profile}-unikernel"
 fi
 if [ "$OPENXR" -eq 1 ]; then
-    requested_userspace_profile="${requested_userspace_profile}-openxr"
-fi
-if [ "$GPUSRV" -eq 1 ]; then
-    requested_userspace_profile="${requested_userspace_profile}-gpusrv"
-    BUILD_USER_APPS=1
+	requested_userspace_profile="${requested_userspace_profile}-openxr"
 fi
 
 if [ -f "$USERSPACE_PROFILE_STAMP" ]; then
@@ -725,6 +858,16 @@ if [ -f "$USERSPACE_PROFILE_STAMP" ]; then
         echo "[+] User-space profile changed: ${previous_userspace_profile} -> ${requested_userspace_profile}; forcing a clean rebuild."
         BUILD_USER_APPS=1
     fi
+fi
+
+if [ "$BUILD_USER_APPS" -eq 0 ] && [ "$FORCE_LEGACY_BUILD" -eq 0 ] && [ ! -f "$REPO_ROOT/Process/Init/init.exe" ]; then
+    if [ "$SKIP_BUILD" -eq 1 ]; then
+        printf "${STY_RED}[%s]: Process/Init/init.exe is missing, so --skip-build has nothing to pack.${STY_RST}\n" "$0"
+        printf "${STY_YELLOW}[%s]: Rerun without --skip-build so user space can be built.${STY_RST}\n" "$0"
+        exit 1
+    fi
+    echo "[+] Process/Init/init.exe not found; building user space automatically (same as --force-user-apps)."
+    BUILD_USER_APPS=1
 fi
 
 if [ -n "$INITRD_SIZE_MB" ]; then
@@ -812,7 +955,7 @@ if [ "$XR_DEMO" -eq 1 ]; then
     fi
 fi
 
-if [ "$SKIP_BUILD" -eq 0 ] && [ ! -d "$REPO_ROOT/gnu-efi" ]; then
+if [ "$SKIP_BUILD" -eq 0 ] && [ "$TOOLCHAIN" != llvm ] && [ ! -d "$REPO_ROOT/gnu-efi" ]; then
     printf "${STY_RED}[$0]: gnu-efi not found at repo-root/gnu-efi.${STY_RST}\n"
     printf "${STY_YELLOW}[$0]: Clone it first: git clone https://github.com/vathpela/gnu-efi.git${STY_RST}\n"
     exit 1
@@ -847,7 +990,7 @@ fi
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
     echo "[+] Building bootloader + kernel (+ apps if requested) with $TOOLCHAIN..."
-    export STATIC_COMPONENTS BUILD_USER_APPS BLEED SOAK DEBUG_ALLOC DIRECT_SCANOUT UNIKERNEL OPENXR GPUSRV NO_NETWORK NO_AUDIO NO_DOOM NO_NETSURF BYPASS_VIRTGPU BYPASS_VIRTIO_INPUT
+	export STATIC_COMPONENTS BUILD_USER_APPS USER_APPS BLEED SOAK DEBUG_ALLOC DIRECT_SCANOUT UNIKERNEL OPENXR NO_NETWORK NO_AUDIO NO_DOOM NO_NETSURF
     pushd "$SCRIPT_DIR" >/dev/null
     if [ "$TOOLCHAIN" == llvm ]; then
         source ./lib/llvm.sh
@@ -868,10 +1011,8 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
         echo "[+] Building external drivers..."
         ( cd "$REPO_ROOT/Drivers/Net/virtionet" && make clean && make )
         cp -f "$REPO_ROOT/Drivers/Net/virtionet/virtnet.dll" "$REPO_ROOT/Resources/resources/"
-        if [ "$BYPASS_VIRTGPU" -eq 0 ]; then
-            ( cd "$REPO_ROOT/Drivers/GPU/virtiogpu" && make clean && make )
-            cp -f "$REPO_ROOT/Drivers/GPU/virtiogpu/virtgpu.dll" "$REPO_ROOT/Resources/resources/"
-        fi
+        ( cd "$REPO_ROOT/Drivers/GPU/virtiogpu" && make clean && make )
+        cp -f "$REPO_ROOT/Drivers/GPU/virtiogpu/virtgpu.dll" "$REPO_ROOT/Resources/resources/"
         ( cd "$REPO_ROOT/Drivers/Sound/virtiosnd" && make clean && make llvm )
         cp -f "$REPO_ROOT/Drivers/Sound/virtiosnd/virtsnd.dll" "$REPO_ROOT/Resources/resources/"
         fi
@@ -899,7 +1040,7 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
         mkdir -p "$(dirname "$USERSPACE_PROFILE_STAMP")"
         printf '%s\n' "$requested_userspace_profile" > "$USERSPACE_PROFILE_STAMP"
     fi
-    if [ "$TERM" -eq 1 ]; then
+    if [ "$TERM_MODE" -eq 1 ]; then
         term_flags="-D__XENEVA_TERM__"
         if [ "$BLEED" -eq 1 ]; then
             term_flags="-D__XENEVA_BLEED__ -D__XENEVA_TERM__"
@@ -981,10 +1122,6 @@ if [ "$FORCE_LEGACY_BUILD" -eq 0 ]; then
                 [ "$TEST_MUSL" -eq 1 ] && return 1 || return 0 ;;
             deoaud.exe|audplr.exe)
                 [ "$NO_AUDIO" -eq 1 ] && return 0 || return 1 ;;
-            virtgpu.dll)
-                [ "$BYPASS_VIRTGPU" -eq 1 ] && return 0 || return 1 ;;
-            inputsrv.exe)
-                [ "$BYPASS_VIRTIO_INPUT" -eq 1 ] && return 0 || return 1 ;;
         esac
         return 1
     }
@@ -1006,31 +1143,35 @@ if [ "$FORCE_LEGACY_BUILD" -eq 0 ]; then
         fi
         mcopy -o -s -i initrd2.img "$resource" ::/
     done
-    mcopy -o -i initrd2.img Process/Init/init.exe ::/init.exe
-    if [ "$BYPASS_VIRTGPU" -eq 1 ]; then
-        # The kernel-side virtio-gpu driver owns 1AF4:1050 -- strip the
-        # internal driver's line from the packed config too, or audrv would
-        # announce a file the image no longer carries.
-        echo "[+] Internal virtgpu driver excluded from the image (--bypass-virtgpu)."
-        # audrv walks the table by entry number -- it looks for (1), then
-        # (2), and a hole at (1) sends every lookup to the (0) terminator,
-        # which would strand virtnet/virtsnd/virtblk too. So the entry is
-        # removed and the rest renumber to stay contiguous.
-        bypass_cnf="$(mktemp)"
-        bypass_idx=0
-        while IFS= read -r bypass_line || [ -n "$bypass_line" ]; do
-            case "$bypass_line" in
-                *'/virtgpu.dll'*) continue ;;
-                '(0)') printf '%s\n' "$bypass_line" ;;
-                '('*)  bypass_idx=$((bypass_idx + 1))
-                       printf '(%d)%s\n' "$bypass_idx" "${bypass_line#*)}" ;;
-                *)     printf '%s\n' "$bypass_line" ;;
-            esac
-        done < Resources/resources/audrv.cnf > "$bypass_cnf"
-        mcopy -o -i initrd2.img "$bypass_cnf" ::/audrv.cnf
-        rm -f "$bypass_cnf"
+
+    # Filter lncher.cnf so only apps with existing binaries appear in the launcher menu
+    if [ -f Resources/resources/lncher.cnf ]; then
+        tmp_cnf="$(mktemp)"
+        entry=""
+        while IFS= read -r line || [ -n "$line" ]; do
+            entry="${entry}${line}"$'\n'
+            if [[ "$line" =~ (\}|>)[[:space:]]*$ ]]; then
+                app="$(printf '%s' "$entry" | sed -n 's/.*\[App\]\/\([^|>\r\n}]*\).*/\1/p')"
+                if [ -z "$app" ] || { [ -f "Resources/resources/$app" ] && ! pack_excluded "$app"; }; then
+                    printf '%s\n' "$entry" >> "$tmp_cnf"
+                fi
+                entry=""
+            fi
+        done < Resources/resources/lncher.cnf
+        if [ -s "$tmp_cnf" ]; then
+            sed -i -e '/^[[:space:]]*$/d' "$tmp_cnf"
+            sed -i -e '$ { s/}[[:space:]]*$/>/ }' "$tmp_cnf"
+            mcopy -o -i initrd2.img "$tmp_cnf" ::/lncher.cnf
+        fi
+        rm -f "$tmp_cnf"
     fi
+
+    mcopy -o -i initrd2.img Process/Init/init.exe ::/init.exe
 else
+    if [ ! -f initrd2.img ]; then
+        printf "${STY_RED}[%s]: --force-legacy-build needs an existing initrd2.img, and there is none in %s.${STY_RST}\n" "$0" "$REPO_ROOT"
+        exit 1
+    fi
     echo "[+] Found pre-built initrd2.img, skipping manual creation."
     echo "    (Omit --force-legacy-build to rebuild it.)"
 fi
@@ -1134,11 +1275,17 @@ echo "[+] Guest memory: $qemu_memory"
 # which backends it actually has and fall back to a silent one. The
 # virtio-sound-pci device itself is still added, so the guest sees the same
 # audio hardware either way. --axiss
-QEMU_AUDIO_BACKEND="${QEMU_AUDIO_BACKEND:-pa}"
-if [ "$QEMU_AUDIO_BACKEND" = "pa" ] && ! qemu-system-aarch64 -audiodev help 2>&1 | grep -qw 'pa'; then
+QEMU_AUDIO_BACKEND="pa"
+if ! qemu-system-aarch64 -audiodev help 2>&1 | grep -qw 'pa'; then
     QEMU_AUDIO_BACKEND="none"
     echo "[+] Audio: this QEMU has no 'pa' backend, using 'none' (silent guest sound)."
 fi
+
+NET_DEVICE="virtio-net-pci,netdev=net0"
+case "${NETSRV:-0}" in
+    0|'') ;;
+    *) NET_DEVICE="$NET_DEVICE,disable-legacy=on" ;;
+esac
 
 QEMU_ARGS=(
     -machine virt,gic-version=2,highmem=off
@@ -1152,18 +1299,13 @@ QEMU_ARGS=(
     -drive file=fat.img,format=raw,if=none,id=blk0
     -device virtio-blk-pci,drive=blk0,disable-legacy=on
     -netdev user,id=net0,ipv4=on,net=10.0.2.0/24,host=10.0.2.2,dhcpstart=10.0.2.15,dns=10.0.2.3,ipv6=on,ipv6-net=fec0::/64,ipv6-host=fec0::2
-    -device virtio-net-pci,netdev=net0${NETSRV:+,disable-legacy=on}     # NETSRV=1: modern-only so it is 1af4:1041 (the hwdev allowlist id)
+    -device "$NET_DEVICE"     # NETSRV=1: modern-only so it is 1af4:1041 (the hwdev allowlist id)
     -object filter-dump,id=netdump,netdev=net0,file=/tmp/xeneva-net.pcap,queue=all
     -monitor unix:/tmp/xeneva-mon.sock,server,nowait
     # Register virtio-gpu first so QEMU's VNC server follows the display the
     # Xeneva compositor drives after boot. ramfb remains as a fallback GOP.
     -device virtio-gpu-pci,disable-legacy=on,id=gpu0
     -device ramfb,id=ramfb
-    # Scanout stage: a second, register-only display device for the DRM
-    # stack (mainline bochs.c) to own, next to the native virtio-gpu. The
-    # host has no seabios VGA ROM; EDK2 drives the device directly and the
-    # mainline driver never touches an option ROM, so romfile= is empty.
-    -device bochs-display,romfile=,id=bochs0
     -device virtio-keyboard-pci
     -device virtio-tablet-pci
     -device qemu-xhci
@@ -1219,18 +1361,32 @@ if [ "$NO_DATA_DISK" -eq 0 ]; then
     echo "[+] Persistent data disk attached (data.img -> guest /data)."
 fi
 
-# virtio-sound-pci (vendor 1AF4/device 1059, multimedia-audio class 04/01)
-# matches audrv.cnf's [6900,4185]/virtsnd.dll vendor entry and the virtsnd
-# driver's AuPCIEScanClass probe. Skipped under --no-audio
+disk_index=0
+for entry in "${EXTRA_DISKS[@]}"; do
+    mode="${entry%%:*}"
+    path="${entry#*:}"
+    fmt="$(disk_format_for "$path")"
+    drive_opts="file=${path//,/,,},format=$fmt,if=none,id=xdisk$disk_index"
+    if [ "$mode" = ro ]; then
+        drive_opts="$drive_opts,readonly=on"
+    else
+        drive_opts="$drive_opts,cache=writethrough"
+    fi
+    QEMU_ARGS+=(-drive "$drive_opts")
+    QEMU_ARGS+=(-device "virtio-blk-pci,drive=xdisk$disk_index,disable-legacy=on")
+    echo "[+] Extra disk $disk_index: $path ($fmt, $([ "$mode" = ro ] && echo read-only || echo read-write))"
+    disk_index=$((disk_index + 1))
+done
+
+# virtio-sound-pci (vendor 1AF4/device 1059) matches audrv.cnf's
+# [04,03]/virtsnd.dll class entry (with [6900,4185] vendor fallback)
+# and the virtsnd driver's AuPCIEScanClass probe. Skipped under --no-audio
 # so the guest never enumerates a sound card it was told not to have. --axiss
 if [ "$NO_AUDIO" -eq 1 ]; then
     echo "[+] Audio: virtio-sound-pci omitted (--no-audio)"
-elif qemu-system-aarch64 -device help 2>&1 | grep -q 'virtio-sound-pci'; then
+else
     QEMU_ARGS+=(-audiodev "$QEMU_AUDIO_BACKEND",id=snd0)
     QEMU_ARGS+=(-device virtio-sound-pci,audiodev=snd0,disable-legacy=on)
-else
-    printf "${STY_RED}[audio] This QEMU build has no virtio-sound-pci device; install a QEMU build with virtio-sound support before running SNDSRV.${STY_RST}\n"
-    exit 1
 fi
 bt_power_off_for_proxy() {
     local i prop
@@ -1287,7 +1443,7 @@ if [ "$XR_DEMO" -eq 1 ]; then
         # QEMU rejects VNC whenever a GL display context exists. Use its
         # CPU-backed D-Bus scanout so VNC and the XR capture listener can
         # consume the same console concurrently. --axiss
-        QEMU_ARGS+=(-display dbus,gl=off -vnc :0)
+        QEMU_ARGS+=(-display dbus,gl=off -vnc 127.0.0.1:0)
         XR_DISPLAY_DESC="D-Bus CPU scanout + VNC localhost:0"
         XR_QEMU_CONSOLE=0
     else
@@ -1437,42 +1593,18 @@ if [ -n "${XENEVA_QEMU_EXTRA_ARGS:-}" ]; then
     QEMU_ARGS+=("${extra_qemu_args[@]}")
 fi
 
-# Host end of the clipboard. connect() retries until QEMU's socket binds,
-# so starting before QEMU is fine; one started by hand is left alone --
-# two bi bridges would relay each other's output. Torn down with the
-# session so nothing outlives the guest it copies for.
-CLIP_BRIDGE_PID=""
-clip_bridge_stop() {
-    trap - EXIT INT TERM
-    if kill -0 "$CLIP_BRIDGE_PID" 2>/dev/null; then
-        kill "$CLIP_BRIDGE_PID" 2>/dev/null || true
-        wait "$CLIP_BRIDGE_PID" 2>/dev/null || true
-    fi
-}
-if [ "$VIRTIO_SERIAL" -eq 1 ] && [ "$CLIPBOARD" -eq 1 ]; then
-    if pgrep -f "[c]lip_bridge" >/dev/null 2>&1; then
-        echo "[+] clipboard bridge: already running, left alone"
-    else
-        mkdir -p /tmp/xeneva
-        # 300s of hello patience: an interactive boot can sit at the menu
-        # well past the 60s default, and a bridge that gives up there is
-        # the clipboard off again without anyone asking for that.
-        "$REPO_ROOT/Tests/clip_bridge.py" --dir=bi --watch --timeout 300 \
-            >/tmp/xeneva/bridge.log 2>&1 &
-        CLIP_BRIDGE_PID=$!
-        trap clip_bridge_stop EXIT
-        trap 'clip_bridge_stop; exit 130' INT
-        trap 'clip_bridge_stop; exit 143' TERM
-        echo "[+] clipboard bridge: pid $CLIP_BRIDGE_PID (log /tmp/xeneva/bridge.log)"
-    fi
-fi
-
 if [ "$HEADLESS" -eq 1 ]; then
     QEMU_ARGS+=(-display none -no-reboot)
     # Ordinary builds still block at the interactive resolution menu. Bleed
     # selects its low-memory mode in the bootloader and can therefore complete
     # an automated headless boot; the timeout bounds both cases for CI.
-    timeout "${QEMU_TIMEOUT:-120}" qemu-system-aarch64 "${QEMU_ARGS[@]}"
+    qemu_timeout="${QEMU_TIMEOUT:-120}"
+    qemu_status=0
+    timeout --foreground "$qemu_timeout" qemu-system-aarch64 "${QEMU_ARGS[@]}" || qemu_status=$?
+    if [ "$qemu_status" -eq 124 ]; then
+        echo "[+] Headless run stopped by the ${qemu_timeout}s timeout (QEMU_TIMEOUT)."
+    fi
+    exit "$qemu_status"
 else
     if [ "$EGL_HEADLESS" -eq 1 ]; then
         # addr= is a bus QEMU *connects to*, not a socket it creates.
@@ -1485,11 +1617,7 @@ else
     else
         # Keep both ramfb (boot/GOP) and virtio-gpu visible. The compositor
         # moves to the second display after boot, while ramfb goes black. --axiss
-        if qemu-system-aarch64 -help 2>&1 | grep -q 'show-tabs'; then
-            QEMU_ARGS+=(-display gtk,zoom-to-fit=on,show-tabs=on)
-        else
-            QEMU_ARGS+=(-display gtk,zoom-to-fit=on)
-        fi
+        QEMU_ARGS+=(-display gtk,zoom-to-fit=on,show-tabs=on)
         qemu-system-aarch64 "${QEMU_ARGS[@]}"
     fi
 fi

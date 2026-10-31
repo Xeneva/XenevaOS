@@ -28,9 +28,10 @@
 **/
 
 #include <stdint.h>
+#include <intrin.h>
 #include "clib.h"
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(__clang__)
 #pragma function(memcpy, memset, strlen)
 #endif
 

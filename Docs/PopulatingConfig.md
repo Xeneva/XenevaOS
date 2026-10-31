@@ -23,3 +23,38 @@ As you can see, there are certain marker points present in the configuration fil
 ## The `board.cnf` File
 
 The board configuration file follows a slightly different format than the `audrv.cnf` file. This file also needs to be present in the root folder of the ramdisk. Since it deals with predefined hardware, it maps static hardware identifiers directly to their respective driver files, bypassing dynamic discovery for maximum boot speed and efficiency.
+
+## The `lncher.cnf` File
+
+The launcher configuration file (`/lncher.cnf`) defines the application shortcuts presented in the Xeneva Launcher (`xelnch.exe`). It is sourced from `Resources/resources/lncher.cnf` and deployed to the ramdisk root.
+
+### Entry Format
+Each application entry begins with `{` and contains four pipe-delimited (`|`) keyword lines:
+
+```ini
+{[Title]Calculator|
+[Icon]/icons/calcl.bmp|
+[Param]Null|
+[App]/calc.exe}
+```
+
+- **`[Title]`**: Application display name (maximum 42 characters).
+- **`[Icon]`**: Path to the launcher icon inside the ramdisk (e.g. `/icons/calcl.bmp`).
+- **`[Param]`**: Optional startup argument passed to the process, or `Null` if none.
+- **`[App]`**: Path to the executable binary (e.g. `/calc.exe`).
+
+### The Critical End-of-List Marker (`>`)
+Every intermediate entry terminates with `}`. **The very last entry in the file must terminate with `>`** instead of `}`:
+
+```ini
+{[Title]Solitaire|
+[Icon]/icons/solitrl.bmp|
+[Param]Null|
+[App]/solitr.exe>
+```
+
+In `XELnch` (`Process/XELnch/lconfig.cpp`), detecting `>` signals `_last_entry_ = true`, which safely stops the parser loop.
+
+### Dynamic Build-Time Filtering
+When building with selective applications (via `--apps`), `build_and_run_qemu.sh` filters `lncher.cnf` so that any application whose binary is absent from `Resources/resources/` or excluded by build flags is omitted. The build script automatically rewrites the closing delimiter of the last surviving entry to `>` to ensure `XELnch` always receives a valid configuration.
+

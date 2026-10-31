@@ -47,8 +47,10 @@
 #include <Net/ethernet.h>
 #include <string.h>
 
-#define RX_BUFFER_COUNT 8
-#define TX_BUFFER_COUNT 8
+/* Deep enough to absorb a slirp burst without dropping frames or stalling
+ * the TX ring. 64 * 2 KiB = 128 KiB per direction. */
+#define RX_BUFFER_COUNT 64
+#define TX_BUFFER_COUNT 64
 #define TX_BUFFER_SIZE	2048
 #define RX_BUFFER_SIZE	2048
 #define MAKE_IP(a, b, c, d)                                                                        \
@@ -75,6 +77,10 @@ static uint16_t rx_index;
 static uint16_t tx_done;
 static AuVFSNode* nic;
 static AuNetworkDevice* ndev;
+/* MSI-X vector 0 is bound to both queues when allocation succeeds.
+ * VIRTIO_MSI_NO_VECTOR keeps the old poll-only path as a fallback. */
+static uint16_t net_msix_vector = VIRTIO_MSI_NO_VECTOR;
+static int net_spi = -1;
 
 /**
  * VirtioNetCfg -- virtio net configuration
@@ -112,38 +118,65 @@ static void virt_cache_clean(void* addr, size_t sz) {
 
 static void AuVirtioNetRxPoll(void) {
 	static int in_poll;
-	uint16_t them;
+	uint16_t budget;
+	uint32_t total = 0;
+	int more;
+
 	if (in_poll)
 		return;
 	if (!rx_used || !rx_avail || !rx_desc || !rx_qsize || !rx_nbuf || !rx_buf_virt)
 		return;
 	in_poll = 1;
-	them = rx_used->idx;
-	for (; rx_index != them; rx_index++) {
-		uint16_t used_slot = rx_index % rx_qsize;
-		uint32_t buf_id = rx_used->ring[used_slot].id % rx_nbuf;
-		uint32_t totlen = rx_used->ring[used_slot].len;
-		uint8_t* buffer = rx_buf_virt + (buf_id * RX_BUFFER_SIZE);
-		void* eth = buffer + sizeof(virtio_net_hdr_t);
-		uint32_t ethlen =
-			totlen > sizeof(virtio_net_hdr_t) ? totlen - (uint32_t)sizeof(virtio_net_hdr_t) : 0;
-		rx_avail->ring[rx_avail->idx % rx_qsize] = (uint16_t)buf_id;
-		rx_avail->idx++;
+	/* NAPI-style suppression: while this pass drains, the device must not
+	 * raise an interrupt per completed buffer. Re-arm afterwards and look
+	 * once more, so a completion that landed in the window between the
+	 * last check and the flag clear is still handled here. */
+	for (;;) {
+		rx_avail->flags = VIRTQ_AVAIL_F_NO_INTERRUPT;
 		dsb_ish();
 		isb_flush();
-		if (ethlen)
-			virt_cache_inv(buffer, totlen);
-		if (nic && ethlen) {
-			if (!AuWifiPortalRx(eth, (int)ethlen))
-				AuEthernetHandle(eth, (int)ethlen, nic);
+		budget = rx_qsize;
+		while (budget-- && rx_index != rx_used->idx) {
+			uint16_t used_slot = rx_index % rx_qsize;
+			uint32_t buf_id = rx_used->ring[used_slot].id % rx_nbuf;
+			uint32_t totlen = rx_used->ring[used_slot].len;
+			uint8_t* buffer = rx_buf_virt + (buf_id * RX_BUFFER_SIZE);
+			void* eth = buffer + sizeof(virtio_net_hdr_t);
+			uint32_t ethlen =
+				totlen > sizeof(virtio_net_hdr_t) ? totlen - (uint32_t)sizeof(virtio_net_hdr_t) : 0;
+
+			/* The device owns this buffer until it is placed back on the
+			 * available ring below, so invalidate before reading it. */
+			if (ethlen)
+				virt_cache_inv(buffer, totlen);
+			if (nic && ethlen) {
+				if (!AuWifiPortalRx(eth, (int)ethlen))
+					AuEthernetHandle(eth, (int)ethlen, nic);
+			}
+			rx_avail->ring[rx_avail->idx % rx_qsize] = (uint16_t)buf_id;
+			rx_avail->idx++;
+			dsb_ish();
+			isb_flush();
+			rx_index++;
+			total++;
 		}
+		rx_avail->flags = 0;
+		dsb_ish();
+		isb_flush();
+		more = (rx_index != rx_used->idx);
+		/* Bound one invocation so a continuously fed queue cannot pin the
+		 * CPU in the interrupt handler; the next poll picks up the rest. */
+		if (!more || total >= (uint32_t)rx_qsize * 2)
+			break;
 	}
 	in_poll = 0;
 }
 
 void AuVirtioNetHandler(int spiNum) {
 	(void)spiNum;
-	AuVirtioNetRxPoll();
+	/* Go through the core poll so the deferred-ACK batch is flushed even
+	 * when the drain was driven by an interrupt rather than a syscall. */
+	AuNetRxPoll();
 }
 
 static void AuVirtioNetRxinitialize(void) {
@@ -151,20 +184,20 @@ static void AuVirtioNetRxinitialize(void) {
 	uint32_t pages;
 
 	rx_qsize =
-		AuVirtioPCISetupQueue(&netDev, 0, &rx_desc, &rx_avail, &rx_used, VIRTIO_MSI_NO_VECTOR);
+		AuVirtioPCISetupQueue(&netDev, 0, &rx_desc, &rx_avail, &rx_used, net_msix_vector);
 	if (!rx_qsize || !rx_desc || !rx_avail || !rx_used) {
-		UARTDebugOut("[aurora]: virtio-net RX queue setup failed\r\n");
+		AU_NET_LOG("[aurora]: virtio-net RX queue setup failed\r\n");
 		return;
 	}
 	rx_nbuf = rx_qsize;
-	UARTDebugOut("[aurora]: rx queue size : %d nbuf=%d\r\n", rx_qsize, rx_nbuf);
+	AU_NET_LOG("[aurora]: rx queue size : %d nbuf=%d\r\n", rx_qsize, rx_nbuf);
 
 	pages = (rx_nbuf * RX_BUFFER_SIZE + 4095) / 4096;
 	if (pages < 4)
 		pages = 4;
 	rxbuff = (uint64_t)AuPmmngrAllocPages(pages, 1, 0, AURORA_PAGE_DMA);
 	if (!rxbuff || rxbuff == UINT64_MAX) {
-		UARTDebugOut("[aurora]: unable to allocate contiguous virtio RX buffer\r\n");
+		AU_NET_LOG("[aurora]: unable to allocate contiguous virtio RX buffer\r\n");
 		return;
 	}
 	rx_buf_phys = rxbuff;
@@ -172,7 +205,7 @@ static void AuVirtioNetRxinitialize(void) {
 	AuVirtioPCIPostAvail(
 		rx_desc, rx_avail, rx_qsize, rxbuff, RX_BUFFER_SIZE, rx_nbuf, VIRTQ_DESC_F_WRITE);
 	AuVirtioPCINotifyQueue(&netDev, 0);
-	UARTDebugOut("[aurora]: virtio rx queue initialized hdr=%d\r\n", (int)sizeof(virtio_net_hdr_t));
+	AU_NET_LOG("[aurora]: virtio rx queue initialized hdr=%d\r\n", (int)sizeof(virtio_net_hdr_t));
 }
 
 static void AuVirtioNetTxinitialize(void) {
@@ -181,20 +214,20 @@ static void AuVirtioNetTxinitialize(void) {
 	int i;
 
 	tx_qsize =
-		AuVirtioPCISetupQueue(&netDev, 1, &tx_desc, &tx_avail, &tx_used, VIRTIO_MSI_NO_VECTOR);
+		AuVirtioPCISetupQueue(&netDev, 1, &tx_desc, &tx_avail, &tx_used, net_msix_vector);
 	if (!tx_qsize || !tx_desc || !tx_avail || !tx_used) {
-		UARTDebugOut("[aurora]: virtio-net TX queue setup failed\r\n");
+		AU_NET_LOG("[aurora]: virtio-net TX queue setup failed\r\n");
 		return;
 	}
 	tx_nbuf = tx_qsize > TX_BUFFER_COUNT ? TX_BUFFER_COUNT : tx_qsize;
-	UARTDebugOut("[aurora]: tx queue size : %d nbuf=%d\r\n", tx_qsize, tx_nbuf);
+	AU_NET_LOG("[aurora]: tx queue size : %d nbuf=%d\r\n", tx_qsize, tx_nbuf);
 
 	pages = (tx_nbuf * TX_BUFFER_SIZE + 4095) / 4096;
 	if (pages < 4)
 		pages = 4;
 	txbuff = (uint64_t)AuPmmngrAllocPages(pages, 1, 0, AURORA_PAGE_DMA);
 	if (!txbuff || txbuff == UINT64_MAX) {
-		UARTDebugOut("[aurora]: unable to allocate virtio TX buffer\r\n");
+		AU_NET_LOG("[aurora]: unable to allocate virtio TX buffer\r\n");
 		return;
 	}
 	tx_buf_phys = txbuff;
@@ -206,9 +239,14 @@ static void AuVirtioNetTxinitialize(void) {
 		tx_desc[i].next = 0;
 	}
 	tx_avail->idx = 0;
+	/* TX completions only free ring slots, and AuVirtioTransmit reclaims
+	 * them by reading tx_used->idx before it needs a slot. Suppressing the
+	 * notification keeps every ACK from raising an interrupt on the same
+	 * MSI-X vector the RX queue uses. */
+	tx_avail->flags = VIRTQ_AVAIL_F_NO_INTERRUPT;
 	dsb_ish();
 	isb_flush();
-	UARTDebugOut("[aurora]: virtio tx queue initialized\r\n");
+	AU_NET_LOG("[aurora]: virtio tx queue initialized\r\n");
 }
 
 /**
@@ -245,9 +283,17 @@ static int AuVirtioTransmit(void* packet, uint16_t len) {
 	}
 	idx = tx_avail->idx % tx_nbuf;
 	buff = tx_buf_virt + (idx * TX_BUFFER_SIZE);
-	memset(buff, 0, TX_BUFFER_SIZE);
 	hdr = (virtio_net_hdr_t*)buff;
+	/* Only the 12-byte virtio header needs clearing; the frame bytes are
+	 * fully overwritten below. Zeroing the whole 2 KiB slot per ACK was
+	 * pure overhead on the transmit path. */
+	hdr->flags = 0;
 	hdr->gso_type = VIRTIO_NET_HDR_GSO_NONE;
+	hdr->hdr_len = 0;
+	hdr->gso_size = 0;
+	hdr->csum_start = 0;
+	hdr->csum_offset = 0;
+	hdr->num_buffers = 0;
 	if (len + sizeof(virtio_net_hdr_t) > TX_BUFFER_SIZE)
 		len = TX_BUFFER_SIZE - sizeof(virtio_net_hdr_t);
 	memcpy(buff + sizeof(virtio_net_hdr_t), packet, len);
@@ -296,7 +342,7 @@ static int AuVirtioNetIOCtl(AuVFSNode* file, int code, void* arg) {
 		return 1;
 	switch (code) {
 	case AUNET_GET_HARDWARE_ADDRESS:
-		UARTDebugOut("VirtioNet getting mac address \r\n");
+		AU_NET_LOG("VirtioNet getting mac address \r\n");
 		memcpy(arg, ndev->mac, 6);
 		return 0;
 	case AUNET_GET_IPV4_ADDRESS:
@@ -357,15 +403,30 @@ void AuVirtioNetInitialize(uint64_t device, int bus, int dev, int func) {
 	struct VirtioNetCfg* netcfg;
 	int i;
 
-	UARTDebugOut("[aurora]: virtio network device found \r\n");
+	AU_NET_LOG("[aurora]: virtio network device found \r\n");
 	if (device == 0xFFFFFFFF)
 		return;
 	rx_index = 0;
 	tx_done = 0;
 
 	if (!AuVirtioPCIInit(device, bus, dev, func, (uint32_t)VIRTIO_NET_F_MAC, &netDev)) {
-		UARTDebugOut("[aurora]: virtio-net PCI init failed\r\n");
+		AU_NET_LOG("[aurora]: virtio-net PCI init failed\r\n");
 		return;
+	}
+
+	/* Bind both queues to MSI-X vector 0. Without this the device never
+	 * raises an RX interrupt, so every blocking receive falls back to a
+	 * polling slice. If MSI-X cannot be set up the driver stays poll-only. */
+	net_spi = AuGICAllocateSPI();
+	if (net_spi >= 0 && AuPCIEAllocMSI(device, (size_t)net_spi, bus, dev, func)) {
+		net_msix_vector = 0;
+		GICEnableSPIIRQ((uint32_t)net_spi);
+		GICRegisterSPIHandler((void*)&AuVirtioNetHandler, net_spi);
+		AU_NET_LOG("[aurora]: virtio-net MSI-X spi=%d vector=%d\r\n",
+			net_spi, net_msix_vector);
+	} else {
+		net_msix_vector = VIRTIO_MSI_NO_VECTOR;
+		AU_NET_LOG("[aurora]: virtio-net MSI-X unavailable, using polling\r\n");
 	}
 
 	AuVirtioNetRxinitialize();
@@ -379,9 +440,9 @@ void AuVirtioNetInitialize(uint64_t device, int bus, int dev, int func) {
 	AuVirtioPCINotifyQueue(&netDev, 0);
 	AuVirtioPCINotifyQueue(&netDev, 1);
 
-	UARTDebugOut("[aurora]: virtio-net-dev initialized successfully status=%x\r\n",
+	AU_NET_LOG("[aurora]: virtio-net-dev initialized successfully status=%x\r\n",
 				 netDev.common->DeviceStatus);
-	AuTextOut("[aurora]: virtio-net-dev mac : ");
+	AU_NET_LOG("[aurora]: virtio-net-dev mac : ");
 	ndev = (AuNetworkDevice*)kmalloc(sizeof(AuNetworkDevice));
 	memset(ndev, 0, sizeof(AuNetworkDevice));
 	ndev->type = NETDEV_TYPE_ETHERNET;
@@ -401,10 +462,10 @@ void AuVirtioNetInitialize(uint64_t device, int bus, int dev, int func) {
 	netcfg = (struct VirtioNetCfg*)netDev.deviceCfg;
 	for (i = 0; i < 6; i++) {
 		uint8_t b = netcfg ? netcfg->mac[i] : 0;
-		AuTextOut("%x::", b);
+		AU_NET_LOG("%x::", b);
 		ndev->mac[i] = b;
 	}
-	AuTextOut("\r\n");
+	AU_NET_LOG("\r\n");
 
 	nic = (AuVFSNode*)kmalloc(sizeof(AuVFSNode));
 	memset(nic, 0, sizeof(AuVFSNode));

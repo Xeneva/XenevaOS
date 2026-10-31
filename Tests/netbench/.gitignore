@@ -1,0 +1,7 @@
+# Netbench build products, downloaded images and run artifacts.
+build/
+results/
+__pycache__/
+*.pyc
+*.iso
+*.iso.part

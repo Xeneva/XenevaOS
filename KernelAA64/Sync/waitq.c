@@ -78,8 +78,12 @@ void AuWaitQueue_Wake(AuWaitQueue* q) {
 	while (e) {
 		AuWaitQEntry* next = e->next;
 		if (e->thread) {
-			//Unblock the thread here
-			AuThreadWakePoller(e->thread);
+			/* poll(2) waiters are woken through the poll-aware path;
+			 * blocking socket calls park in a plain timed sleep. */
+			if (e->thread->blocked_on_poll)
+				AuThreadWakePoller(e->thread);
+			else
+				AuThreadMakeReady(e->thread);
 		}
 		e = next;
 	}

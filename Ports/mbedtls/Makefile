@@ -7,7 +7,8 @@ TARGET = libmbedtls.a
 ROOT = .
 OBJDIR = obj
 XE_INCLUDES = -I../../Libs/XEClib/includes -I../../Libs/XEClib/includes/c++ -I../../BaseHdr
-MBEDTLS_INCLUDES = -I$(ROOT)/include -I$(ROOT)/library -I$(ROOT)/port
+MBEDTLS_INCLUDES = -I$(ROOT)/include -I$(ROOT)/library -I$(ROOT)/port \
+                   -I../zlib -I../brotli/c/include
 CONFIG = -DMBEDTLS_CONFIG_FILE=\"xeneva_mbedtls_config.h\" \
          -DMBEDTLS_PSA_CRYPTO_CONFIG_FILE=\"xeneva_psa_config.h\"
 

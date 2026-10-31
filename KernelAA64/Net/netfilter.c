@@ -208,5 +208,5 @@ void AuNetfilterInstallXrPolicy(void) {
 	AuNfAddSimple(NF_LOCAL_IN, "virtio-net", NULL, 0, 0, 0, NF_DROP);
 	AuNfAddSimple(NF_FORWARD, NULL, NULL, 0, 0, 0, NF_DROP);
 
-	UARTDebugOut("[aurora]: XR netfilter policy installed (%d rules)\r\n", _nf_count);
+	AU_NET_LOG("[aurora]: XR netfilter policy installed (%d rules)\r\n", _nf_count);
 }

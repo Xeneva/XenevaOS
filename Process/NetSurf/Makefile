@@ -56,6 +56,8 @@ endif
 CSSLIB = ../../Ports/CssLibs/libcssport.a
 QJSLIB = ../../Ports/quickjs/libquickjs.a
 MBEDLIB = ../../Ports/mbedtls/libmbedtls.a
+ZLIB = ../../Ports/zlib/libz.a
+BROTLILIB = ../../Ports/brotli/libbrotlidec.a
 
 # Sources under Ports/. A newer file rebuilds that archive from this makefile.
 CSS_INPUTS := $(shell find ../../Ports/CssLibs \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) ! -path '*/obj/*')
@@ -78,6 +80,12 @@ $(QJSLIB): $(QJS_INPUTS)
 $(MBEDLIB): $(MBED_INPUTS)
 	$(MAKE) -C ../../Ports/mbedtls llvm
 
+$(ZLIB):
+	$(MAKE) -C ../../Ports/zlib llvm
+
+$(BROTLILIB):
+	$(MAKE) -C ../../Ports/brotli llvm
+
 llvm:
 	@$(MAKE) TOOLCHAIN=llvm all
 
@@ -93,9 +101,10 @@ $(CRT_OBJ): ../../Process/Init/crt0arm64.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CXXFLAGS) -Wno-unused-command-line-argument -c $< -o $@
 
-$(TARGET): $(OBJS) $(CSSLIB) $(QJSLIB) $(MBEDLIB)
+$(TARGET): $(OBJS) $(CSSLIB) $(QJSLIB) $(MBEDLIB) $(ZLIB) $(BROTLILIB)
 	@echo "Linking $@ (LLVM)..."
-	$(LD) $(LDFLAGS) $(OBJS) $(CSSLIB) $(QJSLIB) ../../Libs/Chitralekha/libChitralekha.a $(MBEDLIB) ../../Libs/XEClib/libXEClib.a -o $@
+	$(LD) $(LDFLAGS) $(OBJS) $(CSSLIB) $(QJSLIB) ../../Libs/Chitralekha/libChitralekha.a \
+		$(MBEDLIB) $(ZLIB) $(BROTLILIB) ../../Libs/XEClib/libXEClib.a -o $@
 
 clean:
 	rm -rf $(OBJDIR) $(TARGET)

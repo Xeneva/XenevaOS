@@ -84,6 +84,15 @@ void xe_http_set_body(const char* content_type, const void* body, size_t len);
 /* URL of the last completed xe_http_get, after redirects. */
 void xe_http_last_url(char* dst, size_t dstsz);
 
+/* Where the trust anchors came from: "file:/etc/ssl/certs/cacert.pem",
+ * "file:/cacert.pem", "embedded", or "uninitialized" before the first TLS
+ * connection. */
+const char* xe_http_ca_source(void);
+
+/* Successful TLS handshakes since process start. resumed counts handshakes
+ * that loaded a cached session; the peer may still choose a full handshake. */
+void xe_http_tls_stats(int* full, int* resumed);
+
 /* Store one Set-Cookie line, or one document.cookie assignment.
  * from_http is 1 for a response header and 0 for a script. */
 void xe_cookie_set(const char* page_url, const char* set_cookie, int from_http);

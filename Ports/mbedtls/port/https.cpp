@@ -53,6 +53,9 @@
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/x509_crt.h"
 
+#include <zlib.h>
+#include <brotli/decode.h>
+
 extern "C" {
 extern const unsigned char xe_cacert_pem[];
 extern const unsigned int xe_cacert_pem_len;
@@ -93,6 +96,7 @@ struct xe_tls_slot {
 
 struct xe_reader {
 	int tls;
+	int resumed;
 	int fd;
 	/* When set, a recv or send that would wait returns WANT_* so another
 	 * socket on this thread can run. The blocking path leaves it clear. */
@@ -121,6 +125,24 @@ static char* g_req_body = NULL;
 static size_t g_req_body_len = 0;
 static char g_req_ctype[80];
 static char g_last_url[3072];
+static char g_ca_source[64] = "uninitialized";
+
+#define XE_CA_MAX (512 * 1024)
+
+#define XE_TLS_SESSION_MAX 8
+#define XE_TLS_SESSION_TTL 3600
+
+struct xe_tls_session {
+	int used;
+	char host[256];
+	int64_t expires;
+	mbedtls_ssl_session session;
+};
+
+static struct xe_tls_session g_sessions[XE_TLS_SESSION_MAX];
+static int g_sessions_ready;
+static int g_tls_full;
+static int g_tls_resumed;
 
 static void set_err(xe_http_response* out, const char* msg) {
 	snprintf(out->error, sizeof(out->error), "%s", msg);
@@ -152,18 +174,76 @@ static int ensure_rng(xe_http_response* out) {
 	return 0;
 }
 
+static unsigned char* ca_read_file(const char* path, size_t* len) {
+	int fd;
+	unsigned char* buf;
+	size_t got = 0;
+
+	fd = _KeOpenFile((char*)path, FILE_OPEN_READ_ONLY);
+	if (fd < 0)
+		return NULL;
+	buf = (unsigned char*)malloc(XE_CA_MAX);
+	if (!buf) {
+		_KeCloseFile(fd);
+		return NULL;
+	}
+	while (got < XE_CA_MAX - 1) {
+		size_t room = XE_CA_MAX - 1 - got;
+		size_t n = _KeReadFile(fd, buf + got, room);
+		/* A failed read comes back as a negative int in a size_t. */
+		if (n == 0 || n > room)
+			break;
+		got += n;
+	}
+	_KeCloseFile(fd);
+	if (got == 0 || got == XE_CA_MAX - 1) {
+		free(buf);
+		return NULL;
+	}
+	buf[got] = 0;
+	*len = got + 1;
+	return buf;
+}
+
 static int ensure_ca(xe_http_response* out) {
+	static const char* const paths[] = {
+		"/etc/ssl/certs/cacert.pem",
+		"/cacert.pem",
+		NULL
+	};
 	int ret;
+	int i;
+
 	if (g_ca_ready)
 		return 0;
 	mbedtls_x509_crt_init(&g_cacert);
+	for (i = 0; paths[i]; i++) {
+		size_t len = 0;
+		unsigned char* pem = ca_read_file(paths[i], &len);
+		if (!pem)
+			continue;
+		ret = mbedtls_x509_crt_parse(&g_cacert, pem, len);
+		free(pem);
+		if (ret >= 0 && g_cacert.raw.p != NULL) {
+			snprintf(g_ca_source, sizeof(g_ca_source), "file:%s", paths[i]);
+			g_ca_ready = 1;
+			return 0;
+		}
+		mbedtls_x509_crt_free(&g_cacert);
+		mbedtls_x509_crt_init(&g_cacert);
+	}
 	ret = mbedtls_x509_crt_parse(&g_cacert, xe_cacert_pem, xe_cacert_pem_len);
 	if (ret < 0 || g_cacert.raw.p == NULL) {
 		set_err(out, "trust anchors unusable");
 		return -1;
 	}
+	snprintf(g_ca_source, sizeof(g_ca_source), "embedded");
 	g_ca_ready = 1;
 	return 0;
+}
+
+const char* xe_http_ca_source(void) {
+	return g_ca_source;
 }
 
 static int parse_url(const char* url, struct xe_url* u) {
@@ -502,6 +582,176 @@ static void copy_token(const char* src, char* dst, size_t n) {
 	dst[i] = 0;
 }
 
+/* Content-Encoding values this client can undo. Unknown encodings are left
+ * alone rather than turning a readable response into a failure. */
+enum {
+	XE_ENC_NONE = 0,
+	XE_ENC_GZIP,
+	XE_ENC_DEFLATE,
+	XE_ENC_BR
+};
+
+/* A compressed body is usually smaller than the decoded one. Keep enough
+ * raw input for incompressible content and for the framing overhead. */
+#define XE_DECODE_SLACK (128 * 1024)
+
+static int http_content_encoding(const char* hdr) {
+	const char* v = hdr_value(hdr, "Content-Encoding");
+	if (!v)
+		return XE_ENC_NONE;
+	while (*v == ' ' || *v == '\t')
+		v++;
+	if (strncasecmp(v, "gzip", 4) == 0)
+		return XE_ENC_GZIP;
+	if (strncasecmp(v, "x-gzip", 6) == 0)
+		return XE_ENC_GZIP;
+	if (strncasecmp(v, "deflate", 7) == 0)
+		return XE_ENC_DEFLATE;
+	if (strncasecmp(v, "br", 2) == 0)
+		return XE_ENC_BR;
+	return XE_ENC_NONE;
+}
+
+static size_t decode_raw_cap(size_t max_body) {
+	size_t cap = max_body ? max_body : 1;
+	if (cap > (size_t)-1 - XE_DECODE_SLACK)
+		return cap;
+	return cap + XE_DECODE_SLACK;
+}
+
+/* Z_SOLO removes zlib's default allocator hooks; inflateInit2 rejects a
+ * stream whose zalloc/zfree are NULL. */
+static voidpf xe_zlib_alloc(voidpf opaque, uInt items, uInt size) {
+	(void)opaque;
+	return malloc((size_t)items * (size_t)size);
+}
+
+static void xe_zlib_free(voidpf opaque, voidpf address) {
+	(void)opaque;
+	free(address);
+}
+
+/* One zlib pass. wbits selects zlib, raw deflate, or gzip framing. */
+static int inflate_try(const unsigned char* in, size_t inlen, int wbits,
+					   unsigned char* dst, size_t cap, size_t* outlen) {
+	z_stream zs;
+	int ret;
+	int done = 0;
+
+	memset(&zs, 0, sizeof(zs));
+	zs.zalloc = xe_zlib_alloc;
+	zs.zfree = xe_zlib_free;
+	zs.opaque = NULL;
+	zs.next_in = (Bytef*)in;
+	zs.avail_in = (uInt)inlen;
+	zs.next_out = dst;
+	zs.avail_out = (uInt)cap;
+	ret = inflateInit2(&zs, wbits);
+	if (ret != Z_OK) {
+		_KePrint("[zlib] init wbits=%d ret=%d\n", wbits, ret);
+		return -1;
+	}
+	for (;;) {
+		ret = inflate(&zs, Z_NO_FLUSH);
+		if (ret == Z_STREAM_END) {
+			done = 1;
+			break;
+		}
+		if (ret == Z_OK) {
+			if (zs.avail_out == 0 || zs.avail_in == 0)
+				break;
+			continue;
+		}
+		if (ret == Z_BUF_ERROR)
+			break;
+		break;
+	}
+	*outlen = cap - zs.avail_out;
+	inflateEnd(&zs);
+	/* A truncated stream is still useful up to the cap; a hard format error
+	 * is not. */
+	if (!done && ret != Z_OK && ret != Z_BUF_ERROR) {
+		_KePrint("[zlib] inflate wbits=%d ret=%d in=%d out=%d\n", wbits, ret,
+				 (int)inlen, (int)*outlen);
+		return -1;
+	}
+	return 0;
+}
+
+static int decode_gzip_deflate(const unsigned char* in, size_t inlen, int gzip,
+							   unsigned char* dst, size_t cap, size_t* outlen) {
+	if (gzip)
+		return inflate_try(in, inlen, 16 + MAX_WBITS, dst, cap, outlen);
+	if (inflate_try(in, inlen, MAX_WBITS, dst, cap, outlen) == 0)
+		return 0;
+	/* RFC 9110 says zlib framing, but some servers send raw deflate. */
+	return inflate_try(in, inlen, -MAX_WBITS, dst, cap, outlen);
+}
+
+static int decode_brotli(const unsigned char* in, size_t inlen,
+						 unsigned char* dst, size_t cap, size_t* outlen) {
+	BrotliDecoderState* s = BrotliDecoderCreateInstance(NULL, NULL, NULL);
+	const uint8_t* next_in = in;
+	size_t avail_in = inlen;
+	uint8_t* next_out = dst;
+	size_t avail_out = cap;
+	int ok = 0;
+
+	if (!s)
+		return -1;
+	for (;;) {
+		BrotliDecoderResult r =
+			BrotliDecoderDecompressStream(s, &avail_in, &next_in, &avail_out, &next_out, NULL);
+		if (r == BROTLI_DECODER_RESULT_SUCCESS) {
+			ok = 1;
+			break;
+		}
+		if (r == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT)
+			break;
+		if (r == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT) {
+			if (avail_in == 0)
+				break;
+			continue;
+		}
+		break;
+	}
+	*outlen = cap - avail_out;
+	BrotliDecoderDestroyInstance(s);
+	return ok || *outlen ? 0 : -1;
+}
+
+/* Decode in place, then apply the caller's body cap to the decoded bytes. */
+static int decode_body(xe_http_response* out, size_t max_body, int encoding) {
+	unsigned char* dst;
+	size_t cap;
+	size_t got = 0;
+	int rc;
+
+	if (!out || !out->body || !out->body_len || encoding == XE_ENC_NONE)
+		return 0;
+	cap = max_body ? max_body : 1;
+	dst = (unsigned char*)malloc(cap + 1);
+	if (!dst)
+		return -1;
+	if (encoding == XE_ENC_BR)
+		rc = decode_brotli((const unsigned char*)out->body, out->body_len, dst, cap, &got);
+	else
+		rc = decode_gzip_deflate((const unsigned char*)out->body, out->body_len,
+								 encoding == XE_ENC_GZIP, dst, cap, &got);
+	if (rc < 0) {
+		_KePrint("[http] decode enc=%d in=%d first=%d\n", encoding,
+				 (int)out->body_len,
+				 out->body_len > 0 ? (int)(unsigned char)out->body[0] : 0);
+		free(dst);
+		return -1;
+	}
+	dst[got] = 0;
+	free(out->body);
+	out->body = (char*)dst;
+	out->body_len = got;
+	return 0;
+}
+
 static void tls_error(int ret, uint32_t flags, xe_http_response* out) {
 	if (flags & MBEDTLS_X509_BADCERT_CN_MISMATCH)
 		set_err(out, "certificate name mismatch");
@@ -543,12 +793,99 @@ static void tls_free(struct xe_reader* r) {
 	r->tls = 0;
 }
 
+static void tls_sessions_init(void) {
+	int i;
+
+	if (g_sessions_ready)
+		return;
+	for (i = 0; i < XE_TLS_SESSION_MAX; i++)
+		mbedtls_ssl_session_init(&g_sessions[i].session);
+	g_sessions_ready = 1;
+}
+
+static mbedtls_ssl_session* tls_session_get(const char* host) {
+	int i;
+	int64_t now;
+
+	tls_sessions_init();
+	now = (int64_t)time(NULL);
+	for (i = 0; i < XE_TLS_SESSION_MAX; i++) {
+		if (!g_sessions[i].used)
+			continue;
+		if (g_sessions[i].expires <= now) {
+			mbedtls_ssl_session_free(&g_sessions[i].session);
+			mbedtls_ssl_session_init(&g_sessions[i].session);
+			g_sessions[i].used = 0;
+			continue;
+		}
+		if (strcmp(g_sessions[i].host, host) == 0)
+			return &g_sessions[i].session;
+	}
+	return NULL;
+}
+
+/* Export the current session into the cache. A TLS 1.3 session is only
+ * resumable after its NewSessionTicket has been processed, so this is called
+ * again once the body has been read. A failed export leaves the previous
+ * entry intact instead of throwing away a usable TLS 1.2 session. */
+static int tls_session_put(const char* host, mbedtls_ssl_context* ssl) {
+	mbedtls_ssl_session fresh;
+	int i;
+	int slot = -1;
+	int64_t now;
+
+	if (!host || !ssl)
+		return -1;
+	tls_sessions_init();
+	mbedtls_ssl_session_init(&fresh);
+	if (mbedtls_ssl_get_session(ssl, &fresh) != 0) {
+		mbedtls_ssl_session_free(&fresh);
+		return -1;
+	}
+	now = (int64_t)time(NULL);
+	for (i = 0; i < XE_TLS_SESSION_MAX; i++) {
+		if (!g_sessions[i].used) {
+			slot = i;
+			break;
+		}
+		if (strcmp(g_sessions[i].host, host) == 0) {
+			slot = i;
+			break;
+		}
+		if (g_sessions[i].expires <= now && slot < 0)
+			slot = i;
+	}
+	if (slot < 0) {
+		slot = 0;
+		for (i = 1; i < XE_TLS_SESSION_MAX; i++) {
+			if (g_sessions[i].expires < g_sessions[slot].expires)
+				slot = i;
+		}
+	}
+	if (g_sessions[slot].used)
+		mbedtls_ssl_session_free(&g_sessions[slot].session);
+	g_sessions[slot].session = fresh;
+	snprintf(g_sessions[slot].host, sizeof(g_sessions[slot].host), "%s", host);
+	g_sessions[slot].expires = now + XE_TLS_SESSION_TTL;
+	g_sessions[slot].used = 1;
+	return 0;
+}
+
+void xe_http_tls_stats(int* full, int* resumed) {
+	if (full)
+		*full = g_tls_full;
+	if (resumed)
+		*resumed = g_tls_resumed;
+}
+
 static const char* xe_alpn[] = { "http/1.1", NULL };
 
 /* Config and bio only. The overlapped pump calls handshake one step at a time. */
 static int tls_prepare(struct xe_reader* r, const char* host, xe_http_response* out) {
+	mbedtls_ssl_session* cached;
 	int ret;
 
+	r->resumed = 0;
 	if (time(NULL) < XE_CLOCK_MIN) {
 		set_err(out, "clock not set");
 		return -1;
@@ -575,6 +912,7 @@ static int tls_prepare(struct xe_reader* r, const char* host, xe_http_response* 
 	mbedtls_ssl_conf_authmode(&r->slot->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 	mbedtls_ssl_conf_ca_chain(&r->slot->conf, &g_cacert, NULL);
 	mbedtls_ssl_conf_rng(&r->slot->conf, tls_rng, &g_drbg);
+	mbedtls_ssl_conf_session_tickets(&r->slot->conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
 	if (mbedtls_ssl_conf_alpn_protocols(&r->slot->conf, xe_alpn) != 0) {
 		set_err(out, "ALPN rejected");
 		goto fail;
@@ -583,6 +921,9 @@ static int tls_prepare(struct xe_reader* r, const char* host, xe_http_response* 
 		set_err(out, "TLS setup failed");
 		goto fail;
 	}
+	cached = tls_session_get(host);
+	if (cached && mbedtls_ssl_set_session(&r->slot->ssl, cached) == 0)
+		r->resumed = 1;
 	if (mbedtls_ssl_set_hostname(&r->slot->ssl, host) != 0) {
 		set_err(out, "SNI rejected");
 		goto fail;
@@ -612,6 +953,11 @@ static int tls_handshake(struct xe_reader* r, const char* host, xe_http_response
 		tls_error(ret, flags, out);
 		goto fail;
 	}
+	tls_session_put(host, r->ssl);
+	if (r->resumed)
+		g_tls_resumed++;
+	else
+		g_tls_full++;
 	return 0;
 fail:
 	tls_free(r);
@@ -652,8 +998,12 @@ static int connect_host(const struct xe_url* u, xe_http_response* out) {
 	return sock;
 }
 
-/* XEClib EINPROGRESS. The kernel returns this from a non-blocking connect. */
+/* XEClib EINPROGRESS. The kernel returns this from a non-blocking connect.
+ * EISCONN means the handshake finished between polls: another socket's
+ * receive drain completed this SYN, so the next connect() no longer sees
+ * SYN_SENT. That is success, not a failed connect. */
 #define XE_CONNECT_PENDING 119
+#define XE_EISCONN 127
 
 /* Start a TCP connection for the overlapped pump. pending is 1 when the
  * SYN is in flight and the caller must connect() again. An older kernel
@@ -1322,8 +1672,18 @@ static int read_body(struct xe_reader* r, int chunked, long content_len, int wan
 				break;
 			if (hex_len(line, &sz) < 0)
 				break;
-			if (sz == 0)
+			if (sz == 0) {
+				/* 0\r\n is not the end of the message. Trailer fields
+				 * follow, then a blank line. The socket is closed after
+				 * this read, but leave the framing consumed. */
+				for (;;) {
+					if (rd_line(r, line, sizeof(line)) < 0)
+						break;
+					if (line[0] == 0)
+						break;
+				}
 				break;
+			}
 			while (sz) {
 				size_t room = (got < cap) ? (cap - got) : 0;
 				size_t ask = sz;
@@ -1400,7 +1760,9 @@ static int fetch_once(const struct xe_url* u, const char* method, const char* ua
 	const char* cl;
 	const char* loc;
 	int chunked = 0;
+	int encoding = XE_ENC_NONE;
 	long content_len = -1;
+	size_t raw_cap;
 	char hosthdr[300];
 
 	location[0] = 0;
@@ -1442,11 +1804,14 @@ static int fetch_once(const struct xe_url* u, const char* method, const char* ua
 		if (req_body && req_body_len) {
 			n = snprintf(req, reqcap,
 						 "POST %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n"
+						 "Accept-Encoding: gzip, deflate, br\r\n"
 						 "Content-Type: %s\r\nContent-Length: %u\r\n",
 						 u->path, hosthdr, ua ? ua : "xeneva",
 						 ctype ? ctype : "application/octet-stream", (unsigned)req_body_len);
 		} else {
-			n = snprintf(req, reqcap, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n",
+			n = snprintf(req, reqcap,
+						 "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n"
+						 "Accept-Encoding: gzip, deflate, br\r\n",
 						 head_only ? "HEAD" : "GET", u->path, hosthdr, ua ? ua : "xeneva");
 		}
 		if (n < 0 || (size_t)n >= reqcap) {
@@ -1508,8 +1873,19 @@ static int fetch_once(const struct xe_url* u, const char* method, const char* ua
 	if (loc)
 		copy_token(loc, location, locsz);
 	ck_from_headers(u, hdr);
-	if (read_body(&r, chunked, content_len, !head_only, out, max_body) < 0) {
+	encoding = http_content_encoding(hdr);
+	raw_cap = (encoding == XE_ENC_NONE) ? max_body : decode_raw_cap(max_body);
+	if (read_body(&r, chunked, content_len, !head_only, out, raw_cap) < 0) {
 		set_err(out, "Body read failed");
+		goto fail;
+	}
+	/* TLS 1.3 NewSessionTicket usually follows the handshake and may only be
+	 * consumed while the body is read. Export again now that it can be
+	 * present; TLS 1.2 simply keeps the entry saved after the handshake. */
+	if (r.ssl)
+		tls_session_put(u->host, r.ssl);
+	if (decode_body(out, max_body, encoding) < 0) {
+		set_err(out, "Content decoding failed");
 		goto fail;
 	}
 	if (r.ssl)
@@ -1551,7 +1927,8 @@ enum {
 	XB_RAW = 0,
 	XB_LINE,
 	XB_DATA,
-	XB_CRLF
+	XB_CRLF,
+	XB_TRAIL
 };
 
 #define XE_MANY_IDLE_MS 20000
@@ -1569,6 +1946,7 @@ struct xe_many {
 	int rc;
 	int chunked;
 	int body_mode;
+	int encoding;
 	int tls_ready;
 	int waits;
 	int keepalive;
@@ -1577,6 +1955,7 @@ struct xe_many {
 	long content_len;
 	size_t body_got;
 	size_t chunk_left;
+	size_t raw_cap;
 	size_t hdr_n;
 	size_t req_off;
 	size_t req_len;
@@ -1589,7 +1968,12 @@ struct xe_many {
 	char loc[3072];
 	char* req;
 	char hdr[XE_HDR_RAW];
-	unsigned char pend[2048];
+	/* The header read fills hdr[] in one call, then splits off the body
+	 * bytes that arrived with it. Those bytes must all fit here. A 2048-byte
+	 * cap dropped every stylesheet and image once virtio RX delivered a full
+	 * TLS record in the first read; the document path reads headers a byte
+	 * at a time and was unaffected. */
+	unsigned char pend[XE_HDR_RAW];
 	int pend_len;
 	int pend_pos;
 	char chunk_line[64];
@@ -1731,7 +2115,8 @@ static int job_build_req(struct xe_many* j) {
 		return -1;
 	}
 	n = snprintf(req, reqcap,
-				 "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n",
+				 "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n"
+				 "Accept-Encoding: gzip, deflate, br\r\n",
 				 j->u.path, hosthdr, ua);
 	if (n < 0 || (size_t)n >= reqcap)
 		goto toolong;
@@ -1828,7 +2213,7 @@ static int job_step_connect(struct xe_many* j) {
 	rc = connect(j->fd, (sockaddr_*)&dest, sizeof(dest));
 	if (rc == -XE_CONNECT_PENDING)
 		return 0;
-	if (rc < 0) {
+	if (rc < 0 && rc != -XE_EISCONN) {
 		job_fail(j, "Connect failed");
 		return 1;
 	}
@@ -1879,6 +2264,8 @@ static int job_follow(struct xe_many* j) {
 	j->content_len = -1;
 	j->chunked = 0;
 	j->body_mode = XB_RAW;
+	j->encoding = XE_ENC_NONE;
+	j->raw_cap = 0;
 	j->loc[0] = 0;
 	snprintf(j->url, sizeof(j->url), "%s", next);
 	if (job_open(j) < 0) {
@@ -1906,6 +2293,8 @@ static void job_park(struct xe_many* j) {
 	j->content_len = -1;
 	j->chunked = 0;
 	j->body_mode = XB_RAW;
+	j->encoding = XE_ENC_NONE;
+	j->raw_cap = 0;
 	j->loc[0] = 0;
 	j->hops = 0;
 	j->keepalive = 1;
@@ -1920,6 +2309,13 @@ static int job_deliver(struct xe_many* j, int reuse_ok) {
 	if (j->out && j->out->body) {
 		j->out->body[j->body_got] = 0;
 		j->out->body_len = j->body_got;
+		/* The ticket may have arrived with the last body record. */
+		if (j->r.ssl)
+			tls_session_put(j->u.host, j->r.ssl);
+		if (decode_body(j->out, j->max_body, j->encoding) < 0) {
+			job_fail(j, "Content decoding failed");
+			return 1;
+		}
 	}
 	if (st >= 400) {
 		snprintf(j->out->error, sizeof(j->out->error), "HTTP %d", st);
@@ -1977,7 +2373,10 @@ static int job_headers_done(struct xe_many* j) {
 		j->keepalive = 0;
 	if ((st == 301 || st == 302 || st == 303 || st == 307 || st == 308) && j->loc[0])
 		return job_follow(j);
-	cap = j->max_body ? j->max_body : 1;
+	j->encoding = http_content_encoding(j->hdr);
+	j->raw_cap = (j->encoding == XE_ENC_NONE) ? (j->max_body ? j->max_body : 1)
+											  : decode_raw_cap(j->max_body);
+	cap = j->raw_cap;
 	body = (unsigned char*)malloc(cap + 1);
 	if (!body) {
 		job_fail(j, "Out of memory");
@@ -2029,7 +2428,7 @@ static int job_take(struct xe_many* j, unsigned char* dst, size_t max, size_t* g
 
 static int job_body_raw(struct xe_many* j) {
 	size_t budget = XE_STEP_BUDGET;
-	size_t cap = j->max_body ? j->max_body : 1;
+	size_t cap = j->raw_cap ? j->raw_cap : (j->max_body ? j->max_body : 1);
 	unsigned char* body = (unsigned char*)j->out->body;
 	int any = 0;
 	if (!body) {
@@ -2073,7 +2472,7 @@ static int job_body_raw(struct xe_many* j) {
 
 static int job_body_chunked(struct xe_many* j) {
 	size_t budget = XE_STEP_BUDGET;
-	size_t cap = j->max_body ? j->max_body : 1;
+	size_t cap = j->raw_cap ? j->raw_cap : (j->max_body ? j->max_body : 1);
 	unsigned char* body = (unsigned char*)j->out->body;
 	int any = 0;
 	if (!body) {
@@ -2103,8 +2502,12 @@ static int job_body_chunked(struct xe_many* j) {
 				}
 				j->chunk_line_n = 0;
 				if (sz == 0) {
-					job_deliver(j, 1);
-					return 1;
+					/* Park only after the trailer blank line. Leaving
+					 * that CRLF in the stream makes the next keep-alive
+					 * response start with a blank line, so its status
+					 * is rejected and the stylesheet or image is dropped. */
+					j->body_mode = XB_TRAIL;
+					continue;
 				}
 				j->chunk_left = sz;
 				j->body_mode = XB_DATA;
@@ -2178,6 +2581,34 @@ static int job_body_chunked(struct xe_many* j) {
 			}
 			continue;
 		}
+		if (j->body_mode == XB_TRAIL) {
+			unsigned char c;
+			size_t got = 0;
+			int tr = job_take(j, &c, 1, &got);
+			if (tr == 0)
+				return any;
+			if (tr < 0) {
+				job_deliver(j, 0);
+				return 1;
+			}
+			any = 1;
+			job_touch(j);
+			budget--;
+			if (c == '\n') {
+				if (j->chunk_line_n == 0) {
+					job_deliver(j, 1);
+					return 1;
+				}
+				j->chunk_line_n = 0;
+			} else if (c != '\r') {
+				if (j->chunk_line_n + 1 >= (int)sizeof(j->chunk_line)) {
+					job_deliver(j, 0);
+					return 1;
+				}
+				j->chunk_line[j->chunk_line_n++] = (char)c;
+			}
+			continue;
+		}
 		job_fail(j, "Body read failed");
 		return 1;
 	}
@@ -2209,6 +2640,11 @@ static int job_step_tls(struct xe_many* j) {
 			job_fail(j, "Out of memory");
 			return 1;
 		}
+		tls_session_put(j->u.host, j->r.ssl);
+		if (j->r.resumed)
+			g_tls_resumed++;
+		else
+			g_tls_full++;
 		j->tls_ready = 1;
 		j->state = XJ_SEND;
 		job_touch(j);

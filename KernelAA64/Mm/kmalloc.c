@@ -161,7 +161,14 @@ void* kmalloc(unsigned int size) {
 		 * ms every time the heap grew -- visible as system-wide stutter,
 		 * not just a slow allocation. Only the actual free-list surgery
 		 * (tlsf_add_memory/tlsf_malloc) needs the lock+mask --axiss */
+		size_t need_pages = ((size_t)size + PAGE_SIZE - 1) / PAGE_SIZE;
 		size_t more_pages = 32;
+		/* The added region must by itself be able to satisfy the request:
+		 * a 256 KiB receive buffer can never come out of a 128 KiB growth
+		 * chunk, so the retry below would fail forever. Leave a few pages
+		 * for TLSF's own block header and alignment. */
+		if (need_pages + 8 > more_pages)
+			more_pages = need_pages + 8;
 		void* more_mem = au_request_page(more_pages);
 		if (more_mem) {
 			uint64_t daif2 = read_daif();
@@ -209,7 +216,10 @@ void* krealloc(void* ptr, unsigned int new_size) {
 	if (!result && new_size > 0) {
 		/* see kmalloc: grow outside the lock/mask, only the free-list
 		 * surgery needs it --axiss */
+		size_t need_pages = ((size_t)new_size + PAGE_SIZE - 1) / PAGE_SIZE;
 		size_t more_pages = 32;
+		if (need_pages + 8 > more_pages)
+			more_pages = need_pages + 8;
 		void* more_mem = au_request_page(more_pages);
 		if (more_mem) {
 			uint64_t daif2 = read_daif();

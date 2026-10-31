@@ -25,7 +25,6 @@ STY_GREEN="${STY_GREEN:-}"
 
 OUT="${BEAR_OUTPUT:-$REPO_ROOT/compile_commands.json}"
 rm -f "$OUT"
-mkdir -p /tmp/opencode
 
 if ! command -v bear >/dev/null 2>&1; then
     printf "${STY_RED}[ccdb] bear not found; install it (apt/brew/pacman -S bear) to regenerate compile_commands.json.${STY_RST}\n" >&2

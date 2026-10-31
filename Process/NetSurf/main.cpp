@@ -1668,7 +1668,8 @@ static void NsCssFetchBatch(char* url0, char* url1, int n, int* fetched) {
 	if (xe_http_get_many(urls, n, kNsUa, resp, caps, rcs) != 0)
 		return;
 	for (k = 0; k < n; k++) {
-		_KePrint("[css] link %s -> %d bytes rc=%d\n", urls[k], (int)resp[k].body_len, rcs[k]);
+		_KePrint("[css] link %s -> %d bytes rc=%d %s\n", urls[k],
+				 (int)resp[k].body_len, rcs[k], resp[k].error);
 		if (*fetched < 2 && rcs[k] == 0 && NsCssAppendFetched(&resp[k]))
 			(*fetched)++;
 		xe_http_response_free(&resp[k]);

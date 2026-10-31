@@ -295,3 +295,22 @@ For deeper OS interactions, XenevaOS uses standard POSIX-like headers available 
 - **Printing to Kernel Log:** Use `_KePrint("Log message\r\n");` (viewable via serial console).
 - **Process Management:** Use `<sys/_keproc.h>` (includes `_KeProcessSleep()`).
 - **Filesystem IO:** Use `<sys/_kefile.h>`.
+
+## Registering and Packaging Your Application
+
+Once your application is implemented in `Process/<AppName>/`:
+
+1. **Launcher Registration:** Add an entry in `Resources/resources/lncher.cnf` pointing to your executable and icon. Ensure the final entry in the file terminates with `>` (see [PopulatingConfig.md](../PopulatingConfig.md#the-lnchercnf-file) for syntax details):
+   ```ini
+   {[Title]My App|
+   [Icon]/icons/myappl.bmp|
+   [Param]Null|
+   [App]/myapp.exe}
+   ```
+2. **Add Icon Asset:** Place a 24-bit or 32-bit BMP icon under `Resources/resources/ICONS/` (or `icons/`).
+3. **Fast Iteration with `--apps`:** Test your application without recompiling the entire operating system by passing `--apps`:
+   ```bash
+   ./Scripts/Linux/build_and_run_qemu.sh --apps=MyApp
+   ```
+   The build script will compile only your application and the essential desktop shell, automatically filtering `lncher.cnf` so unbuilt apps are excluded from the test session (see [BuildInstructions(Linux).md](../BuildInstructions(Linux).md#selective-application-compilation)).
+
