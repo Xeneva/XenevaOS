@@ -1,2 +1,0 @@
-# name path handback max_restarts window_s cooldown_s stable_s groups
-gpusrv /gpusrv.exe load_virtgpu 3 60 30 20 daemons,world
