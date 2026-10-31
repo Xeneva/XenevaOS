@@ -53,18 +53,27 @@ OBJDIR = obj
 # Source files for ARM64
 CPP_SRCS = acosf.cpp arpa/inet.cpp atan2f.cpp atanf.cpp c++/ios.cpp c++/iostream.cpp \
            c++/istream.cpp c++/memory.cpp c++/new.cpp c++/ostream.cpp c++/_string.cpp \
-           ceilf.cpp ctype.cpp errno.cpp fmodf.cpp math.cpp qsort.cpp roundf.cpp pthread.cpp \
+           ceilf.cpp ctype.cpp errno.cpp fenv.cpp fmodf.cpp math.cpp qsort.cpp roundf.cpp pthread.cpp \
            stat.cpp stdio.cpp stdlib.cpp string.cpp sys/xenet.cpp sys/hosts.cpp \
            net/if.cpp sys/_heap.cpp sys/_procheap.cpp            sys/_xeneva.cpp sys/_xeprint.cpp time.cpp \
            _xeinput.cpp _xeprint.cpp cxx_abi.cpp
 
 S_SRCS = _callbase_arm64.S setjmp_arm64.s store_stack_arm64.s
 
+# Vendored musl double-precision math (C99).  Kept in C so designated
+# initialisers in the data tables compile without C++ extensions.
+C_SRCS = $(wildcard math/*.c)
+
 CPP_OBJS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(CPP_SRCS))
+C_OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(C_SRCS))
 S_OBJS = $(patsubst %.s,$(OBJDIR)/%.o,$(filter %.s,$(S_SRCS))) \
          $(patsubst %.S,$(OBJDIR)/%.o,$(filter %.S,$(S_SRCS)))
 
-OBJS = $(CPP_OBJS) $(S_OBJS)
+OBJS = $(CPP_OBJS) $(C_OBJS) $(S_OBJS)
+
+# C sources cannot take the C++-only flags from CXXFLAGS.
+CFLAGS = $(filter-out -fno-rtti -fno-exceptions,$(CXXFLAGS)) \
+         -Wno-unused-command-line-argument -Wno-unknown-warning-option
 
 all: $(TARGET)
 
@@ -90,6 +99,10 @@ $(TARGET): $(OBJS)
 $(OBJDIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJDIR)/%.o: %.s
 	@mkdir -p $(dir $@)
