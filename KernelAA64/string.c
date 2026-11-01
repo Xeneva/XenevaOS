@@ -61,77 +61,82 @@ int memcmp(const void* first, const void* second, size_t length) {
 }
 
 void* memcpy(void* __restrict dest, const void* __restrict src, size_t len) {
-	//_fastcpy(dest, src, count);
-
-	//volatile uint8_t* t = (volatile uint8_t*)dest;
-	//const volatile uint8_t* s = (const volatile uint8_t*)src;
-	//if (len > 0) {
-	//	// check to see if target is in the range of src and if so, do a memmove() instead
-	//	if ((t > s) && (t < (s + len))) {
-	//		t += (len - 1);
-	//		s += (len - 1);
-	//		while (len--)
-	//			*t-- = *s++;
-	//	}
-	//	else {
-	//		while (len--)
-	//			*t++ = *s++;
-	//	}
-	//}
-	volatile uint8_t* t = (volatile uint8_t*)dest;
-	const volatile uint8_t* s = (const volatile uint8_t*)src;
+	uint8_t* d = (uint8_t*)dest;
+	const uint8_t* s = (const uint8_t*)src;
 
 	if (len == 0 || dest == src)
 		return NULL;
 
-	if ((t > s) && (t < (s + len))) {
-		t += len;
+	/* memcpy is specified for non-overlapping ranges, but kernel callers
+	 * occasionally hand us an overlapping forward copy. Keep the old
+	 * defensive behaviour: copy backwards only when the destination starts
+	 * inside the source range. */
+	if ((uintptr_t)d > (uintptr_t)s && (uintptr_t)d < (uintptr_t)s + len) {
+		d += len;
 		s += len;
 
-		while (len > 0 && ((uintptr_t)t & 7) != 0) {
-			len--;
-			*(--t) = *(--s);
-		}
-
-		if (len >= 8) {
-			uint32_t blocks = len / 8;
-			volatile uint64_t* t64 = (volatile uint64_t*)t;
-			const volatile uint64_t* s64 = (const volatile uint64_t*)s;
-
-			while (blocks--)
-				*(--t64) = *(--s64);
-
-			t = (uint8_t*)t64;
-			s = (uint8_t*)s64;
-			len %= 8;
-		}
-
-		while (len--)
-			*(--t) = *(--s);
-	}
-
-	else {
-		while (len > 0 && ((uintptr_t)t & 7) != 0) {
-			*t++ = *s++;
+		while (len && ((uintptr_t)d & 7)) {
+			*--d = *--s;
 			len--;
 		}
+		while (len >= 32) {
+			uint64_t a, b, c, e;
 
-		if (len >= 8) {
-			uint32_t blocks = len / 8;
-			volatile uint64_t* t64 = (volatile uint64_t*)t;
-			const volatile uint64_t* s64 = (const volatile uint64_t*)s;
-
-			while (blocks--)
-				*t64++ = *s64++;
-
-			t = (uint8_t*)t64;
-			s = (uint8_t*)s64;
-			len %= 8;
+			d -= 32;
+			s -= 32;
+			a = ((const uint64_t*)s)[0];
+			b = ((const uint64_t*)s)[1];
+			c = ((const uint64_t*)s)[2];
+			e = ((const uint64_t*)s)[3];
+			((uint64_t*)d)[0] = a;
+			((uint64_t*)d)[1] = b;
+			((uint64_t*)d)[2] = c;
+			((uint64_t*)d)[3] = e;
+			len -= 32;
 		}
-
-		while (len--)
-			*t++ = *s++;
+		while (len >= 8) {
+			d -= 8;
+			s -= 8;
+			*(uint64_t*)d = *(const uint64_t*)s;
+			len -= 8;
+		}
+		while (len--) {
+			*--d = *--s;
+		}
+		return dest;
 	}
+
+	/* Align the destination; the source is allowed to stay unaligned on
+	 * AArch64 normal memory. Copy 32 bytes per iteration so the compiler
+	 * emits wide load/store pairs instead of a byte loop. */
+	while (len && ((uintptr_t)d & 7)) {
+		*d++ = *s++;
+		len--;
+	}
+	while (len >= 32) {
+		uint64_t a = ((const uint64_t*)s)[0];
+		uint64_t b = ((const uint64_t*)s)[1];
+		uint64_t c = ((const uint64_t*)s)[2];
+		uint64_t e = ((const uint64_t*)s)[3];
+
+		((uint64_t*)d)[0] = a;
+		((uint64_t*)d)[1] = b;
+		((uint64_t*)d)[2] = c;
+		((uint64_t*)d)[3] = e;
+		d += 32;
+		s += 32;
+		len -= 32;
+	}
+	while (len >= 8) {
+		*(uint64_t*)d = *(const uint64_t*)s;
+		d += 8;
+		s += 8;
+		len -= 8;
+	}
+	while (len--) {
+		*d++ = *s++;
+	}
+	return dest;
 }
 
 int strcmp(const char* str1, const char* str2) {

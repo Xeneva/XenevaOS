@@ -100,9 +100,11 @@ void virt_gpu_alloc_fb(VirtioCommonCfg* cfg, int resource_id) {
 	attach.nr_entries = 1;
 	attach.entries[0].addr = fb_phys;
 	attach.entries[0].length = len;
-	gpu_attach_back_cmd(cfg, &attach,
-		(uint32_t)OFFSETOF(virtio_gpu_resource_attach_backing, entries),
-		&attach.entries[0], (uint32_t)sizeof(attach.entries[0]));
+	gpu_attach_back_cmd(cfg,
+						&attach,
+						(uint32_t)OFFSETOF(virtio_gpu_resource_attach_backing, entries),
+						&attach.entries[0],
+						(uint32_t)sizeof(attach.entries[0]));
 	KERNEL_BOOT_INFO* binfo = AuGetBootInfoStruc();
 	if (binfo && (uint64_t)binfo >= KERNEL_BASE_ADDRESS) {
 		binfo->graphics_framebuffer = (uint32_t*)fb_phys;
@@ -112,7 +114,8 @@ void virt_gpu_alloc_fb(VirtioCommonCfg* cfg, int resource_id) {
 		binfo->pixels_per_line = binfo->X_Resolution;
 	}
 	AuConsoleSetConInfo(fb_phys, GPU_FB_BUFFER, virt_display_width, virt_display_height);
-	UARTDebugOut("[virtio-gpu]: framebuffer attached to screen id : %d %d\r\n", resource_id, (int)len);
+	UARTDebugOut(
+		"[virtio-gpu]: framebuffer attached to screen id : %d %d\r\n", resource_id, (int)len);
 }
 
 void virt_gpu_release_fb(void) {
@@ -145,7 +148,8 @@ void virt_gpu_set_scanout(VirtioCommonCfg* cfg, int resource_id, int scanout_id)
 	cmd.rect.x = 0;
 	cmd.rect.y = 0;
 	gpu_execute_command(cfg, &cmd, sizeof(virtio_gpu_set_scanout));
-	UARTDebugOut("[virtio-gpu]: scanout : %d attached to screen id : %d \r\n",scanout_id, resource_id);
+	UARTDebugOut(
+		"[virtio-gpu]: scanout : %d attached to screen id : %d \r\n", scanout_id, resource_id);
 }
 
 /**
@@ -158,14 +162,15 @@ void virt_gpu_set_scanout(VirtioCommonCfg* cfg, int resource_id, int scanout_id)
  * @param w -- Width of the rect
  * @param h -- Height of the rect
  */
-void virt_gpu_transfer_to_host2d(VirtioCommonCfg* cfg, int resource_id, int x, int y, int w, int h) {
+void virt_gpu_transfer_to_host2d(
+	VirtioCommonCfg* cfg, int resource_id, int x, int y, int w, int h) {
 	virtio_gpu_transfer_to_host_2d host2d;
 	host2d.hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST2D;
 	host2d.rect.x = x;
 	host2d.rect.y = y;
 	host2d.rect.width = w;
 	host2d.rect.height = h;
-	host2d.offset = y * (virt_display_width*4) + x * 4;
+	host2d.offset = y * (virt_display_width * 4) + x * 4;
 	host2d.resource_id = resource_id;
 	gpu_execute_command(cfg, &host2d, sizeof(virtio_gpu_transfer_to_host_2d));
 }
@@ -237,8 +242,7 @@ void VirtGpuConsolePresent(uint32_t* src, uint32_t src_pitch, int x, int y, int 
 		return;
 	uint32_t* dst = (uint32_t*)GPU_FB_BUFFER;
 	for (int j = 0; j < h; j++) {
-		uint32_t* s =
-			(uint32_t*)((uint8_t*)src + (uint64_t)(y + j) * src_pitch) + x;
+		uint32_t* s = (uint32_t*)((uint8_t*)src + (uint64_t)(y + j) * src_pitch) + x;
 		uint32_t* d = dst + (uint64_t)(y + j) * virt_display_width + x;
 		for (int i = 0; i < w; i++)
 			d[i] = s[i];

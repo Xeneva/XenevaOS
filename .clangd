@@ -1,0 +1,13 @@
+CompileFlags:
+  Add:
+    - -std=c++23
+    - -target
+    - aarch64-unknown-windows
+
+    - -DARCH_ARM64
+
+    - -ffreestanding
+    - -fno-builtin
+
+    - -D__GNUC__
+    - -I/home/nugget/Workspace/XenevaOS/BaseHdr

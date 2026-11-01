@@ -1,4 +1,4 @@
-# LLVM curl.exe — HTTP/1.0 GET/HEAD client for --term.
+# LLVM curl.exe — HTTP/1.1 GET/HEAD client for --term.
 
 TOOLCHAIN ?= gcc
 TARGET = curl.exe
@@ -22,15 +22,29 @@ ifeq ($(TOOLCHAIN), llvm)
     LDFLAGS = $(LLVM_TARGET) -fuse-ld=lld -nostdlib -Wl,-entry:_aumain -Wl,-base:0x600000000 -Wl,-subsystem:native
 endif
 
+MBEDLIB = ../../Ports/mbedtls/libmbedtls.a
+ZLIB = ../../Ports/zlib/libz.a
+BROTLILIB = ../../Ports/brotli/libbrotlidec.a
+
 .PHONY: all clean llvm
 llvm:
 	@$(MAKE) TOOLCHAIN=llvm all
 
 all: $(TARGET)
 
+$(MBEDLIB):
+	$(MAKE) -C ../../Ports/mbedtls llvm
+
+$(ZLIB):
+	$(MAKE) -C ../../Ports/zlib llvm
+
+$(BROTLILIB):
+	$(MAKE) -C ../../Ports/brotli llvm
+
 ifeq ($(TOOLCHAIN), llvm)
-$(TARGET): $(OBJS)
-	$(LD) $(LDFLAGS) $(OBJS) ../../Ports/mbedtls/libmbedtls.a ../../Libs/XEClib/libXEClib.a -o $@
+$(TARGET): $(OBJS) $(MBEDLIB) $(ZLIB) $(BROTLILIB)
+	$(LD) $(LDFLAGS) $(OBJS) $(MBEDLIB) $(ZLIB) $(BROTLILIB) \
+		../../Libs/XEClib/libXEClib.a -o $@
 endif
 
 $(OBJDIR)/main.o: main.cpp

@@ -81,10 +81,11 @@
 #define __BORDOISILA_PTR_VALIDATE(p)                                                               \
 	({                                                                                             \
 		uint64_t _v = (uint64_t)(uintptr_t)(p);                                                    \
-		(_v >= __BORDOISILA_PTR_MIN) && !__BORDOISILA_PTR_REPEATED_BYTE(_v) &&                     \
-			!__BORDOISILA_PTR_REPEATED_WORD(_v) && !__BORDOISILA_PTR_POISONED(_v) &&               \
-			((_v <= __BORDOISILA_PTR_USER_MAX) ||                                                  \
-			 (_v >= __BORDOISILA_PTR_KERN_MIN && _v <= __BORDOISILA_PTR_KERN_MAX));                \
+		int _user = (_v >= __BORDOISILA_PTR_MIN && _v <= __BORDOISILA_PTR_USER_MAX);               \
+		int _kern = (_v >= __BORDOISILA_PTR_KERN_MIN && _v <= __BORDOISILA_PTR_KERN_MAX);          \
+		/* Heap 0x3000000030 has equal halves; repeated-word is a kernel-pointer test. */         \
+		(_user || _kern) && !__BORDOISILA_PTR_REPEATED_BYTE(_v) &&                                 \
+			!__BORDOISILA_PTR_POISONED(_v) && (_user || !__BORDOISILA_PTR_REPEATED_WORD(_v));      \
 	})
 
 #define __BORDOISILA_HEAP_PTR_VALIDATE(p)                                                          \

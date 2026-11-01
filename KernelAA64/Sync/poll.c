@@ -54,6 +54,8 @@ AuVFSNode* AuPollGetFile(AA64Thread* thr, int fd) {
 			return NULL;
 	}
 
+	if (fd >= FILE_DESC_PER_PROCESS)
+		return NULL;
 	AuVFSNode* file = proc->fds[fd];
 	if (!file) //bad file descriptor
 		return NULL;
@@ -120,7 +122,7 @@ int AuPoll(_AuUser_PollFD fds[], nfds_t num_fd, int timeout) {
 
 	uint64_t deadline = 0;
 	if (timeout > 0)
-		deadline = AuGetCurrentUS() + (uint64_t)timeout; // * 1000;
+		deadline = AuGetCurrentUS() + (uint64_t)timeout * 1000ULL;
 
 	int ready = 0;
 	uint16_t mask = 0;
@@ -131,14 +133,11 @@ int AuPoll(_AuUser_PollFD fds[], nfds_t num_fd, int timeout) {
 			_kfds[i].revents = 0;
 			if (fds[i].fd < 0)
 				continue;
-			UARTDebugOut("poll: getting file for fd: %d \r\n", _kfds[i].fd);
 			AuVFSNode* file = AuPollGetFile(curr_thr, _kfds[i].fd);
 			if (!file)
 				mask = POLLNVAL;
 			else if (file->poll) {
-				UARTDebugOut("executing file->poll %x \r\n", file->poll);
 				mask = file->poll(file, file, config);
-
 			} else
 				mask = POLLIN | POLLOUT; // regular file
 
@@ -146,48 +145,37 @@ int AuPoll(_AuUser_PollFD fds[], nfds_t num_fd, int timeout) {
             *  POLLERR | POLLHUP | POLLNVAL present
             */
 			mask &= (uint16_t)fds[i].events | POLLERR | POLLHUP | POLLNVAL;
-			_kfds[i].revents = mask;
-			if (mask) {
-				UARTDebugOut("making ready +=1 : %x \r\n", mask);
+			fds[i].revents = mask;
+			if (mask)
 				ready++;
-			}
 		}
 		config = NULL;
-		if (ready > 0) {
-			UARTDebugOut("ready is >0 returning : %d \r\n", ready);
+		if (ready > 0)
 			break;
-		}
 
 		/** check for timeout value , 0 means non-blocking and non sleeping, 
      * -1 means forever
     */
-		if (timeout == 0) {
-			UARTDebugOut("timeout== 0, returning ready : %d \r\n", ready);
+		if (timeout == 0)
 			break;
-		}
 
-		if (timeout > 0 && AuGetCurrentUS() >= deadline) {
-			UARTDebugOut(
-				"timeout > 0 && currentUS > deadile : %d - %d\r\n", deadline, AuGetCurrentUS());
+		if (timeout > 0 && AuGetCurrentUS() >= deadline)
 			break;
-		}
 
 		/** we should also check for signal, but skipping for now */
 
 		if (timeout > 0) {
 			uint64_t now = AuGetCurrentUS();
-			uint64_t ms = (deadline > now) ? (deadline - now + 999 / 1000) : 1;
-			UARTDebugOut("timeout > 0 and sleeping now : %d ms \r\n", ms);
+			uint64_t ms = (deadline > now) ?
+				(deadline - now + 999ULL) / 1000ULL : 1;
 			curr_thr->blocked_on_poll = 1;
 			AuSleepThread(curr_thr, ms);
 		} else {
-			UARTDebugOut("blocking thread \r\n");
 			curr_thr->blocked_on_poll = 1;
 			AuBlockThread(curr_thr);
 		}
 		AuScheduleNext();
 		curr_thr->blocked_on_poll = 0;
-		UARTDebugOut("POLL: After scheduleNext horrible??\r\n");
 	}
 
 	kfree(_kfds);

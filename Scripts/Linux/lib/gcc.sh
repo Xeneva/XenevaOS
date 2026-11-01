@@ -49,6 +49,8 @@ if [ "${BUILD_USER_APPS:-0}" -eq 1 ]; then
         rm -f ../../Resources/resources/deoaud.exe ../../Resources/resources/audplr.exe
     fi
     if [ "${NO_NETWORK:-0}" -eq 0 ]; then
+        ( cd ../../Ports/zlib && make clean && make TOOLCHAIN=gcc all )
+        ( cd ../../Ports/brotli && make clean && make TOOLCHAIN=gcc all )
         APPS+=(ping udpecho route iptables NETMngr dig nslook Ntpd wifictl)
     else
         echo "[gcc] Network userspace excluded (--no-network)."
@@ -83,6 +85,10 @@ if [ "${BUILD_USER_APPS:-0}" -eq 1 ]; then
     if [ "${NO_NETWORK:-0}" -eq 0 ]; then
         cp -f ../../Process/Ntpd/ntpd.exe         ../../Resources/resources/
         cp -f ../../Process/wifictl/wifictl.exe   ../../Resources/resources/
+        mkdir -p ../../Resources/resources/etc/ssl/certs
+        cp -f ../../Ports/mbedtls/certs/cacert.pem ../../Resources/resources/etc/ssl/certs/cacert.pem
+    else
+        rm -rf ../../Resources/resources/etc/ssl
     fi
 fi
 

@@ -46,6 +46,7 @@
 #include <_null.h>
 #include <Hal/AA64/profile.h>
 #include <timer.h>
+#include <Fs/vfsmod.h>
 
 #define LOADER_SCRATCH_VIRT 0xFFFFC00000700000
 
@@ -306,6 +307,15 @@ int AuLoadExecToProcess(AuProcess* proc, char* filename, int argc, char** argv) 
 		UARTDebugOut("No File found -> %s \r\n", filename);
 		return -1;
 	}
+
+	if (file->flags & FS_FLAG_DIRECTORY)
+		return -1;
+
+	if (!AuVFSCheckAccess(&proc->creds, file, 1 /* execute bit */)) {
+		UARTDebugOut("[loader]: %s : permission denied, file mode incorrect \r\n", filename);
+		return -1;
+	}
+
 	size_t scratch_bytes = 0;
 
 	if (file->eof == 1 && fb->readComplete == 1)
@@ -348,8 +358,7 @@ int AuLoadExecToProcess(AuProcess* proc, char* filename, int argc, char** argv) 
 		if (scratch_filled > scratch_limit)
 			scratch_filled = scratch_limit;
 
-		size_t total_pages =
-			scratch_filled / PAGE_SIZE + ((scratch_filled % PAGE_SIZE) ? 1 : 0);
+		size_t total_pages = scratch_filled / PAGE_SIZE + ((scratch_filled % PAGE_SIZE) ? 1 : 0);
 		for (size_t i = 0; i < total_pages; i++) {
 			if ((i & 15) == 0)
 				AuSchedYieldMs(1);
@@ -373,8 +382,7 @@ int AuLoadExecToProcess(AuProcess* proc, char* filename, int argc, char** argv) 
 		 * PE images such as netsurf.exe are larger than 1 MiB too. */
 		if (file->eof != 1) {
 			while (file->eof != 1) {
-				size_t bytes_read =
-					AuVFSNodeReadBlock(fsys, file, (uint64_t*)_ldr_scratchBuffer);
+				size_t bytes_read = AuVFSNodeReadBlock(fsys, file, (uint64_t*)_ldr_scratchBuffer);
 				if (bytes_read == 0)
 					break;
 				size_t copied = 0;

@@ -52,16 +52,22 @@ ALIGNED(2) typedef struct _ethernet_ {
 } Ethernet;
 #pragma pack(pop)
 
+/* Raw sockets are observability taps, not a reliable transport. Without a
+ * bound, a busy link grows every tap's queue until the heap is exhausted. */
+#define AU_RAW_SOCKET_MAX_FRAMES 64
+
 AU_EXTERN AU_EXPORT void AuEthernetHandle(void* data, int size, AuVFSNode* nic) {
 	Ethernet* frame = (Ethernet*)data;
 	AuNetworkDevice* ndev = (AuNetworkDevice*)nic->device;
 	if (!ndev)
 		return;
 	list_t* raw_sockets = AuRawSocketGetList();
-	//UARTDebugOut("Adding to raw_sockets \r\n");
+	//AU_NET_LOG("Adding to raw_sockets \r\n");
 	for (int i = 0; i < raw_sockets->pointer; i++) {
 		AuSocket* sock = (AuSocket*)list_get_at(raw_sockets, i);
-		AuSocketAdd(sock, frame, size);
+		if (sock && sock->rxstack &&
+			sock->rxstack->itemCount < AU_RAW_SOCKET_MAX_FRAMES)
+			AuSocketAdd(sock, frame, size);
 	}
 
 	char broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -109,12 +115,13 @@ void AuEthernetSend(AuVFSNode* nic, void* data, size_t len, uint16_t type, uint8
 		return;
 	/* Acceptance: loopback / local delivery must never hit L2. */
 	if (ndev->type == NETDEV_TYPE_LOOPBACK) {
-		UARTDebugOut("[aurora]: AuEthernetSend blocked on lo\r\n");
+		AU_NET_LOG("[aurora]: AuEthernetSend blocked on lo\r\n");
 		return;
 	}
 	size_t totalSz = sizeof(Ethernet) + len;
 	Ethernet* pacl = (Ethernet*)kmalloc(totalSz);
-	memset(pacl, 0, totalSz);
+	/* Every header field and the payload are written below; the previous
+	 * full-frame memset only added a pass over the data. */
 	memcpy(&pacl->payload, data, len);
 	memcpy(&pacl->dest, dest, 6);
 	uint8_t* src_mac = ndev->mac;

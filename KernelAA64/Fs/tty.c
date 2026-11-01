@@ -411,7 +411,7 @@ int AuTTYCreate(int* master_fd, int* slave_fd) {
 
 	tty->masterbuf = AuCircBufInitialise((uint8_t*)inbuffer, 1024);
 	tty->slavebuf = AuCircBufInitialise((uint8_t*)outbuffer, 1024);
-	
+
 	tty->id = slave_count;
 	tty->master_written = 0;
 	tty->slave_written = 0;
@@ -433,8 +433,10 @@ int AuTTYCreate(int* master_fd, int* slave_fd) {
 	/** now current process owns the both file **/
 	master->uid = proc->creds.uid;
 	master->gid = proc->creds.gid;
+	master->mode = 0666;
 	slave->uid = proc->creds.uid;
 	slave->gid = proc->creds.gid;
+	slave->mode = 0620;
 
 	CapRights rights;
 	rights = CAP_READ | CAP_WRITE;

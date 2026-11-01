@@ -48,28 +48,26 @@
 #include "cmd2d.h"
 #include <aurora.h>
 
-#define VIRTIO_PCI_CAP_ID 0x09
 #define VIRTIO_PCI_CAP_COMMON_CFG 1
 #define VIRTIO_PCI_CAP_NOTIFY_CFG 2
 #define VIRTIO_PCI_CAP_DEVICE_CFG 4
 
-
 /** feature bits */
-#define VIRTIO_GPU_F_VIRGL (1ULL << 0) //virgl mode is supported
-#define VIRTIO_GPU_F_EDID  (1ULL << 1) //EDID is supported
-#define VIRTIO_GPU_F_RESOURCE_UUID (1ULL << 2) //assigning resources UUIDs 
+#define VIRTIO_GPU_F_VIRGL		   (1ULL << 0) //virgl mode is supported
+#define VIRTIO_GPU_F_EDID		   (1ULL << 1) //EDID is supported
+#define VIRTIO_GPU_F_RESOURCE_UUID (1ULL << 2) //assigning resources UUIDs
 #define VIRTIO_GPU_F_RESOURCE_BLOB (1ULL << 3) //creating and using size-based blob
-#define VIRTIO_GPU_F_CONTEXT_INIT (1ULL << 4) //multiple context types and sync timelines
-#define VIRTQ_DESC_F_NEXT  1
-#define VIRTQ_DESC_F_WRITE 2
+#define VIRTIO_GPU_F_CONTEXT_INIT  (1ULL << 4) //multiple context types and sync timelines
+#define VIRTQ_DESC_F_NEXT		   1
+#define VIRTQ_DESC_F_WRITE		   2
 
 /** static internal usable variables */
 static volatile uint8_t* notifyBase;
 static uint32_t notifyOffMultiplier;
 static bool _is_edid_supported;
 static bool _is_virgl_supported;
-static struct VirtioQueue *controlq;
-static struct VirtioQueue *cursorq;
+static struct VirtioQueue* controlq;
+static struct VirtioQueue* cursorq;
 static uint64_t controlq_phys;
 static uint64_t cursorq_phys;
 static void* command_phys;
@@ -93,52 +91,152 @@ AuVFSNode* fsnode;
 
 void gpu_reset_device(VirtioCommonCfg* cfg);
 
-static bool gpu_find_cap(uint64_t device, int bus, int dev, int func,
-	uint8_t cfg_type, uint8_t* out_bar, uint32_t* out_offset,
-	uint32_t* out_length, uint32_t* out_notify_multiplier) {
-	uint8_t ptr = (uint8_t)AuPCIERead64(device, PCI_CAPABILITIES_PTR, 1,
-		bus, dev, func);
-	for (unsigned count = 0; ptr && count < 48; count++) {
-		if (ptr < 0x40 || ptr > 0xFC || (ptr & 1))
+/**                                                                                                                                                                                                                                                                          
+    * gpu_find_cap -- look up a virtio-PCI capability of the requested type in                                                                                                                                                                                                  
+    * the device's PCI Config space and report where its config struct lives.                                                                                                                                                                                                   
+    *                                                                                                                                                                                                                                                                           
+    * Background: type-0 PCI Config space is a 256-byte region. 0x00-0x3F is the                                                                                                                                                                                                
+    * fixed header, and 0x40-0xFF holds a *linked list* of capability nodes:                                                                                                                                                                                                    
+    *                                                                                                                                                                                                                                                                           
+    *   byte 0   capability ID                                                                                                                                                                                                                                                  
+    *   byte 1   offset of the NEXT node (0 terminates the list)                                                                                                                                                                                                                
+    *   byte 2   length of this node                                                                                                                                                                                                                                            
+    *   byte 3+  node-specific payload                                                                                                                                                                                                                                          
+    *                                                                                                                                                                                                                                                                           
+    * Because the position of a node is not fixed and varies from device to                                                                                                                                                                                                     
+    * device, it is not possible to read the virtio config from a hardcoded                                                                                                                                                                                                     
+    * offset. The read of 0x34 is the head pointer of the list, and the rest of                                                                                                                                                                                                 
+    * the code is just walking node-by-node via the `next` field until one                                                                                                                                                                                                      
+    * matches cfg_type.                                                                                                                                                                                                                                                         
+    *                                                                                                                                                                                                                                                                           
+    * The virtio (ID 0x09) payload we are looking for is:                                                                                                                                                                                                                       
+    *                                                                                                                                                                                                                                                                           
+    *   byte 3   cfg_type        -- which of the virtio capabilities this is                                                                                                                                                                                                    
+    *   byte 4   bar             -- which BAR (0-5) the config struct lives in                                                                                                                                                                                                  
+    *   byte 8   offset (u32)    -- byte offset within that BAR                                                                                                                                                                                                                 
+    *   byte 12 length (u32)     -- size of the config struct                                                                                                                                                                                                                   
+    *   byte 16 notify_off_multiplier (u32)                                                                                                                                                                                                                                     
+    *           -- present only in the NOTIFICATION capability (whose cap_len is                                                                                                                                                                                                
+    *              20, not 16), spacing in bytes between per-queue notify slots                                                                                                                                                                                                 
+    *                                                                                                                                                                                                                                                                           
+    * Returns true on success and fills the out_* fields (except the multiplier,                                                                                                                                                                                                
+    * but the caller must have passed NULL). False means "this device does                                                                                                                                                                                                      
+    * not satisfy us" -- not an unrecoverable state.                                                                                                                                                                                                                            
+    */
+static bool
+gpu_find_cap(uint64_t device,
+			 int bus,
+			 int dev,
+			 int func,
+			 uint8_t cfg_type,
+			 uint8_t* out_bar,
+			 uint32_t* out_offset, // TODO: either supress the warning or pass a struct here
+			 uint32_t* out_length,
+			 uint32_t* out_notify_multiplier) {
+	// Head pointer of the capability list. Per the PCI spec this is optional,
+	// so 0x00 is a legal value meaning "this device exposes no capabilities."
+	// That's not a situation to panic over -- returning false lets the
+	// driver main refuse to attach to this device, and the system keeps
+	// booting without a GPU.
+	uint8_t ptr = (uint8_t)AuPCIERead64(device, PCI_CAPABILITIES_PTR, 1, bus, dev, func);
+	if (ptr == NULL)
+		return false;
+
+	// Safety limit: 0x40-0xFF holds at most a small number of nodes, which
+	// makes this bound a sane upper limit, and protects against a device
+	// that hands us a circular list.
+	constexpr int NUM_CAP = 48;
+
+	// By spec, capability nodes are only allowed to live in the 0x40-0xFF
+	// portion of the 256-byte region (the fixed header owns 0x00-0x3F).
+	// (The old code also rejected odd offsets. The PCI spec does not require
+	// node alignment, so we won't reject a legal device that just happens to
+	// be weird.)
+	constexpr int PCI_HEADER_START = 0x40;
+	constexpr int PCI_HEADER_LIMIT = 0xFC;
+
+	for (unsigned count = 0; ptr && count < NUM_CAP; count++) {
+		if (ptr < PCI_HEADER_START || ptr > PCI_HEADER_LIMIT)
 			return false;
+
 		uint8_t id = (uint8_t)AuPCIERead64(device, ptr, 1, bus, dev, func);
-		uint8_t next = (uint8_t)AuPCIERead64(device, ptr + 1, 1,
-			bus, dev, func);
-		if (id == VIRTIO_PCI_CAP_ID) {
-			uint8_t length = (uint8_t)AuPCIERead64(device, ptr + 2, 1,
-				bus, dev, func);
-			if (length < 16 || ptr + length > 0x100)
-				return false;
-			uint8_t type = (uint8_t)AuPCIERead64(device, ptr + 3, 1,
-				bus, dev, func);
-			if (type == cfg_type) {
-				*out_bar = (uint8_t)AuPCIERead64(device, ptr + 4, 1,
-					bus, dev, func);
-				*out_offset = (uint32_t)AuPCIERead64(device, ptr + 8, 4,
-					bus, dev, func);
-				*out_length = (uint32_t)AuPCIERead64(device, ptr + 12, 4,
-					bus, dev, func);
-				if (out_notify_multiplier) {
-					if (length < 20)
-						return false;
-					*out_notify_multiplier = (uint32_t)AuPCIERead64(
-						device, ptr + 16, 4, bus, dev, func);
-				}
-				return true;
-			}
+		uint8_t next = (uint8_t)AuPCIERead64(device, ptr + 1, 1, bus, dev, func);
+
+		// 0x09 = virtio-PCI capability. Careful: in the base PCI spec
+		// 0x09 means "vendor specific", so other (non-virtio) capabilities
+		// can legitimately carry ID 0x09.
+		constexpr int VIRTIO_PCI_CAP_ID = 0x09;
+		if (id != VIRTIO_PCI_CAP_ID) {
+			ptr = next;
+			continue;
 		}
-		ptr = next;
+
+		uint8_t length = (uint8_t)AuPCIERead64(device, ptr + 2, 1, bus, dev, func);
+
+		// Two sanity checks *before* reading the node's payload:
+		//  - length < 16: even the smallest virtio capability has to
+		//    carry the u32 offset (byte 8) and u32 length (byte 12)
+		//    fields. A shorter node is malformed, and reading it would
+		//    bleed into whatever sits next to it in Config space.
+		//  - ptr + length > 0x100: everything must fit inside the 256-byte
+		//    Config space. A bogus length must not push our payload reads
+		//    past 0xFF.
+		constexpr int VIRTIO_CAPABILITY_STRUCT_LEN = 16;
+		constexpr int VIRTIO_CAPABILITY_MAX_LEN = 0x100;
+
+		if (length < VIRTIO_CAPABILITY_STRUCT_LEN || ptr + length > VIRTIO_CAPABILITY_MAX_LEN) {
+			ptr = next;
+			continue;
+		}
+
+		uint8_t type = (uint8_t)AuPCIERead64(device, ptr + 3, 1, bus, dev, func);
+		if (type != cfg_type) {
+			ptr = next;
+			continue;
+		}
+
+		// The requested capability was found. The remaining byte-4 defense
+		// against a fake 0x09 (vendor-specific) node is that a real virtio
+		// capability points at a real BAR, i.e. 0-5. Whatever gpu_map_cap
+		// that can't be verified against a valid BAR range gets rejected
+		// before the MMIO access.
+		uint8_t bar = (uint8_t)AuPCIERead64(device, ptr + 4, 1, bus, dev, func);
+		if (bar > 5) {
+			ptr = next;
+			continue;
+		}
+
+		uint32_t offset = (uint32_t)AuPCIERead64(device, ptr + 8, 4, bus, dev, func);
+		uint32_t cfg_length = (uint32_t)AuPCIERead64(device, ptr + 12, 4, bus, dev, func);
+
+		// The NOTIFICATION capability additionally puts
+		// notify_off_multiplier at byte 16, which is why its cap_len is 20.
+		// If the caller requested it (i.e. we were looking for a notification
+		// capability), verify that it's actually present. If the node is
+		// malformed, we can't give up on the whole device, so we just look
+		// for the next node in the list.
+		if (out_notify_multiplier) {
+			if (length < 20) {
+				ptr = next;
+				continue;
+			}
+			*out_notify_multiplier = (uint32_t)AuPCIERead64(device, ptr + 16, 4, bus, dev, func);
+		}
+
+		*out_bar = bar;
+		*out_offset = offset;
+		*out_length = cfg_length;
+		return true;
 	}
 	return false;
 }
 
-static void* gpu_map_cap(uint64_t device, int bus, int dev, int func,
-	uint8_t bar, uint32_t offset, uint32_t length) {
+static void* gpu_map_cap(
+	uint64_t device, int bus, int dev, int func, uint8_t bar, uint32_t offset, uint32_t length) {
 	size_t bar_size = 0;
-	uint64_t bar_base = AuPCIEReadBAR(device, (uint16_t)bus, (uint16_t)dev,
-		(uint16_t)func, bar, &bar_size);
-	if (!bar_base || !bar_size || !length || offset > bar_size ||
-		length > bar_size - offset)
+	uint64_t bar_base =
+		AuPCIEReadBAR(device, (uint16_t)bus, (uint16_t)dev, (uint16_t)func, bar, &bar_size);
+	if (!bar_base || !bar_size || !length || offset > bar_size || length > bar_size - offset)
 		return NULL;
 	uint64_t map_base = bar_base & ~(uint64_t)(PAGE_SIZE - 1);
 	uint64_t delta = bar_base - map_base;
@@ -160,7 +258,7 @@ AU_EXTERN AU_EXPORT int AuDriverUnload() {
 	 * paths that call the driver's hook directly. */
 	if (fsnode && fsnode->fileCopyCount) {
 		UARTDebugOut("[virtio-gpu]: unload blocked by %d open descriptor(s)\r\n",
-			(int)fsnode->fileCopyCount);
+					 (int)fsnode->fileCopyCount);
 		return -1;
 	}
 	/* Stop callbacks before resetting the device. In particular, the console
@@ -234,7 +332,6 @@ void gpu_reset_device(VirtioCommonCfg* cfg) {
  * @param cfg -- pointer to virtio common config
  */
 static bool gpu_feature_negotiate(VirtioCommonCfg* cfg) {
-
 	cfg->DevFeatureSelect = 0;
 	isb_flush();
 	dsb_ish();
@@ -270,7 +367,7 @@ static bool gpu_feature_negotiate(VirtioCommonCfg* cfg) {
 	cfg->GuestFeature = (guestfeatures >> 32) & UINT32_MAX;
 	isb_flush();
 	dsb_ish();
-	
+
 	cfg->DeviceStatus |= VIRTIO_STATUS_FEATURES_OK;
 	isb_flush();
 	dsb_ish();
@@ -318,7 +415,8 @@ static bool gpu_initialize_controlq(VirtioCommonCfg* cfg) {
 		return false;
 	}
 	controlq_sz = queueSz;
-	uint64_t queuePhys = (uint64_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL);//AuPmmngrAllocBlocks(((sizeof(struct VirtioQueue) * queueSz)) / 0x1000);
+	uint64_t queuePhys = (uint64_t)AuPmmngrAllocPage(
+		AURORA_PAGE_NORMAL); //AuPmmngrAllocBlocks(((sizeof(struct VirtioQueue) * queueSz)) / 0x1000);
 	if (!queuePhys || queuePhys == UINT64_MAX)
 		return false;
 	controlq = (struct VirtioQueue*)AuMapMMIO(queuePhys, 1);
@@ -330,8 +428,8 @@ static bool gpu_initialize_controlq(VirtioCommonCfg* cfg) {
 	memset((void*)controlq, 0, 0x1000);
 	UARTDebugOut("[virtio-gpu]: controlq size : %d \r\n", queueSz);
 	cfg->QueueDesc = queuePhys;
-	cfg->QueueAvail = (queuePhys)+OFFSETOF(struct VirtioQueue, available);
-	cfg->QueueUsed = (queuePhys)+OFFSETOF(struct VirtioQueue, used);
+	cfg->QueueAvail = (queuePhys) + OFFSETOF(struct VirtioQueue, available);
+	cfg->QueueUsed = (queuePhys) + OFFSETOF(struct VirtioQueue, used);
 	cfg->MSix = 0;
 	cfg->QueueMSixVector = 0;
 	cfg->QueueEnable = 1;
@@ -369,8 +467,8 @@ static bool gpu_initialize_cursorq(VirtioCommonCfg* cfg) {
 	memset((void*)cursorq, 0, 0x1000);
 	UARTDebugOut("[virtio-gpu]: controlq size : %d \r\n", queueSz);
 	cfg->QueueDesc = queuePhys;
-	cfg->QueueAvail = (queuePhys)+OFFSETOF(struct VirtioQueue, available);
-	cfg->QueueUsed = (queuePhys)+OFFSETOF(struct VirtioQueue, used);
+	cfg->QueueAvail = (queuePhys) + OFFSETOF(struct VirtioQueue, available);
+	cfg->QueueUsed = (queuePhys) + OFFSETOF(struct VirtioQueue, used);
 	cfg->MSix = 0;
 	cfg->QueueMSixVector = 0;
 	cfg->QueueEnable = 1;
@@ -392,7 +490,8 @@ void gpu_notify_queue(VirtioCommonCfg* cfg, uint16_t queueIdx) {
 	isb_flush();
 	dsb_ish();
 	uint16_t notify_off = cfg->QueueNotifyOff;
-	volatile uint16_t* notifyAddr = (volatile uint16_t*)((uint64_t)notifyBase + notify_off * notifyOffMultiplier);
+	volatile uint16_t* notifyAddr =
+		(volatile uint16_t*)((uint64_t)notifyBase + notify_off * notifyOffMultiplier);
 	*notifyAddr = queueIdx;
 	isb_flush();
 	dsb_ish();
@@ -410,7 +509,7 @@ void gpu_execute_command(VirtioCommonCfg* cfg, void* cmd, size_t len) {
 
 	controlq->buffers[index].Addr = (uint64_t)V2P((uint64_t)command_phys);
 	controlq->buffers[index].Length = len;
-    controlq->buffers[index].Flags = VIRTQ_DESC_F_NEXT;
+	controlq->buffers[index].Flags = VIRTQ_DESC_F_NEXT;
 	controlq->buffers[index].Next = (index + 1) % controlq_sz;
 
 	virtio_gpu_ctrl_hdr* resp = (virtio_gpu_ctrl_hdr*)resp_phys;
@@ -447,7 +546,8 @@ void gpu_execute_command(VirtioCommonCfg* cfg, void* cmd, size_t len) {
 		dc_ivac((uint64_t)resp_phys);
 	}
 	if (resp->type == 0)
-		UARTDebugOut("[virtio-gpu]: command timed out waiting for response, type=%x\r\n", resp->type);
+		UARTDebugOut("[virtio-gpu]: command timed out waiting for response, type=%x\r\n",
+					 resp->type);
 
 	memset(command_phys, 0, PAGE_SIZE);
 	_resp_ok = false;
@@ -462,7 +562,8 @@ void gpu_execute_command(VirtioCommonCfg* cfg, void* cmd, size_t len) {
  * @param req2 -- pointer to request command two
  * @param len2 -- request command two length
  */
-void gpu_attach_back_cmd(VirtioCommonCfg* cfg, void* req, uint32_t len1, void* req2, uint32_t len2) {
+void gpu_attach_back_cmd(
+	VirtioCommonCfg* cfg, void* req, uint32_t len1, void* req2, uint32_t len2) {
 	uint16_t idx = controlq->available.index % controlq_sz;
 	uint16_t idx1 = (uint16_t)((idx + 1) % controlq_sz);
 	uint16_t idx2 = (uint16_t)((idx + 2) % controlq_sz);
@@ -511,7 +612,6 @@ void gpu_attach_back_cmd(VirtioCommonCfg* cfg, void* req, uint32_t len1, void* r
 	_resp_ok = false;
 }
 
-
 /**
  * @brief gpu_allocate_resource_id -- allocates
  * resource for commands
@@ -558,7 +658,6 @@ void gpu_virt_interrupt(int spinum) {
 	}
 }
 
-
 /**
  * @brief virtio_gpu_iocontrol -- io control for virtio gpu
  * @param file -- Pointer to gpu file struct
@@ -585,7 +684,7 @@ int virtio_gpu_iocontrol(AuVFSNode* file, int code, void* arg) {
 		int w = ioctl->ulong_1 & UINT32_MAX;
 		int h = ioctl->ulong_2 & UINT32_MAX;
 		virt_gpu_transfer_to_host2d(_cfg, resourceID, x, y, w, h);
-		virt_gpu_flush_rect(_cfg, resourceID, x, y,w,h);
+		virt_gpu_flush_rect(_cfg, resourceID, x, y, w, h);
 		break;
 	}
 	case VIRTIO_GPU_FLUSH: {
@@ -641,18 +740,32 @@ AU_EXTERN AU_EXPORT int AuDriverMain(AuDriver* drv) {
 	uint8_t common_bar = 0, notify_bar = 0;
 	uint32_t common_offset = 0, common_length = 0;
 	uint32_t notify_offset = 0, notify_length = 0;
-	if (!gpu_find_cap(device, bus, dev, func, VIRTIO_PCI_CAP_COMMON_CFG,
-		&common_bar, &common_offset, &common_length, NULL) ||
-		!gpu_find_cap(device, bus, dev, func, VIRTIO_PCI_CAP_NOTIFY_CFG,
-		&notify_bar, &notify_offset, &notify_length, &notifyOffMultiplier) ||
+	if (!gpu_find_cap(device,
+					  bus,
+					  dev,
+					  func,
+					  VIRTIO_PCI_CAP_COMMON_CFG,
+					  &common_bar,
+					  &common_offset,
+					  &common_length,
+					  NULL) ||
+		!gpu_find_cap(device,
+					  bus,
+					  dev,
+					  func,
+					  VIRTIO_PCI_CAP_NOTIFY_CFG,
+					  &notify_bar,
+					  &notify_offset,
+					  &notify_length,
+					  &notifyOffMultiplier) ||
 		!notifyOffMultiplier) {
 		UARTDebugOut("[virtio-gpu]: required PCI capabilities missing\r\n");
 		return -1;
 	}
-	VirtioCommonCfg* cfg = (VirtioCommonCfg*)gpu_map_cap(device, bus, dev, func,
-		common_bar, common_offset, common_length);
-	notifyBase = (volatile uint8_t*)gpu_map_cap(device, bus, dev, func,
-		notify_bar, notify_offset, notify_length);
+	VirtioCommonCfg* cfg = (VirtioCommonCfg*)gpu_map_cap(
+		device, bus, dev, func, common_bar, common_offset, common_length);
+	notifyBase = (volatile uint8_t*)gpu_map_cap(
+		device, bus, dev, func, notify_bar, notify_offset, notify_length);
 	if (!cfg || !notifyBase) {
 		UARTDebugOut("[virtio-gpu]: failed to map required PCI capabilities\r\n");
 		return -1;
@@ -700,7 +813,7 @@ AU_EXTERN AU_EXPORT int AuDriverMain(AuDriver* drv) {
 	KERNEL_BOOT_INFO* binfo = AuGetBootInfoStruc();
 	if (binfo && (uint64_t)binfo < KERNEL_BASE_ADDRESS) {
 		UARTDebugOut("[virtio-gpu]: ignoring invalid low boot-info pointer %x\r\n",
-			(uint64_t)binfo);
+					 (uint64_t)binfo);
 		binfo = NULL;
 	}
 	uint32_t gpu_w = 1024;
@@ -734,16 +847,16 @@ AU_EXTERN AU_EXPORT int AuDriverMain(AuDriver* drv) {
 	mask_irqs();
 
 	AuVFSNode* devfs = AuVFSFind("/dev");
-	if (!devfs) 
+	if (!devfs)
 		return 0;
-	
+
 	/* avoiding using pipe for latency issue */
 	AuVFSNode* node = (AuVFSNode*)kmalloc(sizeof(AuVFSNode));
 	memset(node, 0, sizeof(AuVFSNode));
 	strcpy(node->filename, "virtiogpu");
 	node->flags |= FS_FLAG_DEVICE;
 	node->device = cfg;
-	node->read = 0; // AuDevInputMiceRead;
+	node->read = 0;	 // AuDevInputMiceRead;
 	node->write = 0; // AuDevInputMiceWrite;
 	node->open = 0;
 	node->close = 0;
@@ -753,7 +866,6 @@ AU_EXTERN AU_EXPORT int AuDriverMain(AuDriver* drv) {
 	UARTDebugOut("[virtio_gpu]: registered to device file system \r\n");
 	return 0;
 }
-
 
 /**
  * @brief gpu_get_config_pointer -- return the pointer

@@ -74,8 +74,9 @@ void LauncherSetupByConfigFile() {
 	char* fbuf = (char*)launcher_config_file;
 	while (1) {
 		char* p = strchr(fbuf, '{'); //beginning of an entry
-		if (p)
-			p += 8; //skip '['
+		if (!p)
+			break;
+		p += 8; //skip '['
 
 		fbuf = p;
 

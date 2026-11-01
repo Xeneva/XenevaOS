@@ -224,14 +224,34 @@ static void shim_set_status(struct virtio_device* vdev, uint8_t status) {
 	dsb_ish();
 }
 
+/*
+ * Device config is Device memory. memcpy() of 32 bytes or more is an
+ * `ldp q0, q1` from an 8-byte-aligned union (virtio-input offset 8) and
+ * takes an alignment fault. Byte accesses are the width the window allows.
+ * See virtio_cread_bytes().
+ */
+static void shim_cfg_read(void* dst, const void* src, unsigned len) {
+	const volatile uint8_t* s = src;
+	uint8_t* d = dst;
+
+	for (unsigned i = 0; i < len; i++)
+		d[i] = s[i];
+}
+
+static void shim_cfg_write(void* dst, const void* src, unsigned len) {
+	const uint8_t* s = src;
+	volatile uint8_t* d = dst;
+
+	for (unsigned i = 0; i < len; i++)
+		d[i] = s[i];
+}
+
 static void shim_get(struct virtio_device* vdev, unsigned offset, void* buf, unsigned len) {
-	const void* src = (const char*)vdev->au_dev->deviceCfg + offset;
-	memcpy(buf, src, len);
+	shim_cfg_read(buf, (const char*)vdev->au_dev->deviceCfg + offset, len);
 }
 
 static void shim_set(struct virtio_device* vdev, unsigned offset, const void* buf, unsigned len) {
-	void* dst = (char*)vdev->au_dev->deviceCfg + offset;
-	memcpy(dst, buf, len);
+	shim_cfg_write((char*)vdev->au_dev->deviceCfg + offset, buf, len);
 	isb_flush();
 	dsb_ish();
 }

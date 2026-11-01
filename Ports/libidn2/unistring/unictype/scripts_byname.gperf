@@ -1,0 +1,200 @@
+/* DO NOT EDIT! GENERATED AUTOMATICALLY! */
+/* Unicode scripts.  */
+/* Generated automatically by gen-uni-tables.c for Unicode 16.0.0.  */
+
+/* Copyright (C) 2000-2024 Free Software Foundation, Inc.
+
+   This file is free software: you can redistribute it and/or modify
+   it under the terms of the GNU Lesser General Public License as
+   published by the Free Software Foundation; either version 2.1 of the
+   License, or (at your option) any later version.
+
+   This file is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU Lesser General Public License for more details.
+
+   You should have received a copy of the GNU Lesser General Public License
+   along with this program.  If not, see <https://www.gnu.org/licenses/>.  */
+
+struct named_script { int name; unsigned int index; };
+%struct-type
+%language=ANSI-C
+%define hash-function-name scripts_hash
+%define lookup-function-name uc_script_lookup
+%readonly-tables
+%global-table
+%define word-array-name script_names
+%pic
+%define string-pool-name script_stringpool
+%%
+Common, 0
+Latin, 1
+Greek, 2
+Cyrillic, 3
+Armenian, 4
+Hebrew, 5
+Arabic, 6
+Syriac, 7
+Thaana, 8
+Devanagari, 9
+Bengali, 10
+Gurmukhi, 11
+Gujarati, 12
+Oriya, 13
+Tamil, 14
+Telugu, 15
+Kannada, 16
+Malayalam, 17
+Sinhala, 18
+Thai, 19
+Lao, 20
+Tibetan, 21
+Myanmar, 22
+Georgian, 23
+Hangul, 24
+Ethiopic, 25
+Cherokee, 26
+Canadian_Aboriginal, 27
+Ogham, 28
+Runic, 29
+Khmer, 30
+Mongolian, 31
+Hiragana, 32
+Katakana, 33
+Bopomofo, 34
+Han, 35
+Yi, 36
+Old_Italic, 37
+Gothic, 38
+Deseret, 39
+Inherited, 40
+Tagalog, 41
+Hanunoo, 42
+Buhid, 43
+Tagbanwa, 44
+Limbu, 45
+Tai_Le, 46
+Linear_B, 47
+Ugaritic, 48
+Shavian, 49
+Osmanya, 50
+Cypriot, 51
+Braille, 52
+Buginese, 53
+Coptic, 54
+New_Tai_Lue, 55
+Glagolitic, 56
+Tifinagh, 57
+Syloti_Nagri, 58
+Old_Persian, 59
+Kharoshthi, 60
+Balinese, 61
+Cuneiform, 62
+Phoenician, 63
+Phags_Pa, 64
+Nko, 65
+Sundanese, 66
+Lepcha, 67
+Ol_Chiki, 68
+Vai, 69
+Saurashtra, 70
+Kayah_Li, 71
+Rejang, 72
+Lycian, 73
+Carian, 74
+Lydian, 75
+Cham, 76
+Tai_Tham, 77
+Tai_Viet, 78
+Avestan, 79
+Egyptian_Hieroglyphs, 80
+Samaritan, 81
+Lisu, 82
+Bamum, 83
+Javanese, 84
+Meetei_Mayek, 85
+Imperial_Aramaic, 86
+Old_South_Arabian, 87
+Inscriptional_Parthian, 88
+Inscriptional_Pahlavi, 89
+Old_Turkic, 90
+Kaithi, 91
+Batak, 92
+Brahmi, 93
+Mandaic, 94
+Chakma, 95
+Meroitic_Cursive, 96
+Meroitic_Hieroglyphs, 97
+Miao, 98
+Sharada, 99
+Sora_Sompeng, 100
+Takri, 101
+Caucasian_Albanian, 102
+Bassa_Vah, 103
+Duployan, 104
+Elbasan, 105
+Grantha, 106
+Pahawh_Hmong, 107
+Khojki, 108
+Linear_A, 109
+Mahajani, 110
+Manichaean, 111
+Mende_Kikakui, 112
+Modi, 113
+Mro, 114
+Old_North_Arabian, 115
+Nabataean, 116
+Palmyrene, 117
+Pau_Cin_Hau, 118
+Old_Permic, 119
+Psalter_Pahlavi, 120
+Siddham, 121
+Khudawadi, 122
+Tirhuta, 123
+Warang_Citi, 124
+Ahom, 125
+Anatolian_Hieroglyphs, 126
+Hatran, 127
+Multani, 128
+Old_Hungarian, 129
+SignWriting, 130
+Adlam, 131
+Bhaiksuki, 132
+Marchen, 133
+Newa, 134
+Osage, 135
+Tangut, 136
+Masaram_Gondi, 137
+Nushu, 138
+Soyombo, 139
+Zanabazar_Square, 140
+Dogra, 141
+Gunjala_Gondi, 142
+Makasar, 143
+Medefaidrin, 144
+Hanifi_Rohingya, 145
+Sogdian, 146
+Old_Sogdian, 147
+Elymaic, 148
+Nandinagari, 149
+Nyiakeng_Puachue_Hmong, 150
+Wancho, 151
+Chorasmian, 152
+Dives_Akuru, 153
+Khitan_Small_Script, 154
+Yezidi, 155
+Cypro_Minoan, 156
+Old_Uyghur, 157
+Tangsa, 158
+Toto, 159
+Vithkuqi, 160
+Kawi, 161
+Nag_Mundari, 162
+Garay, 163
+Gurung_Khema, 164
+Kirat_Rai, 165
+Ol_Onal, 166
+Sunuwar, 167
+Todhri, 168
+Tulu_Tigalari, 169
