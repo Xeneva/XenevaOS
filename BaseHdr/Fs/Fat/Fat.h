@@ -37,16 +37,16 @@
 #endif
 #include <Fs/vfs.h>
 
-#define FAT_ATTRIBUTE_MASK  0x3F
-#define FAT_ATTRIBUTE_READ_ONLY  0x01
-#define FAT_ATTRIBUTE_HIDDEN     0x02
-#define FAT_ATTRIBUTE_SYSTEM     0x04
-#define FAT_ATTRIBUTE_VOLUME     0x08
-#define FAT_ATTRIBUTE_DIRECTORY  0x10
-#define FAT_ATTRIBUTE_ARCHIVE    0x20
-#define FAT_ATTRIBUTE_LONG_NAME  0x0F
+#define FAT_ATTRIBUTE_MASK		0x3F
+#define FAT_ATTRIBUTE_READ_ONLY 0x01
+#define FAT_ATTRIBUTE_HIDDEN	0x02
+#define FAT_ATTRIBUTE_SYSTEM	0x04
+#define FAT_ATTRIBUTE_VOLUME	0x08
+#define FAT_ATTRIBUTE_DIRECTORY 0x10
+#define FAT_ATTRIBUTE_ARCHIVE	0x20
+#define FAT_ATTRIBUTE_LONG_NAME 0x0F
 
-#define FAT_EOC_MARK  0xFFFFFFF8
+#define FAT_EOC_MARK	0xFFFFFFF8
 #define FAT_BAD_CLUSTER 0xFFFFFFF7
 
 /* FAT32 end-of-chain marks span 0x0FFFFFF8-0x0FFFFFFF, and mkfs/mtools
@@ -55,65 +55,63 @@
  * test -- otherwise they step off the end of the chain and loop forever. */
 #define FAT_IS_EOC(clust) ((((uint32_t)(clust)) & 0x0FFFFFFF) >= (FAT_EOC_MARK & 0x0FFFFFFF))
 
-
 #ifdef ARCH_X64
-#pragma pack(push,1)
+#pragma pack(push, 1)
 #endif
 /* FAT BPB */
 typedef struct _FAT_BPB_ {
-	uint8_t jmp[3]; 
-	char    oemid[8]; //0x03 -- 8
-	uint16_t bytes_per_sector; //0x00B 2
-	uint8_t  sectors_per_cluster; //0x00D 1
-	uint16_t reserved_sectors; //0x00E  2
-	uint8_t  num_fats; //0x010  1
-	uint16_t num_dir_entries; //0x011 2
+	uint8_t jmp[3];
+	char oemid[8];				  //0x03 -- 8
+	uint16_t bytes_per_sector;	  //0x00B 2
+	uint8_t sectors_per_cluster;  //0x00D 1
+	uint16_t reserved_sectors;	  //0x00E  2
+	uint8_t num_fats;			  //0x010  1
+	uint16_t num_dir_entries;	  //0x011 2
 	uint16_t total_sectors_short; //0x013 2
-	uint8_t  media_type; //0x015 1
-	uint16_t sectors_per_fat; //0x016 2
-	uint16_t sectors_per_track; //0x018 2
-	uint16_t heads; //0x01A 2
-	uint32_t hidden_sectors; //0x01C 4
-	uint32_t large_sector_count; //0x020 4
+	uint8_t media_type;			  //0x015 1
+	uint16_t sectors_per_fat;	  //0x016 2
+	uint16_t sectors_per_track;	  //0x018 2
+	uint16_t heads;				  //0x01A 2
+	uint32_t hidden_sectors;	  //0x01C 4
+	uint32_t large_sector_count;  //0x020 4
 	union {
 		struct {
-			uint8_t  drive_num; 
-			uint8_t  WinNtFlags;
-			uint8_t  signature;
+			uint8_t drive_num;
+			uint8_t WinNtFlags;
+			uint8_t signature;
 			uint32_t vol_serial_num;
-			char     vol_label[11];
-			char     sys_id[8];
-		}FAT16;
+			char vol_label[11];
+			char sys_id[8];
+		} FAT16;
 
 		struct {
-			uint32_t sect_per_fat32; //0x024  4
-			uint16_t falgs; //0x028 2
-			uint16_t fat_version; //0x02A 2
+			uint32_t sect_per_fat32;   //0x024  4
+			uint16_t falgs;			   //0x028 2
+			uint16_t fat_version;	   //0x02A 2
 			uint32_t root_dir_cluster; //0x02C 4
-			uint16_t fs_info_sect; //0x030 2
+			uint16_t fs_info_sect;	   //0x030 2
 			uint16_t backup_boot_sect; //0x032 2
-			uint8_t  reserved[12]; //0x034 12
-			uint8_t  drive_number; //0x040 1
-			uint8_t  flagsWinNT; //0x041 1
-			uint8_t  signature; //0x042 1
-			uint32_t vol_serial_num; //0x043 4
-			char     vol_label[11]; //0x047 11
-			char     sys_id[8]; //0x052 8
-		}FAT32;
-	}info;
-}FatBPB;
+			uint8_t reserved[12];	   //0x034 12
+			uint8_t drive_number;	   //0x040 1
+			uint8_t flagsWinNT;		   //0x041 1
+			uint8_t signature;		   //0x042 1
+			uint32_t vol_serial_num;   //0x043 4
+			char vol_label[11];		   //0x047 11
+			char sys_id[8];			   //0x052 8
+		} FAT32;
+	} info;
+} FatBPB;
 #ifdef ARCH_X64
 #pragma pack(pop)
 #endif
 
 /** _fat32_dir_ -- 32 byte fat directory structure */
-#pragma pack (push, 1)
-typedef struct _fat_dir_
-{
-	uint8_t  filename[11];
-	uint8_t  attrib;
-	uint8_t  reserved;
-	uint8_t  time_created_ms;
+#pragma pack(push, 1)
+typedef struct _fat_dir_ {
+	uint8_t filename[11];
+	uint8_t attrib;
+	uint8_t reserved;
+	uint8_t time_created_ms;
 	uint16_t time_created;
 	uint16_t date_created;
 	uint16_t date_last_accessed;
@@ -122,13 +120,13 @@ typedef struct _fat_dir_
 	uint16_t last_wrt_date;
 	uint16_t first_cluster;
 	uint32_t file_size;
-}FatDir;
+} FatDir;
 #pragma pack(pop)
 
 /*
  * Long file name entry
  */
-#pragma pack(push,1)
+#pragma pack(push, 1)
 typedef struct _fat_lfn_ {
 	uint8_t order;
 	uint8_t nameOne[10];
@@ -138,17 +136,16 @@ typedef struct _fat_lfn_ {
 	uint8_t nameTwo[12];
 	uint16_t FstClusterLo;
 	uint8_t nameThree[4];
-}FatLFN;
+} FatLFN;
 #pragma pack(pop)
 
-#define FSTYPE_FAT12  1
-#define FSTYPE_FAT16  2
-#define FSTYPE_FAT32  3
-
+#define FSTYPE_FAT12 1
+#define FSTYPE_FAT16 2
+#define FSTYPE_FAT32 3
 
 typedef struct _FatFS_ {
 	FatBPB* bpb;
-	AuVDisk *vdisk;
+	AuVDisk* vdisk;
 	char oemid[8];
 	uint8_t fatType;
 	unsigned long __FatBeginLBA;
@@ -165,26 +162,24 @@ typedef struct _FatFS_ {
 	size_t cluster_sz_in_bytes;
 	void* _scratchBuffer;
 #ifdef ARCH_X64
-	AuMutex *fat_mutex;
-	AuMutex *fat_write_mutex;
-	AuMutex *fat_read_mutex;
+	AuMutex* fat_mutex;
+	AuMutex* fat_write_mutex;
+	AuMutex* fat_read_mutex;
 #endif
-}FatFS;
-
-
+} FatFS;
 
 /*
 * FatInitialise -- initialise the fat file system
 * @param vdisk -- Pointer to vdisk structure
 * @param mountpoint -- mount point name
 */
-extern AuVFSNode* FatInitialise(AuVDisk *vdisk, char* mountpoint);
+extern AuVFSNode* FatInitialise(AuVDisk* vdisk, char* mountpoint);
 
 /*
 * FatClusterToSector32 -- Converts a cluster to sector
 * @param cluster -- cluster number
 */
-extern uint64_t FatClusterToSector32(FatFS *fs, uint64_t cluster);
+extern uint64_t FatClusterToSector32(FatFS* fs, uint64_t cluster);
 
 /**
 * FatToDOSFilename -- converts a given filename to MSDOS file name
@@ -238,12 +233,12 @@ extern void FatClearCluster(AuVFSNode* node, uint32_t cluster);
 * @param vdisk -- pointer to vdisk
 * @param cluster_index -- index of the cluster
 */
-extern uint32_t FatReadFAT(AuVFSNode *node, uint64_t cluster_index);
+extern uint32_t FatReadFAT(AuVFSNode* node, uint64_t cluster_index);
 
-//! Opens a file 
+//! Opens a file
 //! @param filename -- name of the file
 //! @example -- /EFI/BOOT/BOOTx64.efi
-extern AuVFSNode * FatOpen(AuVFSNode * fsys, char* filename);
+extern AuVFSNode* FatOpen(AuVFSNode* fsys, char* filename);
 
 /*
 * FatFormatDate -- returns fat formated date stamp
@@ -255,7 +250,6 @@ extern uint16_t FatFormatDate();
 */
 extern uint16_t FatFormatTime();
 
-
 AuVFSNode* FatLocateDir(AuVFSNode* fsys, const char* dir);
 
 AuVFSNode* FatLocateSubDir(AuVFSNode* fsys, AuVFSNode* kfile, const char* filename);
@@ -265,5 +259,12 @@ AuVFSNode* FatLocateSubDir(AuVFSNode* fsys, AuVFSNode* kfile, const char* filena
 * to human readable filename
 */
 extern void FatFromDosToFilename(char* filename, char* dirfname);
+
+/**
+ * @bried FatSetAttribute -- set attribute to directory entry
+ * @param fsys -- Pointer to file system 
+ * @param file -- Pointer to file which need attribute update
+ */
+extern int FatSetAttribute(AuVFSNode* fsys, AuVFSNode* file);
 
 #endif

@@ -41,6 +41,7 @@
 #include <widgets/gridview.h>
 #include <widgets/sidebar.h>
 #include <widgets/toolbar.h>
+#include <bmp.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -53,6 +54,8 @@ ChitralekhaApp* app = NULL;
 ChWindow* mainWin = NULL;
 static ChGridView* gv = NULL;
 static GlimpseViewer* viewer = NULL;
+static ChSidebar* sb = NULL;
+static ChToolbar* tb = NULL;
 
 static void OnThumbnailSelected(ChGridView* grid, ChWindow* win, int index, ChGridCell* cell);
 static void OnBackClicked(void* user_data);
@@ -86,6 +89,8 @@ static void OnThumbnailSelected(ChGridView* grid, ChWindow* win, int index, ChGr
 
 	if (GlimpseViewerLoad(viewer, full_image_path)) {
 		gv->wid.visible = false;
+		if (sb) sb->base.visible = false;
+		if (tb) tb->base.visible = false;
 		viewer->wid.visible = true;
 		GlimpseWindowPaint(win);
 	}
@@ -96,6 +101,8 @@ static void OnBackClicked(void* user_data) {
 	viewer->wid.visible = false;
 	GlimpseViewerUnload(viewer);
 
+	if (sb) sb->base.visible = true;
+	if (tb) tb->base.visible = true;
 	gv->wid.visible = true;
 	gv->force_full_redraw = true;
 	GlimpseWindowPaint(mainWin);
@@ -105,6 +112,64 @@ typedef struct {
 	ChGridView* gv;
 	int count;
 } ScanContext;
+
+static ChIcon* CreateIconFromRaw(const GlimpseRawImage* img) {
+	if (!img || !img->pixels || img->width <= 0 || img->height <= 0) return NULL;
+	int w = img->width;
+	int h = img->height;
+	uint32_t pixel_bytes = (uint32_t)(w * h * 4);
+	uint32_t total_size = sizeof(BMP) + sizeof(BMPInfo) + pixel_bytes;
+
+	uint8_t* out_buf = (uint8_t*)malloc(total_size);
+	if (!out_buf) return NULL;
+
+	BMP* bmp = (BMP*)out_buf;
+	bmp->type = 0x4D42;
+	bmp->size = total_size;
+	bmp->resv1 = 0;
+	bmp->resv2 = 0;
+	bmp->off_bits = sizeof(BMP) + sizeof(BMPInfo);
+
+	BMPInfo* info = (BMPInfo*)(out_buf + sizeof(BMP));
+	memset(info, 0, sizeof(BMPInfo));
+	info->biSize = sizeof(BMPInfo);
+	info->biWidth = w;
+	info->biHeight = h;
+	info->biPlanes = 1;
+	info->biBitCount = 32;
+	info->biCompression = 0;
+	info->biSizeImage = pixel_bytes;
+	info->biXPelsPerMeter = 3780;
+	info->biYPelsPerMeter = 3780;
+
+	uint8_t* dst_pixels = out_buf + bmp->off_bits;
+	for (int y = 0; y < h; y++) {
+		int src_y = h - 1 - y;
+		const uint8_t* src_row = img->pixels + (src_y * w * 4);
+		uint8_t* dst_row = dst_pixels + (y * w * 4);
+
+		for (int x = 0; x < w; x++) {
+			dst_row[x * 4 + 0] = src_row[x * 4 + 2]; // B
+			dst_row[x * 4 + 1] = src_row[x * 4 + 1]; // G
+			dst_row[x * 4 + 2] = src_row[x * 4 + 0]; // R
+			dst_row[x * 4 + 3] = src_row[x * 4 + 3]; // A
+		}
+	}
+
+	ChIcon* ico = ChCreateIcon();
+	if (!ico) {
+		free(out_buf);
+		return NULL;
+	}
+	ico->format = CHITRALEKHA_ICON_BMP;
+	ico->image.image = out_buf;
+	ico->image.fd = 0;
+	ico->image.filesz = total_size;
+	ico->image.data = dst_pixels;
+	ico->image.width = w;
+	ico->image.height = h;
+	return ico;
+}
 
 static void ImageDiscoveredCallback(const char* full_path, const char* filename, void* user_data) {
 	ScanContext* ctx = (ScanContext*)user_data;
@@ -120,6 +185,10 @@ static void ImageDiscoveredCallback(const char* full_path, const char* filename,
 	char thumb_path[256];
 	GlimpseGetThumbnailPath(full_path, thumb_path, sizeof(thumb_path));
 
+	GlimpseRawImage thumb_img;
+	memset(&thumb_img, 0, sizeof(thumb_img));
+	bool has_thumb_img = false;
+
 	// Cache check: If thumbnail does not exist on disk, generate and cache it
 	if (!GlimpseFileExists(thumb_path)) {
 		GlimpseRawImage src_img;
@@ -127,31 +196,40 @@ static void ImageDiscoveredCallback(const char* full_path, const char* filename,
 			int tw = 0, th = 0;
 			GlimpseFitDimensions(src_img.width, src_img.height, 100, 100, &tw, &th);
 
-			GlimpseRawImage thumb_img;
 			if (GlimpseResizeImage(&src_img, tw, th, &thumb_img)) {
 				GlimpseSaveBmp(thumb_path, &thumb_img);
-				GlimpseFreeImage(&thumb_img);
+				has_thumb_img = true;
 			}
 			GlimpseFreeImage(&src_img);
 		}
 	}
 
-	// Determine icon to display
-	const char* icon_to_use = NULL;
+	ChIcon* ico = NULL;
 	if (GlimpseFileExists(thumb_path)) {
-		icon_to_use = thumb_path;
+		ico = ChCreateIcon();
+		ChIconOpen(ico, (char*)thumb_path);
+		ChIconRead(ico);
+	} else if (has_thumb_img && thumb_img.pixels) {
+		ico = CreateIconFromRaw(&thumb_img);
 	} else if (strstr(full_path, ".bmp") || strstr(full_path, ".BMP")) {
-		icon_to_use = full_path;
+		ico = ChCreateIcon();
+		ChIconOpen(ico, (char*)full_path);
+		ChIconRead(ico);
 	} else {
-		icon_to_use = "/icons/img.bmp";
+		ico = ChCreateIcon();
+		ChIconOpen(ico, (char*)"/icons/img.bmp");
+		ChIconRead(ico);
 	}
 
-	ChIcon* ico = ChCreateIcon();
-	ChIconOpen(ico, (char*)icon_to_use);
-	ChIconRead(ico);
-	char* stored_path = strdup(full_path);
-	ChGridAddThumbnail(ctx->gv, ico, filename, (void*)stored_path);
-	ctx->count++;
+	if (has_thumb_img) {
+		GlimpseFreeImage(&thumb_img);
+	}
+
+	if (ico) {
+		char* stored_path = strdup(full_path);
+		ChGridAddThumbnail(ctx->gv, ico, filename, (void*)stored_path);
+		ctx->count++;
+	}
 }
 
 /*
@@ -205,8 +283,8 @@ int main(int argc, char* argv[]) {
 	gv->vscroll.color_arrow_bg = mainWin->color;
 	gv->OnSelect = OnThumbnailSelected;
 
-	// 4. Create Full-Image Viewer widget (hidden initially)
-	viewer = GlimpseViewerCreate(170, 80, 600, 500 - 80, OnBackClicked, NULL);
+	// 4. Create Full-Image Viewer widget (occupying full content area, hidden initially)
+	viewer = GlimpseViewerCreate(0, 26, mainWin->info->width, mainWin->info->height - 26, OnBackClicked, NULL);
 	viewer->wid.visible = false;
 
 	// 5. Scan directories and populate grid view dynamically
@@ -226,7 +304,7 @@ int main(int argc, char* argv[]) {
 	gv->force_full_redraw = 1;
 
 	// 6. Create Sidebar
-	ChSidebar* sb = ChSidebarCreate(0, 80, 170, 500 - 80);
+	sb = ChSidebarCreate(0, 80, 170, 500 - 80);
 	sb->base.visible = true;
 	sb->bgColor = mainWin->color;
 	ChSidebarSection* sec1 = ChSidebarAddSection(sb, (char*)"Favourites");
@@ -239,7 +317,7 @@ int main(int argc, char* argv[]) {
 	ChSidebarAddItem(sec2, (char*)"Gallery", gallery, 0, 0, NULL);
 
 	// 7. Create Toolbar
-	ChToolbar* tb = ChToolbarCreate(0, 26, mainWin->info->width, 42, TOOLBAR_HORIZONTAL);
+	tb = ChToolbarCreate(0, 26, mainWin->info->width, 42, TOOLBAR_HORIZONTAL);
 	tb->base.visible = true;
 	tb->color_bg = 0xFF949494;
 

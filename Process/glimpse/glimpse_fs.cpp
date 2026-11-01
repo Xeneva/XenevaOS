@@ -6,6 +6,9 @@
 #include <ctype.h>
 
 void GlimpseEnsureCacheDir(void) {
+	_KeCreateDir((char*)"/appdata");
+	_KeCreateDir((char*)"/appdata/glimpse");
+	_KeCreateDir((char*)"/appdata/glimpse/thumbs");
 	_KeCreateDir((char*)"/thumbs");
 }
 
@@ -39,25 +42,15 @@ static bool has_image_extension(const char* filename) {
 void GlimpseGetThumbnailPath(const char* image_path, char* out_thumb_path, size_t max_len) {
 	if (!image_path || !out_thumb_path || max_len < 32) return;
 
-	// Extract base filename (ignoring parent directory path)
-	const char* last_slash = strrchr(image_path, '/');
-	const char* base = last_slash ? (last_slash + 1) : image_path;
-
-	char name_buf[8]; // Max 6 chars so "t_" + name_buf <= 8 chars (8.3 FAT limit)
-	memset(name_buf, 0, sizeof(name_buf));
-
-	size_t n = 0;
-	for (size_t i = 0; base[i] && base[i] != '.' && n < 6; i++) {
-		char c = base[i];
-		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
-			name_buf[n++] = c;
-		}
+	// Use FNV-1a hash of full path to guarantee collision-free 8.3 FAT filename
+	uint32_t hash = 2166136261u;
+	for (const char* p = image_path; *p; p++) {
+		hash ^= (uint8_t)(*p);
+		hash *= 16777619u;
 	}
-	if (n == 0) {
-		strcpy(name_buf, "img");
-	}
+	uint32_t h24 = (hash ^ (hash >> 24)) & 0x00FFFFFF;
 
-	snprintf(out_thumb_path, max_len, "/thumbs/t_%s.bmp", name_buf);
+	snprintf(out_thumb_path, max_len, "/thumbs/t_%06x.bmp", h24);
 }
 
 static void scan_single_dir(const char* dir_path, GlimpseScanCallback cb, void* user_data, int* count) {
@@ -99,14 +92,12 @@ static void scan_single_dir(const char* dir_path, GlimpseScanCallback cb, void* 
 int GlimpseScanImages(GlimpseScanCallback cb, void* user_data) {
 	int found_count = 0;
 
-	// 1. Scan root directory "/"
+	// Scan common image directories
 	scan_single_dir("/", cb, user_data, &found_count);
-
-	// 2. Scan "/image" directory
 	scan_single_dir("/image", cb, user_data, &found_count);
-
-	// 3. Scan "/images" directory
 	scan_single_dir("/images", cb, user_data, &found_count);
+	scan_single_dir("/data", cb, user_data, &found_count);
+	scan_single_dir("/photos", cb, user_data, &found_count);
 
 	return found_count;
 }

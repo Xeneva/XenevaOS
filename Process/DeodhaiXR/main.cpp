@@ -51,12 +51,14 @@
 #include "_fastcpy.h"
 #include "animation.h"
 #include "alpha.h"
+#include "paperash.h"
 #include "nanojpg.h"
 #include <arm_neon.h>
 #include <keycode.h>
 #include "compose.h"
 #include "unikernel.h"
 #include "xr_present.h"
+#include "paperfly.h"
 #include <draw.h>
 
 #define __DEODHAI_COMPOSE3D__ 1
@@ -110,6 +112,9 @@ static int gpu_display_id;
 #define FRAME_TIME_MS	   (1000 / DEODHAI_TARGET_FPS)
 
 static void DeodhaiComposeResizePreview(ChCanvas* canv);
+static void DeodhaiComposePaperFly(ChCanvas* CANV);
+void DeodhaiWindowShowNow(Window* win);
+static void DeodhaiComposePaperAsh(ChCanvas* canv);
 
 /**
  * @brief DeodhaiAllocateNewHandle -- get a new window handle
@@ -197,6 +202,65 @@ void DeodhaiRemoveWindowAlwaysOnTop(Window* win) {
 		alwaysOnTopLast = win->prev;
 	else
 		win->next->prev = win->prev;
+}
+
+#define DEODHAI_INTRO_MAX		 8
+#define DEODHAI_INTRO_TIMEOUT_MS 1500
+static Window* introWin[DEODHAI_INTRO_MAX];
+static uint64_t introSince[DEODHAI_INTRO_MAX];
+
+static bool DeodhaiIntroHold(Window* win) {
+	if (!DeodhaiPaperFlyEligible(win) || (win->flags & WINDOW_FLAG_BROADCAST_LISTENER))
+		return false;
+	for (int i = 0; i < DEODHAI_INTRO_MAX; i++) {
+		if (introWin[i])
+			continue;
+		introWin[i] = win;
+		introSince[i] = _KeGetCurrentMS();
+		return true;
+	}
+	return false;
+}
+
+static Window* DeodhaiIntroFind(uint32_t handle) {
+	for (int i = 0; i < DEODHAI_INTRO_MAX; i++)
+		if (introWin[i] && introWin[i]->handle == handle)
+			return introWin[i];
+	return NULL;
+}
+
+static void DeodhaiIntroAdmit(Window* win, bool animate) {
+	for (int i = 0; i < DEODHAI_INTRO_MAX; i++)
+		if (introWin[i] == win)
+			introWin[i] = NULL;
+	DeodhaiAddWindow(win);
+	WinSharedInfo* info = (WinSharedInfo*)win->sharedInfo;
+	info->windowReady = 1;
+	if (animate) {
+		info->hide = true;
+		if (DeodhaiPaperFlyStart(win, false))
+			return;
+		info->hide = false;
+	}
+	focusedWin = win;
+	WinSharedFlagStore(&info->updateEntireWindow, true);
+	_window_update_all_ = true;
+	_always_on_top_update = true;
+}
+
+static void DeodhaiIntroPoll() {
+	uint64_t now = _KeGetCurrentMS();
+	for (int i = 0; i < DEODHAI_INTRO_MAX; i++) {
+		Window* win = introWin[i];
+		if (!win)
+			continue;
+		WinSharedInfo* info = (WinSharedInfo*)win->sharedInfo;
+		if (WinSharedFlagLoad(&info->updateEntireWindow) ||
+			(WinSharedFlagLoad(&info->dirty) && info->rect_count > 0))
+			DeodhaiIntroAdmit(win, true);
+		else if (now - introSince[i] > DEODHAI_INTRO_TIMEOUT_MS)
+			DeodhaiIntroAdmit(win, false);
+	}
 }
 
 /**
@@ -449,6 +513,9 @@ void XRComposeFrame(ChCanvas* canvas) {
 	 * Always on Top window , stacking order
 	 */
 	DeodhaiComposeResizePreview(canvas);
+	DeodhaiComposePaperFly(canvas);
+	DeodhaiComposePaperAsh(canvas);
+
 	for (Window* win = alwaysOnTop; win != NULL; win = win->next) {
 		WinSharedInfo* info = (WinSharedInfo*)win->sharedInfo;
 
@@ -819,6 +886,111 @@ static void _deodhai_repaint_region(ChCanvas* canvas,
 	AddDirtyClip(rx, ry, rw, rh);
 }
 
+static void _deodhai_repaint_windows(ChCanvas* canvas, const Rect* r, Window* from, Window* to) {
+	int cw = (int)canvas->canvasWidth;
+	int ch = (int)canvas->canvasHeight;
+	for (Window* w = from; w != NULL && w != to; w = w->next) {
+		WinSharedInfo* wi = (WinSharedInfo*)w->sharedInfo;
+		if (wi->hide)
+			continue;
+		if (wi->zoomed) {
+			compose_window_scaled_to_clip(
+				canvas, w, wi->width, wi->height, 0, 0, cw, ch, r->x, r->y, r->w, r->h);
+			continue;
+		}
+		if (wi->x >= r->x + r->w || (wi->x + (int)wi->width) <= r->x || wi->y >= r->y + r->h ||
+			(wi->y + (int)wi->height) <= r->y)
+			continue;
+		compose_window_scaled_to_clip(canvas,
+									  w,
+									  wi->width,
+									  wi->height,
+									  wi->x,
+									  wi->y,
+									  wi->width,
+									  wi->height,
+									  r->x,
+									  r->y,
+									  r->w,
+									  r->h);
+	}
+}
+
+static void DeodhaiComposePaperAsh(ChCanvas* canv) {
+	if (!DeodhaiPaperAshActive())
+		return;
+	DeodhaiPaperAshStep(_KeGetCurrentMS(), (int)canv->canvasWidth, (int)canv->canvasHeight, NULL);
+	const Rect* dirty;
+	int n = DeodhaiPaperAshDirty(&dirty);
+	if (n <= 0)
+		return;
+
+	int slot[DEODHAI_PAPERASH_MAX];
+	Window* above[DEODHAI_PAPERASH_MAX];
+	int pos[DEODHAI_PAPERASH_MAX];
+	int count = 0;
+	for (int i = 0; i < DEODHAI_PAPERASH_MAX; i++) {
+		PaperAsh* a = DeodhaiPaperAshGet(i);
+		if (!DeodhaiPaperAshDrawn(a))
+			continue;
+		Window* at = NULL;
+		int p = 0, atPos = 1 << 30;
+		for (Window* w = rootWin; w != NULL && a->hasAbove; w = w->next, p++)
+			if (w->handle == a->aboveHandle) {
+				at = w;
+				atPos = p;
+				break;
+			}
+		int k = count++;
+		while (k > 0 && pos[k - 1] > atPos) {
+			pos[k] = pos[k - 1];
+			above[k] = above[k - 1];
+			slot[k] = slot[k - 1];
+			k--;
+		}
+		pos[k] = atPos;
+		above[k] = at;
+		slot[k] = i;
+	}
+	int bx0 = dirty[0].x, by0 = dirty[0].y;
+	int bx1 = dirty[0].x + dirty[0].w, by1 = dirty[0].y + dirty[0].h;
+	for (int i = 0; i < n; i++) {
+		const Rect* r = &dirty[i];
+		DeodhaiBackSurfaceUpdate(canv, r->x, r->y, r->w, r->h);
+		bx0 = r->x < bx0 ? r->x : bx0;
+		by0 = r->y < by0 ? r->y : by0;
+		bx1 = r->x + r->w > bx1 ? r->x + r->w : bx1;
+		by1 = r->y + r->h > by1 ? r->y + r->h : by1;
+	}
+	Window* from = lastWin;
+	while (from && from->prev)
+		from = from->prev;
+	for (int k = 0; k <= count; k++) {
+		Window* to = k < count ? above[k] : NULL;
+		for (int i = 0; i < n; i++)
+			_deodhai_repaint_windows(canv, &dirty[i], from, to);
+		if (k < count) {
+			DeodhaiPaperAshDrawOne(canv, slot[k], NULL);
+			from = to; /* NULL: this ash is on top, nothing left above */
+			if (!from)
+				break;
+		}
+	}
+	bool flying = DeodhaiPaperFlyActive();
+	for (int i = 0; i < n; i++) {
+		if (flying)
+			DeodhaiPaperFlyDraw(canv, &dirty[i]);
+		AddDirtyClip(dirty[i].x, dirty[i].y, dirty[i].w, dirty[i].h);
+	}
+	/* the overlays are composed after this: redraw any we painted over */
+	for (Window* aot = alwaysOnTop; aot != NULL; aot = aot->next) {
+		WinSharedInfo* ai = (WinSharedInfo*)aot->sharedInfo;
+		if (!ai->hide && ai->x < bx1 && bx0 < ai->x + ai->width && ai->y < by1 &&
+			by0 < ai->y + ai->height)
+			_always_on_top_update = true;
+	}
+}
+
 static void DeodhaiComposeResizePreview(ChCanvas* canv) {
 	if (!reszWin)
 		return;
@@ -831,6 +1003,33 @@ static void DeodhaiComposeResizePreview(ChCanvas* canv) {
 		reszNewY + reszNewH > reszOLDY + reszOLDH ? reszNewY + reszNewH : reszOLDY + reszOLDH;
 	_deodhai_repaint_region(
 		canv, rx, ry, right - rx, bottom - ry, reszWin, reszNewX, reszNewY, reszNewW, reszNewH);
+}
+
+static void DeodhaiComposePaperFly(ChCanvas* canv) {
+	if (!DeodhaiPaperFlyActive())
+		return;
+	Window* shown[DEODHAI_PAPERFLY_MAX];
+	int landed = DeodhaiPaperFlyStep(_KeGetCurrentMS(),
+									 (int)canv->canvasWidth,
+									 (int)canv->canvasHeight,
+									 shown,
+									 DEODHAI_PAPERFLY_MAX);
+	Rect dirty[DEODHAI_PAPERFLY_MAX];
+	int n = DeodhaiPaperFlyDirty(dirty, DEODHAI_PAPERFLY_MAX);
+	for (int i = 0; i < n; i++) {
+		const Rect* r = &dirty[i];
+		_deodhai_repaint_region(canv, r->x, r->y, r->w, r->h, NULL, 0, 0, 0, 0);
+		DeodhaiPaperFlyDraw(canv, r);
+
+		for (Window* aot = alwaysOnTop; aot != NULL; aot = aot->next) {
+			WinSharedInfo* ai = (WinSharedInfo*)aot->sharedInfo;
+			if (!ai->hide && ai->x < r->x + r->w && r->x < ai->x + ai->width &&
+				ai->y < r->y + r->h && r->y < ai->y + ai->height)
+				_always_on_top_update = true;
+		}
+	}
+	for (int i = 0; i < landed; i++)
+		DeodhaiWindowShowNow(shown[i]);
 }
 /**
  * @brief DeodhaiWindowCheckResizable -- checks and resize
@@ -1109,6 +1308,25 @@ static void DeodhaiHandleMouseInput(ChCanvas* canv, const AuInputMessage* input)
 		currentCursor->ypos = 0;
 }
 
+void DeodhaiWindowShowNow(Window* win) {
+	WinSharedInfo* info = (WinSharedInfo*)win->sharedInfo;
+	BackDirtyAdd(info->x, info->y, info->width, info->height);
+	info->hide = false;
+	WinSharedFlagStore(&info->updateEntireWindow, true);
+	WinSharedFlagStore(&info->dirty, true);
+	focusedWin = win;
+	DeodhaiWindowMakeTop(win);
+	PostEvent shown;
+	memset(&shown, 0, sizeof(PostEvent));
+	shown.type = DEODHAI_REPLY_FOCUS_CHANGED;
+	shown.dword = win->handle;
+	shown.to_id = win->ownerId;
+	shown.from_id = POSTBOX_ROOT_ID;
+	_KeFileIoControl(postbox_fd, POSTBOX_PUT_EVENT, &shown);
+	_window_update_all_ = true;
+	_always_on_top_update = true;
+}
+
 /**
  * @brief DeodhaiWindowHide -- hides a window
  * @param win -- Pointer to window to hide
@@ -1118,7 +1336,10 @@ void DeodhaiWindowHide(Window* win) {
 	BackDirtyAdd(info->x, info->y, info->width, info->height);
 	if (info->hide) {
 		/* UNHIDE the window , if its already hidden */
-		info->hide = false;
+		if (!DeodhaiPaperFlyStart(win, false))
+			DeodhaiWindowShowNow(win);
+		return;
+		/**info->hide = false;
 		WinSharedFlagStore(&info->updateEntireWindow, true);
 		WinSharedFlagStore(&info->dirty, true);
 		focusedWin = win;
@@ -1129,14 +1350,16 @@ void DeodhaiWindowHide(Window* win) {
 		shown.dword = win->handle;
 		shown.to_id = win->ownerId;
 		shown.from_id = POSTBOX_ROOT_ID;
-		_KeFileIoControl(postbox_fd, POSTBOX_PUT_EVENT, &shown);
-	} else {
-		/* HIDE the window, if its not hidden */
-		info->hide = true;
-		WinSharedFlagStore(&info->updateEntireWindow, true);
-		info->rect_count = 0;
-		focusedWin = NULL;
+		_KeFileIoControl(postbox_fd, POSTBOX_PUT_EVENT, &shown);**/
 	}
+	/* HIDE the window, if its not hidden */
+	BackDirtyAdd(info->x, info->y, info->width, info->height);
+	info->hide = true;
+	WinSharedFlagStore(&info->updateEntireWindow, true);
+	info->rect_count = 0;
+	focusedWin = NULL;
+
+	DeodhaiPaperFlyStart(win, true);
 
 	_window_update_all_ = true;
 	_always_on_top_update = true;
@@ -1431,6 +1654,8 @@ int main(int argc, char* argv[]) {
 	BackDirtyInitialise();
 	InitialiseDirtyClipList();
 	_DeodhaiKeyBindInitialize();
+	DeodhaiPaperFlyInitialise();
+	DeodhaiPaperAshInitialise();
 
 	postbox_fd = _KeOpenFile("/dev/postbox", FILE_OPEN_READ_ONLY);
 	_KePrint("Postbox fd created : %d \n", postbox_fd);
@@ -1570,6 +1795,7 @@ int main(int argc, char* argv[]) {
 			memset(&mice_input, 0, sizeof(AuInputMessage));
 		}
 
+		DeodhaiIntroPoll();
 		uint64_t composeStart = _KeGetCurrentMS();
 #ifdef __DEODHAI_COMPOSE3D__
 		XRComposeFrame3D(canv);
@@ -1609,8 +1835,15 @@ int main(int argc, char* argv[]) {
 						break;
 					}
 				}
+				if (!win->parent)
+					win->parent = DeodhaiIntroFind(parent_handle);
 				_KePrint("[Deodhai]:Popup window created \r\n");
 			}
+
+			bool introHeld = DeodhaiIntroHold(win);
+			if (introHeld)
+				DeodhaiRemoveWindow(win);
+
 			PostEvent e;
 
 			if (!(win->flags & WINDOW_FLAG_MESSAGEBOX || win->flags & WINDOW_FLAG_POPUP ||
@@ -1638,7 +1871,10 @@ int main(int argc, char* argv[]) {
 			_KePrint("[Deodhai]: Window created \r\n");
 			/*	_window_update_all_ = true;
 				_always_on_top_update = true;*/
-			focusedWin = win;
+			//focusedWin = win;
+			if (!introHeld)
+				focusedWin = win;
+
 			memset(&event, 0, sizeof(PostEvent));
 		}
 
@@ -1663,6 +1899,12 @@ int main(int argc, char* argv[]) {
 				}
 			}
 
+			if (!hideable_win) {
+				DeodhaiIntroAdmit(hideable_win, false);
+				if (hideable_win)
+					DeodhaiIntroAdmit(hideable_win, false);
+			}
+
 			if (hideable_win)
 				DeodhaiWindowHide(hideable_win);
 			memset(&event, 0, sizeof(PostEvent));
@@ -1680,6 +1922,14 @@ int main(int argc, char* argv[]) {
 					_KePrint("DeodhaiXR: found window with title : %s \r\n", win->title);
 					_not_found = false;
 					break;
+				}
+			}
+
+			for (int i = 0; _not_found && i < DEODHAI_INTRO_MAX; i++) {
+				if (introWin[i] && strcmp(introWin[i]->title, event.charValue3) == 0) {
+					ownerID = introWin[i]->ownerId;
+					handle = introWin[i]->handle;
+					_not_found = false;
 				}
 			}
 
@@ -1735,6 +1985,7 @@ int main(int argc, char* argv[]) {
 			int handle = event.dword;
 			int ownerId = event.from_id;
 			Window* removable = NULL;
+			bool neverShown = false;
 			for (Window* win = rootWin; win != NULL; win = win->next) {
 				if (win->handle == handle && win->ownerId == ownerId) {
 					removable = win;
@@ -1755,6 +2006,15 @@ int main(int argc, char* argv[]) {
 				}
 			}
 
+			if (!removable) {
+				Window* held = DeodhaiIntroFind(handle);
+				if (held && held->ownerId == ownerId) {
+					DeodhaiIntroAdmit(held, false);
+					removable = held;
+					neverShown = true;
+				}
+			}
+
 			if (removable) {
 				_KePrint("Close request for window : %s \r\n", removable->title);
 				/* clear stale references before the window is freed --
@@ -1771,6 +2031,16 @@ int main(int argc, char* argv[]) {
 					dragWin = NULL;
 				if (reszWin == removable)
 					reszWin = NULL;
+				DeodhaiPaperFlyCancel(removable);
+				if (!neverShown) {
+					PaperAshPlane plane;
+					plane.valid = false;
+#ifdef __XENEVA_COMPOSE3D__
+					if (Deodhai3DEnabled())
+						Deodhai3DWindowPlane(removable, &plane);
+#endif
+					DeodhaiPaperAshStart(removable, &plane);
+				}
 				DeodhaiCloseWindow(removable);
 			}
 			memset(&event, 0, sizeof(PostEvent));

@@ -178,7 +178,7 @@ static void np_detach(void) {
 	np.owner = NULL;
 	if (np.ndev)
 		np.ndev->linkStatus = 0;
-	UARTDebugOut("[netproxy]: detached (tx %d, rx %d, tx dropped %d, rx bad %d)\r\n",
+	AU_NET_LOG("[netproxy]: detached (tx %d, rx %d, tx dropped %d, rx bad %d)\r\n",
 				 (int)np.tx_frames, (int)np.rx_frames, (int)np.tx_dropped, (int)np.rx_bad);
 }
 
@@ -248,7 +248,7 @@ static int np_ioctl(AuVFSNode* file, int code, void* arg) {
 		AuNetAddConnectedRoute6(np.alias, "virtio-net");
 		AuNetAddDefaultRoute6(np.alias, "virtio-net");
 		AuNetRegisterRxPoll(np_rxpoll);
-		UARTDebugOut("[netproxy]: attached ring %x for pid %d, adapters registered\r\n",
+		AU_NET_LOG("[netproxy]: attached ring %x for pid %d, adapters registered\r\n",
 					 (uint32_t)req->ring_phys, proc->proc_id);
 		return NETSRV_OK;
 	}
@@ -285,5 +285,5 @@ void AuNetProxyInitialize(void) {
 	node->device = fsys;
 	node->iocontrol = np_ioctl;
 	AuDevFSAddFile(fsys, "/", node);
-	UARTDebugOut("[netproxy]: /dev/netsrv registered\r\n");
+	AU_NET_LOG("[netproxy]: /dev/netsrv registered\r\n");
 }

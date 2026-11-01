@@ -49,6 +49,7 @@
 #include <Fs/Dev/devfs.h>
 #include <bordoisila_ptr.h>
 #include <fixup.h>
+#include <Fs/vfsmod.h>
 
 extern uint64_t read_sp();
 extern uint64_t read_sp_el1();
@@ -86,6 +87,20 @@ int OpenFile(char* filename, int mode) {
 	int fd = AuProcessGetFileDesc(current_proc);
 	AuSrvfsNoteOpenMode(mode);
 	AuVFSNode* file = AuVFSOpen(fname);
+
+	uint8_t acc = 0;
+	if (mode & FILE_OPEN_READ_ONLY)
+		acc |= VFS_ACCESS_READ;
+	if (mode & FILE_OPEN_WRITE)
+		acc |= VFS_ACCESS_WRITE;
+	if (!acc)
+		acc = VFS_ACCESS_READ;
+
+	int want = 0;
+	if (acc & VFS_ACCESS_READ)
+		want |= 4;
+	if (acc & VFS_ACCESS_WRITE)
+		want |= 2;
 
 	/** check permissions before procedding **/
 	/* A write or create mode used to skip the permission check altogether, so any
@@ -142,6 +157,13 @@ int OpenFile(char* filename, int mode) {
 		return -1;
 	}
 
+	/** need to properly check, buggy */
+	if (!AuVFSCheckAccess(&current_proc->creds, file, want)) {
+		UARTDebugOut("[vfs]: opened failed bad file access modes \r\n");
+		//AuVFSNodeClose(fsys, file);
+		//return -1;
+	}
+
 	/* just to increase the reference count */
 	if (file->open)
 		file->open(file, NULL);
@@ -160,6 +182,7 @@ int OpenFile(char* filename, int mode) {
 
 	BordoisilaCapCreate(current_proc, fd, file, CAP_OBJ_FILE, rights);
 
+	current_proc->access[fd] = acc;
 	//_setdebug = 1;
 	return fd;
 }
@@ -216,6 +239,8 @@ size_t ReadFile(int fd, void* buffer, size_t length) {
 		UARTDebugOut("[aurora]: Read file denied fd : %d, invalid buffer : %x \r\n", fd, buffer);
 		return 0;
 	}
+	/** also need to check access rights  */
+
 	if (fd < 0)
 		return 0;
 	if (!buffer)

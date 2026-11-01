@@ -335,6 +335,12 @@ int AuCreateUserthread(AuProcess* proc, void (*entry)(), char* name, uint64_t ar
 	uentry->rsp = (uint64_t)CreateSubUserStack(proc, proc->cr3);
 	uentry->stackBase = uentry->rsp;
 	thr->uentry = uentry;
+	if (proc->num_thread > MAX_THREADS_PER_PROCESS) {
+		//free kstack
+		//free up sub kthread
+		kfree(uentry);
+		return -1;
+	}
 	proc->threads[proc->num_thread] = thr;
 	proc->num_thread += 1;
 	return thr->thread_id;
@@ -626,4 +632,17 @@ void AuProcessReapWaitcount(AuProcess* proc, int num_count) {
 		proc->waiting_threads = 0;
 		proc->state &= ~PROCESS_STATE_BUSY_WAIT;
 	}
+}
+
+AuProcess* AuProcessCurrent() {
+	AA64Thread* thr = AuGetCurrentThread();
+	if (!thr)
+		return NULL;
+	AuProcess* proc = AuProcessFindThread(thr);
+	if (!proc) {
+		proc = AuProcessFindSubThread(thr);
+		if (!proc)
+			return NULL;
+	}
+	return proc;
 }

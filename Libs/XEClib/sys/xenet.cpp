@@ -44,6 +44,10 @@ extern int xe_hosts_lookup(const char* name,
 						   int* out_families,
 						   uint8_t out_addrs[][16],
 						   int maxn);
+extern int xe_hosts_reverse(const void* addr,
+							int family,
+							char* out,
+							size_t outsz);
 
 /* XEClib memcpy lacks const on src. */
 static inline void xe_memcpy(void* d, const void* s, size_t n) {
@@ -67,49 +71,20 @@ ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
 	return receive(sockfd, &_hdr, flags);
 }
 
-ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
-	iovec _iovec;
-	_iovec.iov_base = buf;
-	_iovec.iov_len = len;
-
-	msghdr _hdr;
-	_hdr.msg_name = src_addr;
-	_hdr.msg_namelen = addrlen ? *addrlen : 0;
-	_hdr.msg_iov = &_iovec;
-	_hdr.msg_iovlen = 1;
-	_hdr.msg_control = NULL;
-	_hdr.msg_controllen = 0;
-	_hdr.msg_flags = 0;
-	ssize_t result = receive(sockfd, &_hdr, flags);
-
-	if (addrlen)
-		*addrlen = _hdr.msg_namelen;
-	return result;
+ssize_t sendmsg(int sockfd, const msghdr* msg, int flags) {
+	return send(sockfd, (msghdr*)msg, flags);
 }
 
-ssize_t sendto(int sockfd,
-			   const void* buf,
-			   size_t len,
-			   int flags,
-			   const struct sockaddr* dest_addr,
-			   socklen_t addrlen) {
-	iovec _iovec;
-	_iovec.iov_base = (void*)buf;
-	_iovec.iov_len = len;
+ssize_t recvmsg(int sockfd, msghdr* msg, int flags) {
+	return receive(sockfd, msg, flags);
+}
 
-	msghdr _hdr;
-	_hdr.msg_name = (void*)dest_addr;
-	_hdr.msg_namelen = addrlen;
-	_hdr.msg_iov = &_iovec;
-	_hdr.msg_iovlen = 1;
-	_hdr.msg_control = NULL;
-	_hdr.msg_controllen = 0;
-	_hdr.msg_flags = 0;
-
-	return send(sockfd, &_hdr, flags);
+int setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen) {
+	return socket_setopt(sockfd, level, optname, optval, optlen);
 }
 
 #define DNS_QTYPE_A    1
+#define DNS_QTYPE_PTR  12
 #define DNS_QTYPE_AAAA 28
 #define DNS_QCLASS_IN  1
 #define DNS_TIMEOUT_MS     3000
@@ -144,13 +119,109 @@ typedef struct {
 	XeDnsAddr addrs[DNS_MAX_ADDRS];
 } XeDnsCacheEntry;
 
+typedef struct {
+	int negative;
+	char name[DNS_NAME_MAX];
+	uint32_t ttl;
+} XePtrResult;
+
+typedef struct {
+	const char* name;
+	const char* proto;
+	uint16_t port;
+} XeService;
+
+/* Minimal services database.  This is deliberately static: the image has
+ * no /etc/services yet, and getaddrinfo()/getnameinfo() need the common
+ * names for HTTP, TLS and DNS without a network round trip. */
+static const XeService k_services[] = {
+	{ "http", "tcp", 80 },
+	{ "https", "tcp", 443 },
+	{ "domain", "tcp", 53 },
+	{ "domain", "udp", 53 },
+	{ "ftp", "tcp", 21 },
+	{ "ssh", "tcp", 22 },
+	{ "telnet", "tcp", 23 },
+	{ "smtp", "tcp", 25 },
+	{ "pop3", "tcp", 110 },
+	{ "ntp", "udp", 123 },
+	{ "imap", "tcp", 143 },
+	{ "snmp", "udp", 161 },
+	{ "imaps", "tcp", 993 },
+	{ "pop3s", "tcp", 995 },
+};
+
+static servent g_servent;
+static char* g_serv_aliases[1] = { NULL };
+
 static XeDnsCacheEntry g_cache[DNS_CACHE_SLOTS];
 static uint32_t g_dns_fingerprint;
 static uint32_t g_last_dns_server;
-static uint32_t g_hostent_addr4;
-static uint8_t g_hostent_addr6[16];
-static char* g_host_entry_list[2];
+static uint8_t g_hostent_addrs[DNS_MAX_ADDRS][16];
+static char* g_host_entry_list[DNS_MAX_ADDRS + 1];
 static char g_hostent_name[DNS_NAME_MAX];
+
+int h_errno;
+
+servent* getservbyname(const char* name, const char* proto) {
+	if (!name)
+		return NULL;
+	for (size_t i = 0; i < sizeof(k_services) / sizeof(k_services[0]); i++) {
+		if (strcasecmp(name, k_services[i].name) != 0)
+			continue;
+		if (proto && strcasecmp(proto, k_services[i].proto) != 0)
+			continue;
+		g_servent.s_name = (char*)k_services[i].name;
+		g_servent.s_aliases = g_serv_aliases;
+		g_servent.s_port = htons(k_services[i].port);
+		g_servent.s_proto = (char*)k_services[i].proto;
+		return &g_servent;
+	}
+	return NULL;
+}
+
+servent* getservbyport(int port, const char* proto) {
+	uint16_t hostport = ntohs((uint16_t)port);
+
+	for (size_t i = 0; i < sizeof(k_services) / sizeof(k_services[0]); i++) {
+		if (k_services[i].port != hostport)
+			continue;
+		if (proto && strcasecmp(proto, k_services[i].proto) != 0)
+			continue;
+		g_servent.s_name = (char*)k_services[i].name;
+		g_servent.s_aliases = g_serv_aliases;
+		g_servent.s_port = port;
+		g_servent.s_proto = (char*)k_services[i].proto;
+		return &g_servent;
+	}
+	return NULL;
+}
+
+const char* hstrerror(int err) {
+	switch (err) {
+	case 0:
+		return "Resolver error 0 (no error)";
+	case HOST_NOT_FOUND:
+		return "Unknown host";
+	case TRY_AGAIN:
+		return "Host name lookup failure";
+	case NO_RECOVERY:
+		return "Unknown server error";
+	case NO_DATA:
+		return "No address associated with name";
+	default:
+		return "Unknown resolver error";
+	}
+}
+
+void herror(const char* s) {
+	const char* msg = hstrerror(h_errno);
+
+	if (s && s[0])
+		_KePrint("%s: %s\r\n", s, msg);
+	else
+		_KePrint("%s\r\n", msg);
+}
 
 static uint64_t xe_now_ms(void) {
 	return _KeGetCurrentMS();
@@ -578,21 +649,25 @@ static int dns_parse_answers(const uint8_t* buf,
 	return 0;
 }
 
-static int dns_query_one(uint32_t server,
-						 const char* name,
-						 uint16_t qtype,
-						 XeDnsResult* out,
-						 uint32_t* ttl) {
+/*
+ * Send one question and wait for a matching response.  The caller owns
+ * parsing, which keeps A/AAAA and PTR on the same timeout/route logic.
+ */
+static int dns_exchange(uint32_t server,
+						const char* name,
+						uint16_t qtype,
+						uint8_t* rbuf,
+						size_t rbufsz,
+						size_t* rlen,
+						uint16_t* qid_out) {
 	uint8_t qbuf[512];
-	uint8_t rbuf[1550];
 	int qlen;
 	uint16_t qid;
 	int sock;
 	sockaddr_in dest;
 	int waited = 0;
 
-	memset(out, 0, sizeof(*out));
-	if (!server)
+	if (!server || !name || !rbuf || !rlen)
 		return -1;
 
 	qid = (uint16_t)(rand() & 0xFFFF);
@@ -638,15 +713,142 @@ static int dns_query_one(uint32_t server,
 	}
 
 	while (waited < DNS_TIMEOUT_MS) {
-		ssize_t rlen = recv(sock, rbuf, sizeof(rbuf), 0);
-		if (rlen > 0) {
+		ssize_t got = recv(sock, rbuf, rbufsz, 0);
+		if (got > 0) {
 			_KeCloseFile(sock);
-			return dns_parse_answers(rbuf, (size_t)rlen, qid, qtype, out, ttl);
+			*rlen = (size_t)got;
+			if (qid_out)
+				*qid_out = qid;
+			return 0;
 		}
 		_KeProcessSleep(DNS_POLL_MS);
 		waited += DNS_POLL_MS;
 	}
 	_KeCloseFile(sock);
+	return -1;
+}
+
+static int dns_query_one(uint32_t server,
+						 const char* name,
+						 uint16_t qtype,
+						 XeDnsResult* out,
+						 uint32_t* ttl) {
+	uint8_t rbuf[1550];
+	size_t rlen = 0;
+	uint16_t qid = 0;
+
+	memset(out, 0, sizeof(*out));
+	if (dns_exchange(server, name, qtype, rbuf, sizeof(rbuf), &rlen, &qid) != 0)
+		return -1;
+	return dns_parse_answers(rbuf, rlen, qid, qtype, out, ttl);
+}
+
+static int dns_parse_ptr_answers(const uint8_t* buf,
+								 size_t len,
+								 uint16_t want_qid,
+								 XePtrResult* out) {
+	DNSPacket* resp;
+	uint16_t flags;
+	uint16_t qd, an;
+	size_t off;
+	int i;
+
+	if (!buf || !out || len < sizeof(DNSPacket))
+		return -1;
+	memset(out, 0, sizeof(*out));
+	resp = (DNSPacket*)buf;
+	if (ntohs(resp->qid) != want_qid)
+		return -1;
+	flags = ntohs(resp->flags);
+	if ((flags & 0x000F) == 3) { /* NXDOMAIN */
+		out->negative = 1;
+		return 0;
+	}
+	if ((flags & 0x000F) != 0)
+		return -1;
+
+	qd = ntohs(resp->questions);
+	an = ntohs(resp->answers);
+	off = sizeof(DNSPacket);
+
+	for (i = 0; i < (int)qd; i++) {
+		int noff = dns_skip_name(buf, len, off);
+		if (noff < 0 || (size_t)noff + 4 > len)
+			return -1;
+		off = (size_t)noff + 4;
+	}
+
+	for (i = 0; i < (int)an; i++) {
+		uint16_t typ, cls, rdlen;
+		uint32_t ttl;
+		int noff = dns_skip_name(buf, len, off);
+		if (noff < 0 || (size_t)noff + 10 > len)
+			return -1;
+		off = (size_t)noff;
+		xe_memcpy(&typ, buf + off, 2);
+		xe_memcpy(&cls, buf + off + 2, 2);
+		xe_memcpy(&ttl, buf + off + 4, 4);
+		xe_memcpy(&rdlen, buf + off + 8, 2);
+		typ = ntohs(typ);
+		cls = ntohs(cls);
+		ttl = ntohl(ttl);
+		rdlen = ntohs(rdlen);
+		off += 10;
+		if (off + rdlen > len)
+			return -1;
+		(void)cls;
+
+		if (typ == DNS_QTYPE_PTR && !out->name[0]) {
+			if (dns_parse_name(buf, len, off, out->name,
+							   sizeof(out->name)) < 0)
+				return -1;
+			out->ttl = ttl;
+		}
+		off += rdlen;
+	}
+
+	if (!out->name[0])
+		out->negative = 1;
+	return 0;
+}
+
+/* Build the reverse lookup name for in-addr.arpa / ip6.arpa. */
+static int dns_make_reverse(const uint8_t* addr,
+							int family,
+							char* out,
+							size_t outsz) {
+	static const char hex[] = "0123456789abcdef";
+	size_t o = 0;
+
+	if (!addr || !out || outsz == 0)
+		return -1;
+	if (family == AF_INET) {
+		char buf[32];
+		int n = snprintf(buf, sizeof(buf), "%u.%u.%u.%u.in-addr.arpa",
+						 addr[3], addr[2], addr[1], addr[0]);
+
+		/* snprintf() truncates, so compare the full text with outsz. */
+		if (n <= 0 || strlen(buf) >= outsz)
+			return -1;
+		strcpy(out, buf);
+		return 0;
+	}
+	if (family == AF_INET6) {
+		for (int i = 15; i >= 0; i--) {
+			if (o + 4 >= outsz)
+				return -1;
+			out[o++] = hex[addr[i] & 0xF];
+			out[o++] = '.';
+			out[o++] = hex[(addr[i] >> 4) & 0xF];
+			out[o++] = '.';
+		}
+		if (o + 9 > outsz)
+			return -1;
+		xe_memcpy(out + o, "ip6.arpa", 8);
+		o += 8;
+		out[o] = '\0';
+		return 0;
+	}
 	return -1;
 }
 
@@ -678,18 +880,49 @@ static int dns_get_servers(uint32_t* servers, int maxn) {
 		return n;
 
 	/*
-	 * Default resolver. 1.1.1.1 needs the default route (RFC 1122 §3.3.1);
-	 * 10.0.2.3 is QEMU usernet DNS, on-link via the seeded connected route.
+	 * Last-resort QEMU user-mode networking DNS.  No public resolver is
+	 * hardcoded: DHCP (or /resolv.cnf written by NETMngr) is authoritative.
 	 */
-	if (inet_pton(AF_INET, "1.1.1.1", lit) == 1) {
-		xe_memcpy(&servers[0], lit, 4);
-		return 1;
-	}
 	if (inet_pton(AF_INET, "10.0.2.3", lit) == 1) {
 		xe_memcpy(&servers[0], lit, 4);
 		return 1;
 	}
 	return 0;
+}
+
+static int dns_lookup_ptr(const uint8_t* addr,
+						  int family,
+						  char* out,
+						  size_t outsz) {
+	uint32_t servers[4];
+	int nservers;
+	char rev[128];
+	uint8_t rbuf[1550];
+	size_t rlen = 0;
+	uint16_t qid = 0;
+	XePtrResult res;
+
+	if (!addr || !out || outsz == 0)
+		return -1;
+	if (dns_make_reverse(addr, family, rev, sizeof(rev)) != 0)
+		return -1;
+
+	nservers = dns_get_servers(servers, 4);
+	if (nservers == 0)
+		return -1;
+
+	for (int s = 0; s < nservers && s < 2; s++) {
+		if (dns_exchange(servers[s], rev, DNS_QTYPE_PTR, rbuf, sizeof(rbuf),
+						 &rlen, &qid) != 0)
+			continue;
+		if (dns_parse_ptr_answers(rbuf, rlen, qid, &res) == 0 &&
+			!res.negative && res.name[0]) {
+			strncpy(out, res.name, outsz - 1);
+			out[outsz - 1] = '\0';
+			return 0;
+		}
+	}
+	return -1;
 }
 
 static int dns_lookup_udp(const char* name, int family, XeDnsResult* out) {
@@ -802,46 +1035,109 @@ static int xe_resolve(const char* name, int family, XeDnsResult* out) {
 	return dns_lookup_udp(name, family, out);
 }
 
+static int xe_addr_is_loopback(const uint8_t* addr, int family) {
+	static const uint8_t lo6[16] = {
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+	};
+
+	if (!addr)
+		return 0;
+	if (family == AF_INET)
+		return addr[0] == 127;
+	if (family == AF_INET6)
+		return memcmp(addr, lo6, 16) == 0;
+	return 0;
+}
+
 struct hostent* gethostbyname(const char* name) {
 	static hostent ent;
 	XeDnsResult r;
-	int i;
+	int family = 0;
+	int n = 0;
 
 	memset(&ent, 0, sizeof(ent));
+	h_errno = HOST_NOT_FOUND;
+	if (!name || !name[0])
+		return NULL;
+
 	if (xe_resolve(name, AF_INET, &r) != 0 || r.n == 0) {
-		/* Fall back: any family, prefer first A then AAAA for h_addr */
-		if (xe_resolve(name, AF_UNSPEC, &r) != 0 || r.n == 0)
+		/* Fall back: any family, prefer A then AAAA for h_addr. */
+		if (xe_resolve(name, AF_UNSPEC, &r) != 0 || r.n == 0) {
+			h_errno = HOST_NOT_FOUND;
 			return NULL;
+		}
 	}
+
+	for (int i = 0; i < r.n; i++) {
+		if (r.addrs[i].family == AF_INET) {
+			family = AF_INET;
+			break;
+		}
+	}
+	if (!family)
+		family = AF_INET6;
+
+	for (int i = 0; i < r.n && n < DNS_MAX_ADDRS; i++) {
+		if (r.addrs[i].family != family)
+			continue;
+		memset(g_hostent_addrs[n], 0, 16);
+		xe_memcpy(g_hostent_addrs[n], r.addrs[i].addr,
+				  family == AF_INET ? 4 : 16);
+		g_host_entry_list[n] = (char*)g_hostent_addrs[n];
+		n++;
+	}
+	g_host_entry_list[n] = NULL;
 
 	strncpy(g_hostent_name, name, DNS_NAME_MAX - 1);
+	g_hostent_name[DNS_NAME_MAX - 1] = '\0';
 	ent.h_name = g_hostent_name;
 	ent.h_aliases = NULL;
+	ent.h_addrtype = family;
+	ent.h_length = family == AF_INET ? 4 : 16;
+	ent.h_addr_list = g_host_entry_list;
+	h_errno = 0;
+	return &ent;
+}
 
-	for (i = 0; i < r.n; i++) {
-		if (r.addrs[i].family == AF_INET) {
-			ent.h_addrtype = AF_INET;
-			ent.h_length = 4;
-			g_hostent_addr4 = 0;
-			xe_memcpy(&g_hostent_addr4, r.addrs[i].addr, 4);
-			g_host_entry_list[0] = (char*)&g_hostent_addr4;
-			g_host_entry_list[1] = NULL;
-			ent.h_addr_list = g_host_entry_list;
-			return &ent;
+struct hostent* gethostbyaddr(const void* addr, socklen_t len, int type) {
+	static hostent ent;
+	char name[DNS_NAME_MAX];
+	const uint8_t* a = (const uint8_t*)addr;
+
+	h_errno = HOST_NOT_FOUND;
+	if (!addr || (type != AF_INET && type != AF_INET6)) {
+		h_errno = NO_RECOVERY;
+		return NULL;
+	}
+	if ((type == AF_INET && len < 4) || (type == AF_INET6 && len < 16)) {
+		h_errno = NO_RECOVERY;
+		return NULL;
+	}
+
+	if (!xe_hosts_reverse(addr, type, name, sizeof(name))) {
+		/* Loopback reverse lookups stay local: 127/8 and ::1 have no
+		 * useful PTR record and must never leak a DNS query. */
+		if (xe_addr_is_loopback(a, type) ||
+			dns_lookup_ptr(a, type, name, sizeof(name)) != 0) {
+			h_errno = HOST_NOT_FOUND;
+			return NULL;
 		}
 	}
-	for (i = 0; i < r.n; i++) {
-		if (r.addrs[i].family == AF_INET6) {
-			ent.h_addrtype = AF_INET6;
-			ent.h_length = 16;
-			xe_memcpy(g_hostent_addr6, r.addrs[i].addr, 16);
-			g_host_entry_list[0] = (char*)g_hostent_addr6;
-			g_host_entry_list[1] = NULL;
-			ent.h_addr_list = g_host_entry_list;
-			return &ent;
-		}
-	}
-	return NULL;
+
+	memset(&ent, 0, sizeof(ent));
+	strncpy(g_hostent_name, name, DNS_NAME_MAX - 1);
+	g_hostent_name[DNS_NAME_MAX - 1] = '\0';
+	memset(g_hostent_addrs[0], 0, 16);
+	xe_memcpy(g_hostent_addrs[0], a, type == AF_INET ? 4 : 16);
+	g_host_entry_list[0] = (char*)g_hostent_addrs[0];
+	g_host_entry_list[1] = NULL;
+	ent.h_name = g_hostent_name;
+	ent.h_aliases = NULL;
+	ent.h_addrtype = type;
+	ent.h_length = type == AF_INET ? 4 : 16;
+	ent.h_addr_list = g_host_entry_list;
+	h_errno = 0;
+	return &ent;
 }
 
 static addrinfo* xe_ai_append(addrinfo** head,
@@ -889,6 +1185,8 @@ static addrinfo* xe_ai_append(addrinfo** head,
 void freeaddrinfo(addrinfo* res) {
 	while (res) {
 		addrinfo* n = (addrinfo*)res->ai_next;
+		if (res->ai_canonname)
+			free(res->ai_canonname);
 		free(res);
 		res = n;
 	}
@@ -912,9 +1210,73 @@ const char* gai_strerror(int errcode) {
 		return "Invalid value for ai_flags";
 	case EAI_SERVICE:
 		return "Service not supported";
+	case EAI_OVERFLOW:
+		return "Argument buffer overflow";
+	case EAI_SOCKTYPE:
+		return "ai_socktype not supported";
 	default:
 		return "Unknown error";
 	}
+}
+
+static int xe_service_to_port(const char* service,
+							  int socktype,
+							  int flags,
+							  uint16_t* port) {
+	char* end = NULL;
+	long p;
+
+	*port = 0;
+	if (!service)
+		return 0;
+
+	p = strtol(service, &end, 10);
+	if (end && end != service && *end == '\0') {
+		if (p < 0 || p > 65535)
+			return EAI_SERVICE;
+		*port = htons((uint16_t)p);
+		return 0;
+	}
+	if (flags & AI_NUMERICSERV)
+		return EAI_SERVICE;
+
+	{
+		const char* proto = NULL;
+		servent* se;
+
+		if (socktype == SOCK_DGRAM)
+			proto = "udp";
+		else if (socktype == SOCK_STREAM)
+			proto = "tcp";
+		se = getservbyname(service, proto);
+		if (!se)
+			return EAI_SERVICE;
+		*port = (uint16_t)se->s_port;
+		return 0;
+	}
+}
+
+static int xe_default_protocol(int socktype) {
+	if (socktype == SOCK_STREAM)
+		return IPPROTOCOL_TCP;
+	if (socktype == SOCK_DGRAM)
+		return IPPROTOCOL_UDP;
+	return 0;
+}
+
+static int xe_ai_set_canon(addrinfo* head, const char* node) {
+	size_t len;
+	char* canon;
+
+	if (!head || !node)
+		return 0;
+	len = strlen(node) + 1;
+	canon = (char*)malloc((unsigned)len);
+	if (!canon)
+		return -1;
+	xe_memcpy(canon, node, len);
+	head->ai_canonname = canon;
+	return 0;
 }
 
 int getaddrinfo(const char* node,
@@ -929,6 +1291,7 @@ int getaddrinfo(const char* node,
 	XeDnsResult r;
 	addrinfo* head = NULL;
 	addrinfo* tail = NULL;
+	int rc;
 	int i;
 
 	if (!res)
@@ -942,31 +1305,49 @@ int getaddrinfo(const char* node,
 		family = hints->ai_family;
 		socktype = hints->ai_socktype;
 		protocol = hints->ai_protocol;
+		if (flags & ~(AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST |
+					  AI_NUMERICSERV))
+			return EAI_BADFLAGS;
 		if (family != AF_UNSPEC && family != AF_INET && family != AF_INET6)
 			return EAI_FAMILY;
+		if (socktype && socktype != SOCK_STREAM && socktype != SOCK_DGRAM &&
+			socktype != SOCK_RAW)
+			return EAI_SOCKTYPE;
 	}
 
-	if (service) {
-		long p = strtoll(service, NULL, 10);
-		if (p < 0 || p > 65535)
-			return EAI_SERVICE;
-		port = htons((uint16_t)p);
-	}
+	rc = xe_service_to_port(service, socktype, flags, &port);
+	if (rc != 0)
+		return rc;
+
+	if (!protocol)
+		protocol = xe_default_protocol(socktype);
 
 	if (!node) {
-		uint8_t z[16];
-		memset(z, 0, sizeof(z));
+		uint8_t any4[4] = { 0, 0, 0, 0 };
+		uint8_t lo4[4] = { 127, 0, 0, 1 };
+		uint8_t any6[16] = { 0 };
+		uint8_t lo6[16] = { 0, 0, 0, 0, 0, 0, 0, 0,
+							0, 0, 0, 0, 0, 0, 0, 1 };
+		const uint8_t* a4 = (flags & AI_PASSIVE) ? any4 : lo4;
+		const uint8_t* a6 = (flags & AI_PASSIVE) ? any6 : lo6;
+
 		if (family == AF_INET || family == AF_UNSPEC) {
-			if (!xe_ai_append(&head, &tail, AF_INET, socktype, protocol, z, port)) {
+			if (!xe_ai_append(&head, &tail, AF_INET, socktype, protocol, a4,
+							  port)) {
 				freeaddrinfo(head);
 				return EAI_MEMORY;
 			}
 		}
 		if (family == AF_INET6 || family == AF_UNSPEC) {
-			if (!xe_ai_append(&head, &tail, AF_INET6, socktype, protocol, z, port)) {
+			if (!xe_ai_append(&head, &tail, AF_INET6, socktype, protocol, a6,
+							  port)) {
 				freeaddrinfo(head);
 				return EAI_MEMORY;
 			}
+		}
+		if ((flags & AI_CANONNAME) && xe_ai_set_canon(head, node) != 0) {
+			freeaddrinfo(head);
+			return EAI_MEMORY;
 		}
 		*res = head;
 		return 0;
@@ -974,36 +1355,136 @@ int getaddrinfo(const char* node,
 
 	if (flags & AI_NUMERICHOST) {
 		uint8_t lit[16];
+
 		if (family != AF_INET6 && inet_pton(AF_INET, node, lit) == 1) {
-			if (!xe_ai_append(&head, &tail, AF_INET, socktype, protocol, lit, port))
+			if (!xe_ai_append(&head, &tail, AF_INET, socktype, protocol, lit,
+							  port)) {
+				freeaddrinfo(head);
 				return EAI_MEMORY;
-			*res = head;
-			return 0;
-		}
-		if (family != AF_INET && inet_pton(AF_INET6, node, lit) == 1) {
-			if (!xe_ai_append(&head, &tail, AF_INET6, socktype, protocol, lit, port))
+			}
+		} else if (family != AF_INET && inet_pton(AF_INET6, node, lit) == 1) {
+			if (!xe_ai_append(&head, &tail, AF_INET6, socktype, protocol, lit,
+							  port)) {
+				freeaddrinfo(head);
 				return EAI_MEMORY;
-			*res = head;
-			return 0;
+			}
+		} else {
+			return EAI_NONAME;
 		}
-		return EAI_NONAME;
+	} else {
+		if (xe_resolve(node, family, &r) != 0 || r.n == 0)
+			return EAI_NONAME;
+
+		for (i = 0; i < r.n; i++) {
+			if (!xe_ai_append(&head,
+							  &tail,
+							  r.addrs[i].family,
+							  socktype,
+							  protocol,
+							  r.addrs[i].addr,
+							  port)) {
+				freeaddrinfo(head);
+				return EAI_MEMORY;
+			}
+		}
 	}
 
-	if (xe_resolve(node, family, &r) != 0 || r.n == 0)
-		return EAI_NONAME;
-
-	for (i = 0; i < r.n; i++) {
-		if (!xe_ai_append(&head,
-						  &tail,
-						  r.addrs[i].family,
-						  socktype,
-						  protocol,
-						  r.addrs[i].addr,
-						  port)) {
-			freeaddrinfo(head);
-			return EAI_MEMORY;
-		}
+	if ((flags & AI_CANONNAME) && xe_ai_set_canon(head, node) != 0) {
+		freeaddrinfo(head);
+		return EAI_MEMORY;
 	}
 	*res = head;
+	return 0;
+}
+
+int getnameinfo(const struct sockaddr* sa,
+				socklen_t salen,
+				char* host,
+				socklen_t hostlen,
+				char* serv,
+				socklen_t servlen,
+				int flags) {
+	const sockaddr_* s = (const sockaddr_*)sa;
+	int family;
+	uint8_t addr[16];
+	uint16_t port;
+	char hostbuf[NI_MAXHOST];
+	char servbuf[NI_MAXSERV];
+	int named = 0;
+
+	if (!host && !serv)
+		return EAI_NONAME;
+	if (flags & ~(NI_NOFQDN | NI_NUMERICHOST | NI_NAMEREQD | NI_NUMERICSERV |
+				  NI_DGRAM))
+		return EAI_BADFLAGS;
+	if (!sa)
+		return EAI_FAMILY;
+
+	family = s->sa_family;
+	if (family == AF_INET) {
+		const sockaddr_in* in = (const sockaddr_in*)sa;
+
+		if (salen < sizeof(sockaddr_in))
+			return EAI_FAMILY;
+		xe_memcpy(addr, &in->sin_addr.s_addr, 4);
+		port = ntohs(in->sin_port);
+	} else if (family == AF_INET6) {
+		const sockaddr_in6* in6 = (const sockaddr_in6*)sa;
+
+		if (salen < sizeof(sockaddr_in6))
+			return EAI_FAMILY;
+		xe_memcpy(addr, in6->sin6_addr.s6_addr, 16);
+		port = ntohs(in6->sin6_port);
+	} else {
+		return EAI_FAMILY;
+	}
+
+	if (host) {
+		if (hostlen == 0)
+			return EAI_OVERFLOW;
+		hostbuf[0] = '\0';
+		if (!(flags & NI_NUMERICHOST)) {
+			if (xe_hosts_reverse(addr, family, hostbuf, sizeof(hostbuf)))
+				named = 1;
+			else if (!xe_addr_is_loopback(addr, family) &&
+					 dns_lookup_ptr(addr, family, hostbuf,
+									sizeof(hostbuf)) == 0)
+				named = 1;
+		}
+		if (!named) {
+			if ((flags & NI_NAMEREQD) && !(flags & NI_NUMERICHOST))
+				return EAI_NONAME;
+			if (!inet_ntop(family, addr, hostbuf, sizeof(hostbuf)))
+				return EAI_FAIL;
+		}
+		if ((flags & NI_NOFQDN) && named) {
+			char* dot = strchr(hostbuf, '.');
+
+			if (dot)
+				*dot = '\0';
+		}
+		if (strlen(hostbuf) >= hostlen)
+			return EAI_OVERFLOW;
+		strcpy(host, hostbuf);
+	}
+
+	if (serv) {
+		if (servlen == 0)
+			return EAI_OVERFLOW;
+		if (flags & NI_NUMERICSERV) {
+			snprintf(servbuf, sizeof(servbuf), "%u", (unsigned)port);
+		} else {
+			const char* proto = (flags & NI_DGRAM) ? "udp" : "tcp";
+			servent* se = getservbyport(htons(port), proto);
+
+			if (se)
+				snprintf(servbuf, sizeof(servbuf), "%s", se->s_name);
+			else
+				snprintf(servbuf, sizeof(servbuf), "%u", (unsigned)port);
+		}
+		if (strlen(servbuf) >= servlen)
+			return EAI_OVERFLOW;
+		strcpy(serv, servbuf);
+	}
 	return 0;
 }

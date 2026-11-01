@@ -313,6 +313,7 @@ void AuDevInputInitialise() {
 	strcpy(node->filename, "mice");
 	node->flags |= FS_FLAG_DEVICE;
 	node->device = mice_input_buf;
+	node->mode = 0660;
 	node->read = AuDevInputMiceRead;
 	node->write = AuDevInputMiceWrite;
 	node->open = 0;
@@ -331,6 +332,7 @@ void AuDevInputInitialise() {
 	strcpy(kybrd_->filename, "kybrd");
 	kybrd_->flags |= FS_FLAG_DEVICE;
 	kybrd_->device = keybuf;
+	kybrd_->mode = 0660;
 	kybrd_->read = AuDevInputKybrdRead;
 	kybrd_->write = AuDevInputKybrdWrite;
 	kybrd_->poll = &AuDevInputKybrdPoll;
@@ -346,6 +348,7 @@ void AuDevInputInitialise() {
 	ring->device = &mouse_ring;
 	ring->read = AuDevInputRingRead;
 	ring->iocontrol = AuDevInputRingIoControl;
+	ring->mode = 0660;
 	AuDevFSAddFile(devfs, "/", ring);
 	_key_test = 0;
 	kybrdWaitQueue = (AuWaitQueue*)kmalloc(sizeof(AuWaitQueue));

@@ -55,6 +55,8 @@
 
 extern bool _vfs_debug_on;
 
+extern uint16_t FatModeFromAttrib(uint8_t attrib, const char* filename);
+
 /*
  * FatClusterToSector32 -- Converts a cluster to sector
  * @param cluster -- cluster number
@@ -412,10 +414,13 @@ AuVFSNode* FatLocateSubDir(AuVFSNode* fsys, AuVFSNode* kfile, const char* filena
 					file->device = fsys;
 					file->parent_block = kfile->first_block;
 					file->gid = AuCredGetGroupID(AURORA_GID_MISC_WORLD);
-					if (pkDir->attrib & 0x10)
+					if (pkDir->attrib & 0x10) {
 						file->flags |= FS_FLAG_DIRECTORY;
-					else
+						file->mode = FatModeFromAttrib(pkDir->attrib, file->filename);
+					} else {
 						file->flags |= FS_FLAG_GENERAL;
+						file->mode = FatModeFromAttrib(pkDir->attrib, file->filename);
+					}
 					AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
 					kfree(kfile);
 					return file;
@@ -486,10 +491,13 @@ AuVFSNode* FatLocateDir(AuVFSNode* fsys, const char* dir) {
 					 * using global misc world gid
 					 */
 					file->gid = AuCredGetGroupID(AURORA_GID_MISC_WORLD);
-					if (dirent->attrib == 0x10)
+					if (dirent->attrib & 0x10) {
 						file->flags |= FS_FLAG_DIRECTORY;
-					else
+						file->mode = FatModeFromAttrib(dirent->attrib, file->filename);
+					} else {
 						file->flags |= FS_FLAG_GENERAL;
+						file->mode = FatModeFromAttrib(dirent->attrib, file->filename);
+					}
 					aa64_data_cache_clean_range(file, sizeof(AuVFSNode));
 					AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
 					return file;
@@ -728,6 +736,7 @@ AuVFSNode* FatInitialise(AuVDisk* vdisk, char* mountname) {
 	fsys->get_blockfor = FatGetClusterFor;
 	fsys->opendir = FatOpenDir;
 	fsys->read_dir = FatDirectoryRead;
+	fsys->setattr = FatSetAttribute;
 	vdisk->fsys = fsys;
 	AuVFSAddFileSystem(fsys);
 	AuVFSRegisterRoot(fsys);

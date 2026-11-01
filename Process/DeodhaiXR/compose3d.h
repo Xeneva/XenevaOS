@@ -184,6 +184,42 @@ extern bool Deodhai3DWindowSendToBack(Window* win);
 extern bool Deodhai3DWindowBringToFront(Window* win);
 
 /**
+ * Tearing. Shake the cursor over a window (4 quick back-and-forth moves,
+ * button up): a small slit appears there. Press near it within 1.5 s and
+ * pull: the window tears open from that point to the cursor, following
+ * it in 3D on the window's plane. The opening shows whatever is behind
+ * (wallpaper or other windows), edges are ragged with a paper-fibre rim
+ * and a soft shadow, and the window's own pixels beside the crack are
+ * pushed apart. While torn the application receives no mouse or keyboard
+ * input (the page can still be moved by its titlebar). Shake over it again
+ * to mend it. Purely compositor side: the client buffer is never touched.
+ */
+
+/**
+ * @brief Deodhai3DWindowTear -- tear a window open programmatically from
+ * (ax, ay) to (tx, ty), window texels
+ */
+extern bool Deodhai3DWindowTear(Window* win, float ax, float ay, float tx, float ty);
+
+/**
+ * @brief Deodhai3DWindowMend -- heal a window's tear (animated); input
+ * returns once it has closed
+ */
+extern bool Deodhai3DWindowMend(Window* win);
+
+/**
+ * @brief Deodhai3DWindowInputBlocked -- true while a window (or the window
+ * a popup rides on) is torn. DeodhaiBroadcastKey consults this.
+ */
+extern bool Deodhai3DWindowInputBlocked(Window* win);
+
+/**
+ * @brief Deodhai3DWindowTearBounds -- screen bounds of a window's tear as
+ * of the last composed frame
+ */
+extern bool Deodhai3DWindowTearBounds(Window* win, Rect* bounds);
+
+/**
  * @brief Deodhai3DHandleKey -- 3D keyboard shortcuts, all with Ctrl held:
  *   Ctrl+3  toggle 3D compositing
  *   Ctrl+-  push the focused window back      Ctrl+=  pull it closer

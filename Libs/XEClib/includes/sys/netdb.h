@@ -65,6 +65,13 @@ __attribute__((aligned(2)))
 		char** h_addr_list;
 	};
 
+	struct servent {
+		char* s_name;
+		char** s_aliases;
+		int s_port;
+		char* s_proto;
+	};
+
 #ifndef AI_PASSIVE
 #define AI_PASSIVE     0x01
 #define AI_CANONNAME   0x02
@@ -81,15 +88,53 @@ __attribute__((aligned(2)))
 #define EAI_MEMORY   -6
 #define EAI_SERVICE  -7
 #define EAI_OVERFLOW -8
+#define EAI_SOCKTYPE -9
 #endif
 
+/* getnameinfo(3) flags. */
+#ifndef NI_NOFQDN
+#define NI_NOFQDN      0x01
+#define NI_NUMERICHOST 0x02
+#define NI_NAMEREQD    0x04
+#define NI_NUMERICSERV 0x08
+#define NI_DGRAM       0x10
+#endif
+
+#ifndef NI_MAXHOST
+#define NI_MAXHOST 1025
+#define NI_MAXSERV 32
+#endif
+
+/* h_errno values (gethostbyname/gethostbyaddr). */
+#ifndef HOST_NOT_FOUND
+#define HOST_NOT_FOUND 1
+#define TRY_AGAIN      2
+#define NO_RECOVERY    3
+#define NO_DATA        4
+#define NO_ADDRESS     NO_DATA
+#endif
+
+	extern int h_errno;
+
 	XE_LIB hostent* gethostbyname(const char* name);
+	XE_LIB hostent* gethostbyaddr(const void* addr, socklen_t len, int type);
+	XE_LIB servent* getservbyname(const char* name, const char* proto);
+	XE_LIB servent* getservbyport(int port, const char* proto);
+	XE_LIB void herror(const char* s);
+	XE_LIB const char* hstrerror(int err);
 	XE_LIB int getaddrinfo(const char* node,
 						   const char* service,
 						   const addrinfo* hints,
 						   addrinfo** res);
 	XE_LIB void freeaddrinfo(addrinfo* res);
 	XE_LIB const char* gai_strerror(int errcode);
+	XE_LIB int getnameinfo(const struct sockaddr* sa,
+						   socklen_t salen,
+						   char* host,
+						   socklen_t hostlen,
+						   char* serv,
+						   socklen_t servlen,
+						   int flags);
 
 	/* Last upstream DNS server used by the stub resolver (0 if local/none). */
 	XE_LIB uint32_t xe_dns_last_server(void);

@@ -35,6 +35,18 @@
 #include <Fs/vfs.h>
 #include <Net/ipv6.h>
 
+/* Network logging is synchronous UART output and sits on the packet path.
+ * It is compiled out until the deferred logger is in place; build with
+ * -DAU_NET_LOG_ENABLE=1 to restore the old messages. */
+#ifndef AU_NET_LOG_ENABLE
+#define AU_NET_LOG_ENABLE 0
+#endif
+#if AU_NET_LOG_ENABLE
+#define AU_NET_LOG(...) UARTDebugOut(__VA_ARGS__)
+#else
+#define AU_NET_LOG(...) do { } while (0)
+#endif
+
 #define NETDEV_TYPE_ETHERNET 1
 #define NETDEV_TYPE_802_11 2
 #define NETDEV_TYPE_BLUETOOTH 3
@@ -119,6 +131,45 @@ AU_EXTERN AU_EXPORT int AuRemoveNetAdapter(char* name);
 * @param name -- adapter name
 */
 AU_EXTERN AU_EXPORT AuVFSNode* AuGetNetworkAdapter(char* name);
+
+/* Interface snapshot shared with XEClib's getifaddrs(2)/if_nametoindex(2).
+ * Keep the layout in sync with Libs/XEClib/includes/ifaddrs.h. */
+#define AU_IFNAME_MAX 16
+#define AU_IFADDR_MAX 32
+
+#define AU_IFF_UP         0x1
+#define AU_IFF_BROADCAST  0x2
+#define AU_IFF_LOOPBACK   0x8
+#define AU_IFF_RUNNING    0x40
+#define AU_IFF_MULTICAST  0x1000
+
+typedef struct _au_ifaddrinfo_ {
+	char ifa_name[AU_IFNAME_MAX];
+	uint32_t ifa_index;
+	uint16_t ifa_family;
+	uint16_t ifa_flags;
+	uint32_t ifa_addr4;
+	uint32_t ifa_netmask4;
+	uint32_t ifa_broadcast4;
+	uint8_t ifa_mac[6];
+	uint8_t ifa_link;
+	uint8_t ifa_prefix6;
+	uint8_t ifa_ipv6[16];
+	uint8_t _ifa_pad[2];
+} AuIfAddrInfo;
+
+/*
+ * AuNetSnapshotIfAddrs -- fill up to max adapter records. Returns the number
+ * written, or a negative AU_ERR_* value. Index values are 1-based and stable
+ * for the lifetime of the adapter table.
+ */
+AU_EXTERN AU_EXPORT int AuNetSnapshotIfAddrs(AuIfAddrInfo* out, int max);
+
+/*
+ * AuNetIfNameToIndex -- map an interface name to its 1-based index, or 0
+ * when the adapter does not exist.
+ */
+AU_EXTERN AU_EXPORT int AuNetIfNameToIndex(const char* name);
 
 /*
  * AuNetworkRoute -- select NIC via FIB (RFC 1122 §3.3.1).

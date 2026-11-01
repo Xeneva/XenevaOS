@@ -198,6 +198,11 @@ struct VirtqDesc {
 	volatile uint16_t next;
 };
 
+/* Driver -> device: do not raise an interrupt for this queue. The driver
+ * still sees completions in the used ring; it just polls them when it
+ * needs the slots back. */
+#define VIRTQ_AVAIL_F_NO_INTERRUPT 1
+
 struct VirtqAvailHdr {
 	volatile uint16_t flags;
 	volatile uint16_t idx;

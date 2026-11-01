@@ -64,6 +64,8 @@ Useful options for the LLVM workflow are:
 
 - `--bleed` creates the benchmark-oriented AArch64 LLVM image described below.
 - `--direct-scanout` rebuilds user space with an experimental compositor path that draws directly into the GOP framebuffer when its pitch exactly matches the screen width. It works with normal or bleed builds, but may be slower on non-cacheable framebuffer mappings.
+- `--apps=APP[,APP...]` selectively compiles and deploys only the specified user-space application(s) (e.g. `--apps=Solitaire`), automatically excluding unlisted apps and NetSurf.
+- `--no-netsurf` (deprecated) drops NetSurf from the image. Prefer `--apps` for isolating specific applications.
 - `--force-user-apps` rebuilds the AArch64 LLVM user-space libraries and supported applications before packing the ramdisk.
 - `--skip-build` skips every compiler invocation and repacks the disk images from the bootloader, kernel, library, and application binaries already present on disk. It is rejected if the recorded user-space profile does not match the requested normal profile.
 - `--force-legacy-build` reuses an existing `initrd2.img`.
@@ -98,6 +100,16 @@ To rebuild the supported AArch64 libraries and applications and place their bina
 ```
 
 The LLVM helper builds `XEClib`, `Chitralekha`, and the application set listed in `Scripts/Linux/lib/llvm.sh`. This is the maintained full-build entry point; individual component Makefiles also expose `make llvm` for targeted work.
+
+### Selective Application Compilation
+
+To quickly build and test individual applications without compiling the entire user-space suite, pass `--apps=<name[,name...]>`:
+
+```bash
+./Scripts/Linux/build_and_run_qemu.sh --apps=Solitaire
+```
+
+This compiles only the specified target(s) alongside the mandatory desktop shell (`Init`, `DeodhaiXR`, `Terminal`, `Namdapha`, `XELnch`, and `XEShell`). When assembling `initrd2.img`, the build script dynamically filters `lncher.cnf` so unbuilt or missing applications are excluded from the launcher menu, guaranteeing that only functional applications appear in the UI.
 
 ## Generate Clang tooling metadata
 

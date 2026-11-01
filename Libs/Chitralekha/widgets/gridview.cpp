@@ -107,6 +107,7 @@ static void ChOnGridVScroll(ChWidget* widget, ChWindow* win, int currentVal, uin
 	ChScrollBar* sb = (ChScrollBar*)widget;
 	ChGridView* gv = (ChGridView*)sb->attachedTo;
 	gv->scroll_y = currentVal;
+	gv->force_full_redraw = true;
 	_reposition_child(gv);
 }
 
@@ -473,9 +474,51 @@ void ChGridViewMouseEvent(ChWidget* wid, ChWindow* win, int mx, int my, int butt
 	uint8_t was_down = gv->prev_button;
 	uint8_t is_down = (button != 0);
 
+	// Mouse wheel scrolling
+	if (button == DEODHAI_MOUSE_MSG_SCROLL_UP) {
+		int old_scroll = gv->scroll_y;
+		int step = (gv->cell_h + gv->cell_padding);
+		if (step < 30) step = 30;
+		gv->scroll_y -= step;
+		if (gv->scroll_y < 0)
+			gv->scroll_y = 0;
+		if (gv->scroll_y != old_scroll) {
+			_reposition_child(gv);
+			gv->force_full_redraw = true;
+			ChScrollBarSetValue(&gv->vscroll, gv->scroll_y);
+			ChGridViewDraw(wid, win);
+			ChWindowUpdate(win, gv->wid.x, gv->wid.y, gv->wid.w, gv->wid.h, 0, 1);
+		}
+		return;
+	} else if (button == DEODHAI_MOUSE_MSG_SCROLL_DOWN) {
+		int max_scroll = gv->content_height - gv->viewport_height;
+		if (max_scroll < 0) max_scroll = 0;
+		int old_scroll = gv->scroll_y;
+		int step = (gv->cell_h + gv->cell_padding);
+		if (step < 30) step = 30;
+		gv->scroll_y += step;
+		if (gv->scroll_y > max_scroll)
+			gv->scroll_y = max_scroll;
+		if (gv->scroll_y != old_scroll) {
+			_reposition_child(gv);
+			gv->force_full_redraw = true;
+			ChScrollBarSetValue(&gv->vscroll, gv->scroll_y);
+			ChGridViewDraw(wid, win);
+			ChWindowUpdate(win, gv->wid.x, gv->wid.y, gv->wid.w, gv->wid.h, 0, 1);
+		}
+		return;
+	}
+
 	if (is_over_vscrollbar(gv, win, mx, my) || gv->vscroll.state == SB_STATE_DRAGGING) {
+		if (button != 0) {
+			win->focusedWidget = (void*)wid;
+		} else {
+			if (win->focusedWidget == (void*)wid)
+				win->focusedWidget = NULL;
+		}
 		if (gv->vscroll.base.ChMouseEvent)
 			gv->vscroll.base.ChMouseEvent((ChWidget*)&gv->vscroll, win, mx, my, button);
+		gv->force_full_redraw = true;
 		ChGridViewDraw(wid, win);
 		ChWindowUpdate(win, gv->wid.x, gv->wid.y, gv->wid.w, gv->wid.h, 0, 1);
 		return;

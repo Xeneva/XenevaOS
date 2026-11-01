@@ -341,6 +341,14 @@ extern int NetBind(int sockfd, sockaddr* addr, socklen_t addrlen);
 
 extern int NetAccept(int sockfd, sockaddr* addr, socklen_t* addrlen);
 
+extern int NetAccept4(int sockfd, sockaddr* addr, socklen_t* addrlen, int flags);
+
+extern int NetGetSockOpt(int sockfd, int level, int optname, void* optval,
+	socklen_t* optlen);
+
+extern int NetSocketSetOpt(int sockfd, int level, int optname, const void* optval,
+	socklen_t optlen);
+
 extern int NetListen(int sockfd, int backlog);
 
 /**

@@ -36,4 +36,11 @@
 #include <Fs/vdisk.h>
 #include <process.h>
 
+#define VFS_ACCESS_EXEC	 0x1 /* x*/
+#define VFS_ACCESS_WRITE 0x2 /* w */
+#define VFS_ACCESS_READ	 0x4 /* r */
+#define VFS_ACCESS_RW	 (VFS_ACCESS_READ | VFS_ACCESS_WRITE)
+
+extern bool AuVFSCheckAccess(AuProcCredentials* c, AuVFSNode* n, int want);
+
 #endif
