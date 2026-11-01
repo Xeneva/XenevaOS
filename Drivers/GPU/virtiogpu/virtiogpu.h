@@ -36,17 +36,16 @@
 #include <aurora.h>
 #include <Drivers/virtio.h>
 
-#define VIRTIO_GPU_FLAG_FENCE (1<<0)
-#define VIRTIO_GPU_FLAG_INFO_RING_IDX (1<<1)
+#define VIRTIO_GPU_FLAG_FENCE		  (1 << 0)
+#define VIRTIO_GPU_FLAG_INFO_RING_IDX (1 << 1)
 
 #define VIRTIO_GPU_CREATE_RESOURCE_2D 0x200
-#define VIRTIO_GPU_ATTACH_BACKING 0x201
+#define VIRTIO_GPU_ATTACH_BACKING	  0x201
 #define VIRTIO_GPU_TRANSFER_TO_HOST2D 0x202
-#define VIRTIO_GPU_FLUSH 0x203
+#define VIRTIO_GPU_FLUSH			  0x203
 #define VIRTIO_GPU_GET_SCREEN_RSRC_ID 0x204
 
-
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct virtio_gpu_ctrl_hdr {
 	uint32_t type;
 	uint32_t flags;
@@ -54,9 +53,10 @@ struct virtio_gpu_ctrl_hdr {
 	uint32_t ctx_id;
 	uint32_t padding;
 };
+
 #pragma pack(pop)
 
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct virtio_gpu_resource_create_2d {
 	struct virtio_gpu_ctrl_hdr hdr;
 	uint32_t resource_id;
@@ -66,7 +66,7 @@ struct virtio_gpu_resource_create_2d {
 };
 #pragma pack(pop)
 
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct virtio_gpu_resource_attach_backing {
 	struct virtio_gpu_ctrl_hdr hdr;
 	uint32_t resource_id;
@@ -75,16 +75,15 @@ struct virtio_gpu_resource_attach_backing {
 		uint64_t addr;
 		uint32_t length;
 		uint32_t padding;
-	}entries[1];
+	} entries[1];
 };
 #pragma pack(pop)
-
 
 struct virtio_gpu_rect {
 	uint32_t x, y, width, height;
 };
 
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct virtio_gpu_set_scanout {
 	struct virtio_gpu_ctrl_hdr hdr;
 	struct virtio_gpu_rect rect;
@@ -93,7 +92,7 @@ struct virtio_gpu_set_scanout {
 };
 #pragma pack(pop)
 
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct virtio_gpu_transfer_to_host_2d {
 	struct virtio_gpu_ctrl_hdr hdr;
 	struct virtio_gpu_rect rect;
@@ -103,8 +102,7 @@ struct virtio_gpu_transfer_to_host_2d {
 };
 #pragma pack(pop)
 
-
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct virtio_gpu_resource_flush {
 	struct virtio_gpu_ctrl_hdr hdr;
 	struct virtio_gpu_rect rect;
@@ -113,8 +111,7 @@ struct virtio_gpu_resource_flush {
 };
 #pragma pack(pop)
 
-
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct virtio_gpu_config {
 	uint32_t events_read;
 	uint32_t events_clear;
@@ -123,14 +120,13 @@ struct virtio_gpu_config {
 };
 #pragma pack(pop)
 
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct virtio_gpu_mem_entry {
 	uint64_t addr;
 	uint32_t length;
 	uint32_t padding;
 };
 #pragma pack(pop)
-
 
 enum virtio_gpu_ctrl_type {
 	/* 2D commands */
@@ -209,7 +205,6 @@ extern bool gpu_is_virgl_supported();
  */
 extern bool gpu_is_edid_supported();
 
-
 /**
  * @brief gpu_execute_command -- submit a command to gpu
  * @param cfg -- pointer to virtio common config
@@ -234,7 +229,8 @@ extern int gpu_allocate_resource_id();
  * @param req2 -- pointer to request command two
  * @param len2 -- request command two length
  */
-extern void gpu_attach_back_cmd(VirtioCommonCfg* cfg, void* req, uint32_t len1, void* req2, uint32_t len2);
+extern void
+gpu_attach_back_cmd(VirtioCommonCfg* cfg, void* req, uint32_t len1, void* req2, uint32_t len2);
 
 /**
  * @brief gpu_get_config_pointer -- return the pointer
@@ -258,10 +254,7 @@ extern int virt_gpu_default_resource_id();
  * plain name from our export table -- an unexported symbol silently never
  * matches (C linkage alone is not enough). --axiss
  */
-AU_EXTERN AU_EXPORT void VirtGpuConsolePresent(uint32_t* src, uint32_t src_pitch,
-	int x, int y, int w, int h);
-
-
-
+AU_EXTERN AU_EXPORT void
+VirtGpuConsolePresent(uint32_t* src, uint32_t src_pitch, int x, int y, int w, int h);
 
 #endif

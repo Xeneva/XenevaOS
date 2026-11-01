@@ -52,9 +52,9 @@ uint64_t AuPCIEGetDevice(uint16_t seg, int bus, int dev, int func) {
 	uint64_t addr = 0;
 	acpiMcfg* mcfg = AuACPIGetMCFG();
 	acpiMcfgAlloc* allocs = mem_after<acpiMcfgAlloc*>(mcfg);
-	if (allocs->startBusNum <= bus && bus <= allocs->endBusNum){
+	if (allocs->startBusNum <= bus && bus <= allocs->endBusNum) {
 		addr = allocs->baseAddress + ((static_cast<uint64_t>(bus) - allocs->startBusNum) << 20) |
-			(static_cast<uint64_t>(dev) << 15) | (static_cast<uint64_t>(func) << 12);
+			   (static_cast<uint64_t>(dev) << 15) | (static_cast<uint64_t>(func) << 12);
 		return addr;
 	}
 
@@ -74,11 +74,11 @@ uint32_t AuPCIERead(uint64_t device, int reg, int bus, int dev, int func) {
 		return 0; //<- return AuPCIRead
 
 	uint32_t address = 0;
-	acpiMcfg *mcfg = AuACPIGetMCFG();
+	acpiMcfg* mcfg = AuACPIGetMCFG();
 	acpiMcfgAlloc* allocs = mem_after<acpiMcfgAlloc*>(mcfg);
 	if (allocs->startBusNum <= bus && bus <= allocs->endBusNum)
-		address = allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (dev << 15) |
-		(func << 12);
+		address =
+			allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (dev << 15) | (func << 12);
 
 	uint64_t result = 0;
 	if (address == 0)
@@ -154,22 +154,19 @@ uint32_t AuPCIERead(uint64_t device, int reg, int bus, int dev, int func) {
 		break;
 	}
 
-	if (size == 1){
+	if (size == 1) {
 		result = *raw_offset<volatile uint8_t*>(device, reg);
 		return result;
-	}
-	else if (size == 2) {
+	} else if (size == 2) {
 		result = *raw_offset<volatile uint16_t*>(device, reg);
 		return result;
-	}
-	else if (size == 4) {
+	} else if (size == 4) {
 		result = *raw_offset<volatile uint32_t*>(device, reg);
 		return result;
 	}
 
 	return UINT32_MAX;
 }
-
 
 /*
  * AuPCIERead64 -- reads in 64
@@ -186,33 +183,29 @@ uint64_t AuPCIERead64(uint64_t device, int reg, int size, int bus, int dev, int 
 	}
 
 	size_t address = 0;
-	acpiMcfg *mcfg = AuACPIGetMCFG();
-	acpiMcfgAlloc *allocs = mem_after<acpiMcfgAlloc*>(mcfg);
+	acpiMcfg* mcfg = AuACPIGetMCFG();
+	acpiMcfgAlloc* allocs = mem_after<acpiMcfgAlloc*>(mcfg);
 	if (allocs->startBusNum <= bus && bus <= allocs->endBusNum)
-		address = allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (device << 15) | (func << 12);
+		address = allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (device << 15) |
+				  (func << 12);
 
 	if (address == 0)
 		return 0;
 
 	uint64_t result = 0;
 
-	if (size == 1){
+	if (size == 1) {
 		result = *raw_offset<volatile uint8_t*>(device, reg);
 		return result;
-	}
-	else if (size == 2) {
+	} else if (size == 2) {
 		result = *raw_offset<volatile uint16_t*>(device, reg);
 		return result;
-	}
-	else if (size == 4) {
+	} else if (size == 4) {
 		result = *raw_offset<volatile uint32_t*>(device, reg);
 		return result;
 	}
-
-
 	return UINT64_MAX;
 }
-
 
 /*
 * AuPCIEWrite -- writes to a register
@@ -230,11 +223,11 @@ void AuPCIEWrite(uint64_t device, int reg, uint32_t val, int bus, int dev, int f
 
 	size_t address = 0;
 
-	acpiMcfg *mcfg = AuACPIGetMCFG();
-	acpiMcfgAlloc *allocs = mem_after<acpiMcfgAlloc*>(mcfg);
+	acpiMcfg* mcfg = AuACPIGetMCFG();
+	acpiMcfgAlloc* allocs = mem_after<acpiMcfgAlloc*>(mcfg);
 	if (allocs->startBusNum <= bus && bus <= allocs->endBusNum)
-		address = allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (device << 15) | (func << 12);
-
+		address = allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (device << 15) |
+				  (func << 12);
 
 	if (address == 0)
 		return;
@@ -310,17 +303,14 @@ void AuPCIEWrite(uint64_t device, int reg, uint32_t val, int bus, int dev, int f
 		break;
 	}
 
-	if (size == 1){
+	if (size == 1) {
 		*raw_offset<volatile uint8_t*>(device, reg) = (uint8_t)val;
-	}
-	else if (size == 2) {
+	} else if (size == 2) {
 		*raw_offset<volatile uint16_t*>(device, reg) = (uint16_t)val;
-	}
-	else if (size == 4) {
+	} else if (size == 4) {
 		*raw_offset<volatile uint32_t*>(device, reg) = (uint32_t)val;
 	}
 }
-
 
 // {@private use|
 void AuPCIEWrite64(uint64_t device, int reg, int size, uint64_t val, int bus, int dev, int func) {
@@ -329,23 +319,20 @@ void AuPCIEWrite64(uint64_t device, int reg, int size, uint64_t val, int bus, in
 	}
 
 	size_t address = 0;
-	acpiMcfg *mcfg = AuACPIGetMCFG();
-	acpiMcfgAlloc *allocs = mem_after<acpiMcfgAlloc*>(mcfg);
+	acpiMcfg* mcfg = AuACPIGetMCFG();
+	acpiMcfgAlloc* allocs = mem_after<acpiMcfgAlloc*>(mcfg);
 	if (allocs->startBusNum <= bus && bus <= allocs->endBusNum)
-		address = allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (device << 15) | (func << 12) | (reg);
+		address = allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (device << 15) |
+				  (func << 12) | (reg);
 
-
-	if (size == 1){
+	if (size == 1) {
 		*raw_offset<volatile uint8_t*>(device, reg) = (uint8_t)val;
-	}
-	else if (size == 2) {
+	} else if (size == 2) {
 		*raw_offset<volatile uint16_t*>(device, reg) = (uint16_t)val;
-	}
-	else if (size == 4) {
+	} else if (size == 4) {
 		*raw_offset<volatile uint32_t*>(device, reg) = val;
 	}
 }
-
 
 /*
 * AuPCIEScanClass -- scans and return pcie device with given class code and sub class code
@@ -355,20 +342,21 @@ void AuPCIEWrite64(uint64_t device, int reg, int size, uint64_t val, int bus, in
 * @param dev -- address, where device number will be stored
 * @param func -- address, where function number will be stored
 */
-uint64_t AuPCIEScanClass(uint8_t classCode, uint8_t subClassCode, int *bus_, int *dev_, int *func_) {
+uint64_t
+AuPCIEScanClass(uint8_t classCode, uint8_t subClassCode, int* bus_, int* dev_, int* func_) {
 	if (!AuACPIPCIESupported()) {
 		return 0; //pci_scan_class(classCode, subClassCode);
 	}
 
-	acpiMcfg *mcfg = AuACPIGetMCFG();
-	acpiMcfgAlloc *allocs = mem_after<acpiMcfgAlloc*>(mcfg);
+	acpiMcfg* mcfg = AuACPIGetMCFG();
+	acpiMcfgAlloc* allocs = mem_after<acpiMcfgAlloc*>(mcfg);
 	uint16_t pciSegment = 0;
 	if (allocs->pciSegment <= 65535)
 		pciSegment = allocs->pciSegment;
 	else
 		pciSegment = 0;
 
-	for (int bus = 0; bus < allocs->endBusNum; bus++){
+	for (int bus = 0; bus < allocs->endBusNum; bus++) {
 		for (int dev = 0; dev < PCI_DEVICE_PER_BUS; dev++) {
 			for (int func = 0; func < PCI_FUNCTION_PER_DEVICE; func++) {
 				uint64_t address = AuPCIEGetDevice(pciSegment, bus, dev, func);
@@ -392,7 +380,6 @@ uint64_t AuPCIEScanClass(uint8_t classCode, uint8_t subClassCode, int *bus_, int
 	return 0xFFFFFFFF;
 }
 
-
 /*
 * AuPCIEScanClassIF -- scans and return pcie device with given class code and sub class code
 * @param classCode -- class code
@@ -402,20 +389,21 @@ uint64_t AuPCIEScanClass(uint8_t classCode, uint8_t subClassCode, int *bus_, int
 * @param func -- address, where function number will be stored
 * @param progIf -- Programming interface
 */
-uint64_t AuPCIEScanClassIF(uint8_t classCode, uint8_t subClassCode, uint8_t progIf, int *bus_, int *dev_, int *func_) {
+uint64_t AuPCIEScanClassIF(
+	uint8_t classCode, uint8_t subClassCode, uint8_t progIf, int* bus_, int* dev_, int* func_) {
 	if (!AuACPIPCIESupported()) {
 		return 0; //pci_scan_class(classCode, subClassCode);
 	}
 
-	acpiMcfg *mcfg = AuACPIGetMCFG();
-	acpiMcfgAlloc *allocs = mem_after<acpiMcfgAlloc*>(mcfg);
+	acpiMcfg* mcfg = AuACPIGetMCFG();
+	acpiMcfgAlloc* allocs = mem_after<acpiMcfgAlloc*>(mcfg);
 	uint16_t pciSegment = 0;
 	if (allocs->pciSegment <= 65535)
 		pciSegment = allocs->pciSegment;
 	else
 		pciSegment = 0;
 
-	for (int bus = 0; bus < allocs->endBusNum; bus++){
+	for (int bus = 0; bus < allocs->endBusNum; bus++) {
 		for (int dev = 0; dev < PCI_DEVICE_PER_BUS; dev++) {
 			for (int func = 0; func < PCI_FUNCTION_PER_DEVICE; func++) {
 				uint64_t address = AuPCIEGetDevice(pciSegment, bus, dev, func);
@@ -439,8 +427,6 @@ uint64_t AuPCIEScanClassIF(uint8_t classCode, uint8_t subClassCode, uint8_t prog
 
 	return 0xFFFFFFFF;
 }
-
-
 
 /*
 * AuPCIEAllocMSI -- Allocate MSI/MSI-X for interrupt
@@ -474,22 +460,17 @@ bool AuPCIEAllocMSI(uint64_t device, size_t vector, int bus, int dev, int func) 
 				uint64_t msi_data = 0;
 
 				uint64_t msi_addr = x86_64_cpu_msi_address(&msi_data, vector, 0, 1, 0);
-				
 
 				AuPCIEWrite64(device, capptr + 0x4, 4, msi_addr & UINT32_MAX, bus, dev, func);
 
 				if (bit64_cap) {
 					AuPCIEWrite64(device, capptr + 0x8, 4, msi_addr >> 32, bus, dev, func);
 					AuPCIEWrite64(device, capptr + 0xC, 2, msi_data & UINT16_MAX, bus, dev, func);
-				}
-				else
+				} else
 					AuPCIEWrite64(device, capptr + 0x8, 2, msi_data & UINT16_MAX, bus, dev, func);
-
 
 				if (maskcap)
 					AuPCIEWrite64(device, capptr + 0x10, 4, 0, bus, dev, func);
-
-
 
 				msctl |= 1;
 
@@ -505,7 +486,7 @@ bool AuPCIEAllocMSI(uint64_t device, size_t vector, int bus, int dev, int func) 
 				AuTextOut("MSI-X found \r\n");
 				break;
 			}
-			capptr = ((cap_reg >> 8) & 0xff);   //((cap_reg >> 8) & 0xFF) / 4;
+			capptr = ((cap_reg >> 8) & 0xff); //((cap_reg >> 8) & 0xFF) / 4;
 		}
 	}
 

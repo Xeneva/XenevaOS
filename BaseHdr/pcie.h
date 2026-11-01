@@ -40,31 +40,29 @@
 #endif
 #endif
 
+#define PCI_VENDOR_ID		0x00
+#define PCI_DEVICE_ID		0x02
+#define PCI_COMMAND			0x04
+#define PCI_STATUS			0x06
+#define PCI_REVISION_ID		0x08
+#define PCI_PROG_IF			0x09
+#define PCI_SUBCLASS		0x0a
+#define PCI_CLASS			0x0b
+#define PCI_CACHE_LINE_SIZE 0x0c
+#define PCI_LATENCY_TIMER	0x0d
+#define PCI_HEADER_TYPE		0x0e
+#define PCI_BIST			0x0f
+#define PCI_BAR0			0x10
+#define PCI_BAR1			0x14
+#define PCI_BAR2			0x18
+#define PCI_BAR3			0x1C
+#define PCI_BAR4			0x20
+#define PCI_BAR5			0x24
+#define PCI_INTERRUPT_LINE	0x3C
+#define PCI_INTERRUPT_PIN	0x3D
 
-#define PCI_VENDOR_ID  0x00
-#define PCI_DEVICE_ID  0x02
-#define PCI_COMMAND    0x04
-#define PCI_STATUS     0x06
-#define PCI_REVISION_ID  0x08
-#define PCI_PROG_IF      0x09
-#define PCI_SUBCLASS     0x0a
-#define PCI_CLASS   0x0b
-#define PCI_CACHE_LINE_SIZE   0x0c
-#define PCI_LATENCY_TIMER   0x0d
-#define PCI_HEADER_TYPE  0x0e
-#define PCI_BIST  0x0f
-#define PCI_BAR0  0x10
-#define PCI_BAR1  0x14
-#define PCI_BAR2  0x18
-#define PCI_BAR3  0x1C
-#define PCI_BAR4  0x20
-#define PCI_BAR5  0x24
-#define PCI_CAPABILITIES_PTR 0x34
-#define PCI_INTERRUPT_LINE  0x3C
-#define PCI_INTERRUPT_PIN  0x3D
-
-#define PCI_MAX_BUS 0x20
-#define PCI_DEVICE_PER_BUS 32
+#define PCI_MAX_BUS				0x20
+#define PCI_DEVICE_PER_BUS		32
 #define PCI_FUNCTION_PER_DEVICE 8
 
 /*
@@ -76,7 +74,6 @@
  */
 bool AuIsPCIeInitialized(void);
 
-
 /*
  * How many bus numbers the located ECAM window actually covers, in the
  * 1 MiB stride ECAM uses per bus; 0 when the window is unknown. The DCL
@@ -86,7 +83,6 @@ bool AuIsPCIeInitialized(void);
  * if they were devices.
  */
 extern int AuPCIEBusCount(void);
-
 
 /*
 * AuPCIEGetDevice -- gets a device address from its bus
@@ -117,7 +113,8 @@ AU_EXTERN AU_EXPORT bool AuPCIEAllocMSI(uint64_t device, size_t vector, int bus,
 * @param func -- address, where function number will be stored
 * @param progIf -- Programming interface
 */
-AU_EXTERN AU_EXPORT uint64_t AuPCIEScanClassIF(uint8_t classCode, uint8_t subClassCode, uint8_t progIf, int *bus_, int *dev_, int *func_);
+AU_EXTERN AU_EXPORT uint64_t AuPCIEScanClassIF(
+	uint8_t classCode, uint8_t subClassCode, uint8_t progIf, int* bus_, int* dev_, int* func_);
 
 /*
 * AuPCIEScanVendorDevice -- scans and return pcie device with given vendor id and device id
@@ -127,7 +124,8 @@ AU_EXTERN AU_EXPORT uint64_t AuPCIEScanClassIF(uint8_t classCode, uint8_t subCla
 * @param dev -- address, where device number will be stored
 * @param func -- address, where function number will be stored
 */
-AU_EXTERN AU_EXPORT uint64_t AuPCIEScanVendorDevice(uint16_t vendor, uint16_t device, int* bus_, int* dev_, int* func_);
+AU_EXTERN AU_EXPORT uint64_t
+AuPCIEScanVendorDevice(uint16_t vendor, uint16_t device, int* bus_, int* dev_, int* func_);
 
 /*
 * AuPCIEScanClass -- scans and return pcie device with given class code and sub class code
@@ -137,7 +135,8 @@ AU_EXTERN AU_EXPORT uint64_t AuPCIEScanVendorDevice(uint16_t vendor, uint16_t de
 * @param dev -- address, where device number will be stored
 * @param func -- address, where function number will be stored
 */
-AU_EXTERN AU_EXPORT uint64_t AuPCIEScanClass(uint8_t classCode, uint8_t subClassCode, int *bus_, int *dev_, int *func_);
+AU_EXTERN AU_EXPORT uint64_t
+AuPCIEScanClass(uint8_t classCode, uint8_t subClassCode, int* bus_, int* dev_, int* func_);
 
 /*
 * AuPCIEWrite -- writes to a register
@@ -148,7 +147,8 @@ AU_EXTERN AU_EXPORT uint64_t AuPCIEScanClass(uint8_t classCode, uint8_t subClass
 * @param dev -- device number
 * @param func -- func number
 */
-AU_EXTERN AU_EXPORT void AuPCIEWrite(uint64_t device, int reg, uint32_t val, int bus, int dev, int func);
+AU_EXTERN AU_EXPORT void
+AuPCIEWrite(uint64_t device, int reg, uint32_t val, int bus, int dev, int func);
 
 /*
 * AuPCIERead -- reads a register from pci express
@@ -169,11 +169,12 @@ AU_EXTERN AU_EXPORT uint32_t AuPCIERead(uint64_t device, int reg, int bus, int d
 * @param dev -- device number
 * @param func -- func number
 */
-AU_EXTERN AU_EXPORT uint64_t AuPCIERead64(uint64_t device, int reg, int size, int bus, int dev, int func);
-
+AU_EXTERN AU_EXPORT uint64_t
+AuPCIERead64(uint64_t device, int reg, int size, int bus, int dev, int func);
 
 // {@private use|
-AU_EXTERN AU_EXPORT void AuPCIEWrite64(uint64_t device, int reg, int size, uint64_t val, int bus, int dev, int func);
+AU_EXTERN AU_EXPORT void
+AuPCIEWrite64(uint64_t device, int reg, int size, uint64_t val, int bus, int dev, int func);
 
 /*
 * AuPCIEReadBAR -- resolves a BAR index to its mapped base address (handling
@@ -185,5 +186,6 @@ AU_EXTERN AU_EXPORT void AuPCIEWrite64(uint64_t device, int reg, int size, uint6
 * @param BAR -- BAR index (0-5)
 * @param barsz -- if non-null, receives the BAR's size in bytes
 */
-AU_EXTERN AU_EXPORT uint64_t AuPCIEReadBAR(uint64_t device, uint16_t bus, uint16_t dev, uint16_t func, size_t BAR, size_t* barsz);
+AU_EXTERN AU_EXPORT uint64_t AuPCIEReadBAR(
+	uint64_t device, uint16_t bus, uint16_t dev, uint16_t func, size_t BAR, size_t* barsz);
 #endif

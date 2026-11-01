@@ -47,8 +47,8 @@ The AArch64 LLVM/Clang work below is recorded alongside the previously documente
   (`KernelAA64/Mm/tlsf.c`)
 
 - **fix(Mm/tlsf)**: `tlsf_malloc()` removed the found free block from the
-  free-list bucket computed from the *requested* size instead of the block's
-  *actual* size. Since the search can (correctly) fall back to a larger
+  free-list bucket computed from the _requested_ size instead of the block's
+  _actual_ size. Since the search can (correctly) fall back to a larger
   bucket, this frequently removed from the wrong index — a silent no-op —
   leaving the block registered as free while already handed out, causing
   double-allocation on the next call. (`KernelAA64/Mm/tlsf.c`)

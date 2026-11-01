@@ -48,28 +48,26 @@
 #include "cmd2d.h"
 #include <aurora.h>
 
-#define VIRTIO_PCI_CAP_ID 0x09
 #define VIRTIO_PCI_CAP_COMMON_CFG 1
 #define VIRTIO_PCI_CAP_NOTIFY_CFG 2
 #define VIRTIO_PCI_CAP_DEVICE_CFG 4
 
-
 /** feature bits */
-#define VIRTIO_GPU_F_VIRGL (1ULL << 0) //virgl mode is supported
-#define VIRTIO_GPU_F_EDID  (1ULL << 1) //EDID is supported
-#define VIRTIO_GPU_F_RESOURCE_UUID (1ULL << 2) //assigning resources UUIDs 
+#define VIRTIO_GPU_F_VIRGL		   (1ULL << 0) //virgl mode is supported
+#define VIRTIO_GPU_F_EDID		   (1ULL << 1) //EDID is supported
+#define VIRTIO_GPU_F_RESOURCE_UUID (1ULL << 2) //assigning resources UUIDs
 #define VIRTIO_GPU_F_RESOURCE_BLOB (1ULL << 3) //creating and using size-based blob
-#define VIRTIO_GPU_F_CONTEXT_INIT (1ULL << 4) //multiple context types and sync timelines
-#define VIRTQ_DESC_F_NEXT  1
-#define VIRTQ_DESC_F_WRITE 2
+#define VIRTIO_GPU_F_CONTEXT_INIT  (1ULL << 4) //multiple context types and sync timelines
+#define VIRTQ_DESC_F_NEXT		   1
+#define VIRTQ_DESC_F_WRITE		   2
 
 /** static internal usable variables */
 static volatile uint8_t* notifyBase;
 static uint32_t notifyOffMultiplier;
 static bool _is_edid_supported;
 static bool _is_virgl_supported;
-static struct VirtioQueue *controlq;
-static struct VirtioQueue *cursorq;
+static struct VirtioQueue* controlq;
+static struct VirtioQueue* cursorq;
 static uint64_t controlq_phys;
 static uint64_t cursorq_phys;
 static void* command_phys;
@@ -93,36 +91,72 @@ AuVFSNode* fsnode;
 
 void gpu_reset_device(VirtioCommonCfg* cfg);
 
-static bool gpu_find_cap(uint64_t device, int bus, int dev, int func,
-	uint8_t cfg_type, uint8_t* out_bar, uint32_t* out_offset,
-	uint32_t* out_length, uint32_t* out_notify_multiplier) {
-	uint8_t ptr = (uint8_t)AuPCIERead64(device, PCI_CAPABILITIES_PTR, 1,
-		bus, dev, func);
-	for (unsigned count = 0; ptr && count < 48; count++) {
-		if (ptr < 0x40 || ptr > 0xFC || (ptr & 1))
+struct find_cap {
+	int bus;
+	int dev;
+	int func;
+	uint8_t cfg_type;
+	uint8_t out_bar;
+	uint32_t* out_offset;
+	uint32_t* out_len;
+	uint32_t* out_notify_multiplier;
+};
+
+// Reads the ECMA Config space .
+// Iterates over the PCI Config space and returns true and false if the gpu is found or not
+// The capabiliteis reside on a seprate address space outside the RAM called PCI Config space
+// Each Device has it's own 256 byte space in the Config space
+static bool gpu_find_cap(uint64_t device,
+						 int bus,
+						 int dev,
+						 int func,
+						 uint8_t cfg_type,
+						 uint8_t* out_bar,
+						 uint32_t* out_offset,
+						 uint32_t* out_length,
+						 uint32_t* out_notify_multiplier) {
+	constexpr int PCI_CAPABILITIES_PTR = 0x34;
+	// Reads the pointer to the capablities
+	// not really sure why the 0x34 is read first then iteration of the value happens
+	uint8_t ptr = (uint8_t)AuPCIERead64(device, PCI_CAPABILITIES_PTR, 1, bus, dev, func);
+	// Realistically it should panic at this point since the absence of this value should throw an error
+	if (ptr == NULL)
+		return false;
+
+	constexpr int NUM_CAP = 48;
+	// Capabilities start at the address 0x40
+	constexpr int PCI_HEADER_START = 0x40;
+	constexpr int PCI_HEADER_LIMIT = 0xFC;
+
+	for (unsigned count = 0; ptr && count < NUM_CAP; count++) {
+		if (ptr < PCI_HEADER_START || ptr > PCI_HEADER_LIMIT || (ptr & 1))
 			return false;
+
 		uint8_t id = (uint8_t)AuPCIERead64(device, ptr, 1, bus, dev, func);
-		uint8_t next = (uint8_t)AuPCIERead64(device, ptr + 1, 1,
-			bus, dev, func);
+		uint8_t next = (uint8_t)AuPCIERead64(device, ptr + 1, 1, bus, dev, func);
+
+		// 0x09 ID is for the virtio capability
+		constexpr int VIRTIO_PCI_CAP_ID = 0x09;
 		if (id == VIRTIO_PCI_CAP_ID) {
-			uint8_t length = (uint8_t)AuPCIERead64(device, ptr + 2, 1,
-				bus, dev, func);
-			if (length < 16 || ptr + length > 0x100)
+			// Again there needs to be a defense against any other type of value at this point
+			uint8_t length = (uint8_t)AuPCIERead64(device, ptr + 2, 1, bus, dev, func);
+
+			constexpr int VIRTIO_CAPABILITY_STRUCT_LEN = 16;
+			constexpr int VIRTIO_CAPABILITY_MAX_LEN = 0x100;
+			if (length < VIRTIO_CAPABILITY_STRUCT_LEN || ptr + length > VIRTIO_CAPABILITY_MAX_LEN)
 				return false;
-			uint8_t type = (uint8_t)AuPCIERead64(device, ptr + 3, 1,
-				bus, dev, func);
+
+			uint8_t type = (uint8_t)AuPCIERead64(device, ptr + 3, 1, bus, dev, func);
+
 			if (type == cfg_type) {
-				*out_bar = (uint8_t)AuPCIERead64(device, ptr + 4, 1,
-					bus, dev, func);
-				*out_offset = (uint32_t)AuPCIERead64(device, ptr + 8, 4,
-					bus, dev, func);
-				*out_length = (uint32_t)AuPCIERead64(device, ptr + 12, 4,
-					bus, dev, func);
+				*out_bar = (uint8_t)AuPCIERead64(device, ptr + 4, 1, bus, dev, func);
+				*out_offset = (uint32_t)AuPCIERead64(device, ptr + 8, 4, bus, dev, func);
+				*out_length = (uint32_t)AuPCIERead64(device, ptr + 12, 4, bus, dev, func);
 				if (out_notify_multiplier) {
 					if (length < 20)
 						return false;
-					*out_notify_multiplier = (uint32_t)AuPCIERead64(
-						device, ptr + 16, 4, bus, dev, func);
+					*out_notify_multiplier =
+						(uint32_t)AuPCIERead64(device, ptr + 16, 4, bus, dev, func);
 				}
 				return true;
 			}
@@ -132,13 +166,12 @@ static bool gpu_find_cap(uint64_t device, int bus, int dev, int func,
 	return false;
 }
 
-static void* gpu_map_cap(uint64_t device, int bus, int dev, int func,
-	uint8_t bar, uint32_t offset, uint32_t length) {
+static void* gpu_map_cap(
+	uint64_t device, int bus, int dev, int func, uint8_t bar, uint32_t offset, uint32_t length) {
 	size_t bar_size = 0;
-	uint64_t bar_base = AuPCIEReadBAR(device, (uint16_t)bus, (uint16_t)dev,
-		(uint16_t)func, bar, &bar_size);
-	if (!bar_base || !bar_size || !length || offset > bar_size ||
-		length > bar_size - offset)
+	uint64_t bar_base =
+		AuPCIEReadBAR(device, (uint16_t)bus, (uint16_t)dev, (uint16_t)func, bar, &bar_size);
+	if (!bar_base || !bar_size || !length || offset > bar_size || length > bar_size - offset)
 		return NULL;
 	uint64_t map_base = bar_base & ~(uint64_t)(PAGE_SIZE - 1);
 	uint64_t delta = bar_base - map_base;
@@ -160,7 +193,7 @@ AU_EXTERN AU_EXPORT int AuDriverUnload() {
 	 * paths that call the driver's hook directly. */
 	if (fsnode && fsnode->fileCopyCount) {
 		UARTDebugOut("[virtio-gpu]: unload blocked by %d open descriptor(s)\r\n",
-			(int)fsnode->fileCopyCount);
+					 (int)fsnode->fileCopyCount);
 		return -1;
 	}
 	/* Stop callbacks before resetting the device. In particular, the console
@@ -234,7 +267,6 @@ void gpu_reset_device(VirtioCommonCfg* cfg) {
  * @param cfg -- pointer to virtio common config
  */
 static bool gpu_feature_negotiate(VirtioCommonCfg* cfg) {
-
 	cfg->DevFeatureSelect = 0;
 	isb_flush();
 	dsb_ish();
@@ -270,7 +302,7 @@ static bool gpu_feature_negotiate(VirtioCommonCfg* cfg) {
 	cfg->GuestFeature = (guestfeatures >> 32) & UINT32_MAX;
 	isb_flush();
 	dsb_ish();
-	
+
 	cfg->DeviceStatus |= VIRTIO_STATUS_FEATURES_OK;
 	isb_flush();
 	dsb_ish();
@@ -318,7 +350,8 @@ static bool gpu_initialize_controlq(VirtioCommonCfg* cfg) {
 		return false;
 	}
 	controlq_sz = queueSz;
-	uint64_t queuePhys = (uint64_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL);//AuPmmngrAllocBlocks(((sizeof(struct VirtioQueue) * queueSz)) / 0x1000);
+	uint64_t queuePhys = (uint64_t)AuPmmngrAllocPage(
+		AURORA_PAGE_NORMAL); //AuPmmngrAllocBlocks(((sizeof(struct VirtioQueue) * queueSz)) / 0x1000);
 	if (!queuePhys || queuePhys == UINT64_MAX)
 		return false;
 	controlq = (struct VirtioQueue*)AuMapMMIO(queuePhys, 1);
@@ -330,8 +363,8 @@ static bool gpu_initialize_controlq(VirtioCommonCfg* cfg) {
 	memset((void*)controlq, 0, 0x1000);
 	UARTDebugOut("[virtio-gpu]: controlq size : %d \r\n", queueSz);
 	cfg->QueueDesc = queuePhys;
-	cfg->QueueAvail = (queuePhys)+OFFSETOF(struct VirtioQueue, available);
-	cfg->QueueUsed = (queuePhys)+OFFSETOF(struct VirtioQueue, used);
+	cfg->QueueAvail = (queuePhys) + OFFSETOF(struct VirtioQueue, available);
+	cfg->QueueUsed = (queuePhys) + OFFSETOF(struct VirtioQueue, used);
 	cfg->MSix = 0;
 	cfg->QueueMSixVector = 0;
 	cfg->QueueEnable = 1;
@@ -369,8 +402,8 @@ static bool gpu_initialize_cursorq(VirtioCommonCfg* cfg) {
 	memset((void*)cursorq, 0, 0x1000);
 	UARTDebugOut("[virtio-gpu]: controlq size : %d \r\n", queueSz);
 	cfg->QueueDesc = queuePhys;
-	cfg->QueueAvail = (queuePhys)+OFFSETOF(struct VirtioQueue, available);
-	cfg->QueueUsed = (queuePhys)+OFFSETOF(struct VirtioQueue, used);
+	cfg->QueueAvail = (queuePhys) + OFFSETOF(struct VirtioQueue, available);
+	cfg->QueueUsed = (queuePhys) + OFFSETOF(struct VirtioQueue, used);
 	cfg->MSix = 0;
 	cfg->QueueMSixVector = 0;
 	cfg->QueueEnable = 1;
@@ -392,7 +425,8 @@ void gpu_notify_queue(VirtioCommonCfg* cfg, uint16_t queueIdx) {
 	isb_flush();
 	dsb_ish();
 	uint16_t notify_off = cfg->QueueNotifyOff;
-	volatile uint16_t* notifyAddr = (volatile uint16_t*)((uint64_t)notifyBase + notify_off * notifyOffMultiplier);
+	volatile uint16_t* notifyAddr =
+		(volatile uint16_t*)((uint64_t)notifyBase + notify_off * notifyOffMultiplier);
 	*notifyAddr = queueIdx;
 	isb_flush();
 	dsb_ish();
@@ -410,7 +444,7 @@ void gpu_execute_command(VirtioCommonCfg* cfg, void* cmd, size_t len) {
 
 	controlq->buffers[index].Addr = (uint64_t)V2P((uint64_t)command_phys);
 	controlq->buffers[index].Length = len;
-    controlq->buffers[index].Flags = VIRTQ_DESC_F_NEXT;
+	controlq->buffers[index].Flags = VIRTQ_DESC_F_NEXT;
 	controlq->buffers[index].Next = (index + 1) % controlq_sz;
 
 	virtio_gpu_ctrl_hdr* resp = (virtio_gpu_ctrl_hdr*)resp_phys;
@@ -447,7 +481,8 @@ void gpu_execute_command(VirtioCommonCfg* cfg, void* cmd, size_t len) {
 		dc_ivac((uint64_t)resp_phys);
 	}
 	if (resp->type == 0)
-		UARTDebugOut("[virtio-gpu]: command timed out waiting for response, type=%x\r\n", resp->type);
+		UARTDebugOut("[virtio-gpu]: command timed out waiting for response, type=%x\r\n",
+					 resp->type);
 
 	memset(command_phys, 0, PAGE_SIZE);
 	_resp_ok = false;
@@ -462,7 +497,8 @@ void gpu_execute_command(VirtioCommonCfg* cfg, void* cmd, size_t len) {
  * @param req2 -- pointer to request command two
  * @param len2 -- request command two length
  */
-void gpu_attach_back_cmd(VirtioCommonCfg* cfg, void* req, uint32_t len1, void* req2, uint32_t len2) {
+void gpu_attach_back_cmd(
+	VirtioCommonCfg* cfg, void* req, uint32_t len1, void* req2, uint32_t len2) {
 	uint16_t idx = controlq->available.index % controlq_sz;
 	uint16_t idx1 = (uint16_t)((idx + 1) % controlq_sz);
 	uint16_t idx2 = (uint16_t)((idx + 2) % controlq_sz);
@@ -511,7 +547,6 @@ void gpu_attach_back_cmd(VirtioCommonCfg* cfg, void* req, uint32_t len1, void* r
 	_resp_ok = false;
 }
 
-
 /**
  * @brief gpu_allocate_resource_id -- allocates
  * resource for commands
@@ -558,7 +593,6 @@ void gpu_virt_interrupt(int spinum) {
 	}
 }
 
-
 /**
  * @brief virtio_gpu_iocontrol -- io control for virtio gpu
  * @param file -- Pointer to gpu file struct
@@ -585,7 +619,7 @@ int virtio_gpu_iocontrol(AuVFSNode* file, int code, void* arg) {
 		int w = ioctl->ulong_1 & UINT32_MAX;
 		int h = ioctl->ulong_2 & UINT32_MAX;
 		virt_gpu_transfer_to_host2d(_cfg, resourceID, x, y, w, h);
-		virt_gpu_flush_rect(_cfg, resourceID, x, y,w,h);
+		virt_gpu_flush_rect(_cfg, resourceID, x, y, w, h);
 		break;
 	}
 	case VIRTIO_GPU_FLUSH: {
@@ -641,18 +675,32 @@ AU_EXTERN AU_EXPORT int AuDriverMain(AuDriver* drv) {
 	uint8_t common_bar = 0, notify_bar = 0;
 	uint32_t common_offset = 0, common_length = 0;
 	uint32_t notify_offset = 0, notify_length = 0;
-	if (!gpu_find_cap(device, bus, dev, func, VIRTIO_PCI_CAP_COMMON_CFG,
-		&common_bar, &common_offset, &common_length, NULL) ||
-		!gpu_find_cap(device, bus, dev, func, VIRTIO_PCI_CAP_NOTIFY_CFG,
-		&notify_bar, &notify_offset, &notify_length, &notifyOffMultiplier) ||
+	if (!gpu_find_cap(device,
+					  bus,
+					  dev,
+					  func,
+					  VIRTIO_PCI_CAP_COMMON_CFG,
+					  &common_bar,
+					  &common_offset,
+					  &common_length,
+					  NULL) ||
+		!gpu_find_cap(device,
+					  bus,
+					  dev,
+					  func,
+					  VIRTIO_PCI_CAP_NOTIFY_CFG,
+					  &notify_bar,
+					  &notify_offset,
+					  &notify_length,
+					  &notifyOffMultiplier) ||
 		!notifyOffMultiplier) {
 		UARTDebugOut("[virtio-gpu]: required PCI capabilities missing\r\n");
 		return -1;
 	}
-	VirtioCommonCfg* cfg = (VirtioCommonCfg*)gpu_map_cap(device, bus, dev, func,
-		common_bar, common_offset, common_length);
-	notifyBase = (volatile uint8_t*)gpu_map_cap(device, bus, dev, func,
-		notify_bar, notify_offset, notify_length);
+	VirtioCommonCfg* cfg = (VirtioCommonCfg*)gpu_map_cap(
+		device, bus, dev, func, common_bar, common_offset, common_length);
+	notifyBase = (volatile uint8_t*)gpu_map_cap(
+		device, bus, dev, func, notify_bar, notify_offset, notify_length);
 	if (!cfg || !notifyBase) {
 		UARTDebugOut("[virtio-gpu]: failed to map required PCI capabilities\r\n");
 		return -1;
@@ -700,7 +748,7 @@ AU_EXTERN AU_EXPORT int AuDriverMain(AuDriver* drv) {
 	KERNEL_BOOT_INFO* binfo = AuGetBootInfoStruc();
 	if (binfo && (uint64_t)binfo < KERNEL_BASE_ADDRESS) {
 		UARTDebugOut("[virtio-gpu]: ignoring invalid low boot-info pointer %x\r\n",
-			(uint64_t)binfo);
+					 (uint64_t)binfo);
 		binfo = NULL;
 	}
 	uint32_t gpu_w = 1024;
@@ -734,16 +782,16 @@ AU_EXTERN AU_EXPORT int AuDriverMain(AuDriver* drv) {
 	mask_irqs();
 
 	AuVFSNode* devfs = AuVFSFind("/dev");
-	if (!devfs) 
+	if (!devfs)
 		return 0;
-	
+
 	/* avoiding using pipe for latency issue */
 	AuVFSNode* node = (AuVFSNode*)kmalloc(sizeof(AuVFSNode));
 	memset(node, 0, sizeof(AuVFSNode));
 	strcpy(node->filename, "virtiogpu");
 	node->flags |= FS_FLAG_DEVICE;
 	node->device = cfg;
-	node->read = 0; // AuDevInputMiceRead;
+	node->read = 0;	 // AuDevInputMiceRead;
 	node->write = 0; // AuDevInputMiceWrite;
 	node->open = 0;
 	node->close = 0;
@@ -753,7 +801,6 @@ AU_EXTERN AU_EXPORT int AuDriverMain(AuDriver* drv) {
 	UARTDebugOut("[virtio_gpu]: registered to device file system \r\n");
 	return 0;
 }
-
 
 /**
  * @brief gpu_get_config_pointer -- return the pointer
