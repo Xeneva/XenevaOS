@@ -3,14 +3,14 @@
 # Builds quickjs.c + siblings (vendored under src/) into libquickjs.a with the
 # same LLVM flags as the other PE/COFF ports (CssLibs, mbedtls). Port glue:
 #  - port/port.c (built here) replaces the original hand-built os.o with
-#    compiled equivalents: _msize via dlmalloc, clock_gettime, a full UTC
-#    gmtime/localtime and no-op pthread_cond_* (single JS thread).
+#    compiled equivalents: _msize via dlmalloc, clock_gettime and a full
+#    UTC gmtime/localtime.
 #  - QuickJS math now resolves to XEClib's musl libm (double and float);
 #    the old port/libm.c gap-filler and port/math.h shim are gone.
 #  - 128-bit division helpers now come from Ports/compiler-rt; the old
 #    checked-in port/int128.o workaround is gone.
-# Port shims for libc headers quickjs.c needs (time, pthread) live in
-# port/*.h and shadow the XEClib ones for this library only.
+# Port shims for libc headers quickjs.c needs (time) live in port/*.h and
+# shadow the XEClib ones for this library only.
 
 LLVM_TARGET = -target aarch64-unknown-windows
 CROSS_COMPILE ?= aarch64-linux-gnu-

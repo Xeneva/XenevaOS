@@ -85,6 +85,7 @@
 #define SYS_THREAD_WAIT_FOR_TERMINATION 81
 #define SYS_KERNEL_UNAME				82
 #define SYS_FILE_POLL					83
+#define SYS_FUTEX						94
 
 /* Extended native socket ABI. 84..178 stay reserved so older binaries
  * keep their numbers stable. */

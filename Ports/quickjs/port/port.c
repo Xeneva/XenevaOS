@@ -1,14 +1,13 @@
 /**
- * Port glue for QuickJS on XenevaOS (single-threaded).
+ * Port glue for QuickJS on XenevaOS.
  *
  * libc bits quickjs.c needs that XEClib does not provide, following the
- * original os.o semantics (_msize via dlmalloc, no-op pthread cond vars,
+ * original os.o semantics (_msize via dlmalloc, real pthread cond vars,
  * UTC local time) but completing them so the port builds from source:
  *  - _msize -> dlmalloc_usable_size (quickjs bookkeeping query)
  *  - clock_gettime for CLOCK_REALTIME/MONOTONIC via kernel wallclock/ms
  *  - a full gmtime/localtime (UTC) so struct tm is deterministic
  *    (XEClib's lacks tm_gmtoff/tm_zone -> quickjs Date would read slack)
- *  - pthread_cond_* as no-ops: there is one JS thread on Xeneva
  */
 
 #include <time.h>
@@ -156,44 +155,6 @@ time_t time(time_t* t) {
 
 double difftime(time_t a, time_t b) {
 	return (double)((long long)a - (long long)b);
-}
-
-/* ------------------------------------------------------------------ */
-/* pthread cond no-ops (single JS thread)                              */
-/* ------------------------------------------------------------------ */
-
-int pthread_cond_init(pthread_cond_t* c, const pthread_condattr_t* a) {
-	(void)c;
-	(void)a;
-	return 0;
-}
-
-int pthread_cond_destroy(pthread_cond_t* c) {
-	(void)c;
-	return 0;
-}
-
-int pthread_cond_signal(pthread_cond_t* c) {
-	(void)c;
-	return 0;
-}
-
-int pthread_cond_broadcast(pthread_cond_t* c) {
-	(void)c;
-	return 0;
-}
-
-int pthread_cond_wait(pthread_cond_t* c, int volatile* m) {
-	(void)c;
-	(void)m;
-	return 0;
-}
-
-int pthread_cond_timedwait(pthread_cond_t* c, int volatile* m, const struct timespec* ts) {
-	(void)c;
-	(void)m;
-	(void)ts;
-	return 0;
 }
 
 #ifdef __cplusplus

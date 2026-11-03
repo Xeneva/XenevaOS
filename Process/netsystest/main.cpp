@@ -55,6 +55,7 @@
 #include <https.h>
 #include <math.h>
 #include <fenv.h>
+#include <pthread.h>
 #include <zlib.h>
 #include <brotli/decode.h>
 #include <mbedtls/aes.h>
@@ -4556,6 +4557,235 @@ static void test_easylibs(void) {
 }
 
 
+/* ------------------------------------------------------------------ */
+/* pthread: native Xeneva threads with futex-backed synchronisation   */
+/* ------------------------------------------------------------------ */
+
+static pthread_mutex_t g_pthread_mutex = PTHREAD_MUTEX_INITIALIZER;
+static volatile int g_pthread_counter;
+
+static void* pthread_mutex_worker(void* arg) {
+	for (int i = 0; i < 400; i++) {
+		pthread_mutex_lock(&g_pthread_mutex);
+		int v = g_pthread_counter;
+		for (volatile int spin = 0; spin < 40; spin++) {
+		}
+		g_pthread_counter = v + 1;
+		pthread_mutex_unlock(&g_pthread_mutex);
+	}
+	return arg;
+}
+
+static pthread_mutex_t g_pthread_cond_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_pthread_cond = PTHREAD_COND_INITIALIZER;
+static volatile int g_pthread_cond_ready;
+static volatile int g_pthread_cond_go;
+
+static void pthread_abs_after_ms(struct timespec* ts, int ms) {
+	int64_t sec = 0;
+	int64_t nsec = 0;
+	_KeGetWalltime(&sec, &nsec);
+	nsec += (int64_t)ms * 1000000LL;
+	sec += nsec / 1000000000LL;
+	nsec %= 1000000000LL;
+	ts->tv_sec = (time_t)sec;
+	ts->tv_nsec = (long)nsec;
+}
+
+static void* pthread_cond_worker(void* arg) {
+	pthread_mutex_lock(&g_pthread_cond_mutex);
+	g_pthread_cond_ready = 1;
+	while (!g_pthread_cond_go) {
+		struct timespec deadline;
+		pthread_abs_after_ms(&deadline, 2000);
+		if (pthread_cond_timedwait(&g_pthread_cond, &g_pthread_cond_mutex,
+								   &deadline) == ETIMEDOUT)
+			break;
+	}
+	int go = g_pthread_cond_go;
+	pthread_mutex_unlock(&g_pthread_cond_mutex);
+	return go ? arg : NULL;
+}
+
+static pthread_rwlock_t g_pthread_rw = PTHREAD_RWLOCK_INITIALIZER;
+static volatile int g_pthread_rw_reader;
+static volatile int g_pthread_rw_writer;
+
+static void* pthread_rw_reader_worker(void* arg) {
+	(void)arg;
+	g_pthread_rw_reader = pthread_rwlock_tryrdlock(&g_pthread_rw);
+	if (g_pthread_rw_reader == 0)
+		pthread_rwlock_unlock(&g_pthread_rw);
+	return NULL;
+}
+
+static void* pthread_rw_writer_worker(void* arg) {
+	(void)arg;
+	g_pthread_rw_writer = pthread_rwlock_trywrlock(&g_pthread_rw);
+	if (g_pthread_rw_writer == 0)
+		pthread_rwlock_unlock(&g_pthread_rw);
+	return NULL;
+}
+
+static pthread_once_t g_pthread_once = PTHREAD_ONCE_INIT;
+static volatile int g_pthread_once_count;
+
+static void pthread_once_body(void) {
+	g_pthread_once_count++;
+}
+
+static void* pthread_once_worker(void* arg) {
+	pthread_once(&g_pthread_once, pthread_once_body);
+	return arg;
+}
+
+static pthread_key_t g_pthread_key;
+static volatile int g_pthread_key_dtor;
+
+static void pthread_key_destructor(void* value) {
+	if (value == (void*)(uintptr_t)0x55)
+		g_pthread_key_dtor++;
+}
+
+static void* pthread_key_worker(void* arg) {
+	pthread_setspecific(g_pthread_key, (const void*)(uintptr_t)0x55);
+	return arg;
+}
+
+static void test_pthread(void) {
+	uint64_t t0 = now_us();
+	pthread_t a;
+	pthread_t b;
+	void* ra = NULL;
+	void* rb = NULL;
+
+	/* Contended increments: without a real lock this loses updates. */
+	int ca = pthread_create(&a, NULL, pthread_mutex_worker, (void*)(uintptr_t)0x11);
+	int cb = pthread_create(&b, NULL, pthread_mutex_worker, (void*)(uintptr_t)0x22);
+	int ja = ca == 0 ? pthread_join(a, &ra) : -1;
+	int jb = cb == 0 ? pthread_join(b, &rb) : -1;
+	rec("pthread.mutex.contend",
+		ca == 0 && cb == 0 && ja == 0 && jb == 0 &&
+			g_pthread_counter == 800 &&
+			ra == (void*)(uintptr_t)0x11 && rb == (void*)(uintptr_t)0x22,
+		g_pthread_counter, now_us() - t0);
+
+	/* trylock must report EBUSY while this thread owns the mutex. */
+	pthread_mutex_lock(&g_pthread_mutex);
+	int tr = pthread_mutex_trylock(&g_pthread_mutex);
+	pthread_mutex_unlock(&g_pthread_mutex);
+	rec("pthread.mutex.trylock", tr == EBUSY, tr, 0);
+
+	/* Recursive mutex: two locks, two unlocks, no self-deadlock. */
+	{
+		pthread_mutexattr_t attr;
+		pthread_mutex_t mutex;
+		int ir = pthread_mutexattr_init(&attr);
+		int it = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+		int im = pthread_mutex_init(&mutex, &attr);
+		int l1 = pthread_mutex_lock(&mutex);
+		int l2 = pthread_mutex_lock(&mutex);
+		int u1 = pthread_mutex_unlock(&mutex);
+		int u2 = pthread_mutex_unlock(&mutex);
+		rec("pthread.mutex.recursive",
+			ir == 0 && it == 0 && im == 0 && l1 == 0 && l2 == 0 &&
+				u1 == 0 && u2 == 0,
+			l1 + l2 + u1 + u2, 0);
+		pthread_mutex_destroy(&mutex);
+		pthread_mutexattr_destroy(&attr);
+	}
+
+	/* Condvar wait/signal and timedwait timeout. */
+	g_pthread_cond_ready = 0;
+	g_pthread_cond_go = 0;
+	t0 = now_us();
+	ca = pthread_create(&a, NULL, pthread_cond_worker, (void*)(uintptr_t)0xc0);
+	_KeProcessSleep(100);
+	int saw_ready = g_pthread_cond_ready;
+	pthread_mutex_lock(&g_pthread_cond_mutex);
+	g_pthread_cond_go = 1;
+	int sr = pthread_cond_signal(&g_pthread_cond);
+	pthread_mutex_unlock(&g_pthread_cond_mutex);
+	ja = ca == 0 ? pthread_join(a, &ra) : -1;
+	rec("pthread.cond.wait.signal",
+		ca == 0 && saw_ready && sr == 0 && ja == 0 &&
+			ra == (void*)(uintptr_t)0xc0,
+		(int)(now_us() - t0), now_us() - t0);
+
+	{
+		struct timespec deadline;
+		pthread_abs_after_ms(&deadline, 70);
+		pthread_mutex_lock(&g_pthread_cond_mutex);
+		t0 = now_us();
+		int wr = pthread_cond_timedwait(&g_pthread_cond, &g_pthread_cond_mutex, &deadline);
+		uint64_t dt = now_us() - t0;
+		pthread_mutex_unlock(&g_pthread_cond_mutex);
+		rec("pthread.cond.timedwait", wr == ETIMEDOUT && dt >= 30000 && dt < 200000,
+			wr, dt);
+	}
+
+	/* Readers may share; a writer excludes readers and other writers. */
+	int ri = pthread_rwlock_init(&g_pthread_rw, NULL);
+	g_pthread_rw_reader = 123;
+	pthread_rwlock_rdlock(&g_pthread_rw);
+	ca = pthread_create(&a, NULL, pthread_rw_reader_worker, NULL);
+	ja = ca == 0 ? pthread_join(a, NULL) : -1;
+	int rd_shared = g_pthread_rw_reader == 0;
+	pthread_rwlock_unlock(&g_pthread_rw);
+	rec("pthread.rwlock.readers", ri == 0 && ja == 0 && rd_shared,
+		g_pthread_rw_reader, 0);
+
+	g_pthread_rw_reader = 123;
+	pthread_rwlock_wrlock(&g_pthread_rw);
+	ca = pthread_create(&a, NULL, pthread_rw_reader_worker, NULL);
+	ja = ca == 0 ? pthread_join(a, NULL) : -1;
+	int rd_blocked = g_pthread_rw_reader == EBUSY;
+	pthread_rwlock_unlock(&g_pthread_rw);
+	rec("pthread.rwlock.writer.excludes", ja == 0 && rd_blocked,
+		g_pthread_rw_reader, 0);
+
+	g_pthread_rw_writer = 123;
+	pthread_rwlock_rdlock(&g_pthread_rw);
+	ca = pthread_create(&a, NULL, pthread_rw_writer_worker, NULL);
+	ja = ca == 0 ? pthread_join(a, NULL) : -1;
+	int wr_blocked = g_pthread_rw_writer == EBUSY;
+	pthread_rwlock_unlock(&g_pthread_rw);
+	rec("pthread.rwlock.reader.excludes", ja == 0 && wr_blocked,
+		g_pthread_rw_writer, 0);
+	pthread_rwlock_destroy(&g_pthread_rw);
+
+	/* pthread_once must run the body exactly once across two threads. */
+	g_pthread_once_count = 0;
+	ca = pthread_create(&a, NULL, pthread_once_worker, NULL);
+	cb = pthread_create(&b, NULL, pthread_once_worker, NULL);
+	ja = ca == 0 ? pthread_join(a, NULL) : -1;
+	jb = cb == 0 ? pthread_join(b, NULL) : -1;
+	rec("pthread.once", ca == 0 && cb == 0 && ja == 0 && jb == 0 &&
+							g_pthread_once_count == 1,
+		g_pthread_once_count, 0);
+
+	/* Key value followed by the destructor on thread exit. */
+	g_pthread_key_dtor = 0;
+	if (pthread_key_create(&g_pthread_key, pthread_key_destructor) == 0) {
+		ca = pthread_create(&a, NULL, pthread_key_worker, NULL);
+		ja = ca == 0 ? pthread_join(a, NULL) : -1;
+		pthread_setspecific(g_pthread_key, (const void*)(uintptr_t)0x33);
+		int main_key = pthread_getspecific(g_pthread_key) == (void*)(uintptr_t)0x33;
+		rec("pthread.key", ca == 0 && ja == 0 && main_key && g_pthread_key_dtor == 1,
+			g_pthread_key_dtor, 0);
+		pthread_key_delete(g_pthread_key);
+	} else {
+		rec("pthread.key", 0, -1, 0);
+	}
+
+	pthread_t self = pthread_self();
+	rec("pthread.self",
+		self.data != NULL && self.id == (uint32_t)gettid() &&
+			pthread_equal(self, pthread_self()),
+		(int)self.id, 0);
+}
+
+
 int main(int argc, char** argv) {
 	int poweroff = 0;
 
@@ -4594,6 +4824,7 @@ int main(int argc, char** argv) {
 	test_inet_pton6();
 	test_netlibs();
 	test_easylibs();
+	test_pthread();
 	test_real_network();
 	test_https();
 	test_perf_tcp_1m();

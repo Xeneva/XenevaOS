@@ -46,6 +46,7 @@
 #include <signal.h>
 #include <timer.h>
 #include <Sync/spinlock.h>
+#include <Sync/futex.h>
 #include <Serv/sysserv.h>
 
 extern void aa64_store_context(AA64Thread* thr);
@@ -429,6 +430,22 @@ void AuHandleSleepThreads() {
 			sleep_thr->sleepQuanta = 0;
 		if (sleep_thr->sleepQuanta == 0) {
 			//settimerdebug();
+			/* A timed futex waiter that reaches its deadline must resume
+			 * with its ABI's ETIMEDOUT.  The value was selected when the
+			 * thread blocked (futex_result); claim futex_waiting atomically
+			 * so a wake racing this tick either wins (and sets 0) or loses
+			 * (and leaves the timeout result alone). */
+			if (__atomic_exchange_n(&sleep_thr->futex_waiting, 0,
+									__ATOMIC_ACQ_REL)) {
+				if (sleep_thr->futex_result == 0)
+					sleep_thr->futex_result = -AU_FUTEX_ETIMEDOUT;
+				if (sleep_thr->futex_frame_valid && sleep_thr->sp) {
+					AA64Registers* frame = (AA64Registers*)sleep_thr->sp;
+					frame->x0 = (uint64_t)(int64_t)sleep_thr->futex_result;
+					frame->x6 = (uint64_t)(int64_t)sleep_thr->futex_result;
+					sleep_thr->futex_frame_valid = 0;
+				}
+			}
 			if (sleep_thr->state != THREAD_STATE_LEFT_IN_KERNEL)
 				sleep_thr->state = THREAD_STATE_READY;
 			schedUnlink(&sleep_thr_head, &sleep_thr_last, sleep_thr);
@@ -471,6 +488,16 @@ void AuScheduleThread(AA64Registers* regs) {
 	 * so i treat this frame as the only valid resume point for a preempted
 	 * thread, not a C call frame and not originalKSp --axiss */
 	runThr->sp = (uint64_t)regs;
+	/* A futex waiter is resumed by aa64_resume_exception_frame straight to
+	 * EL0, so the only chance to publish its syscall result is the saved
+	 * SVC frame.  futex_active covers a wake that raced the store; later
+	 * wakes patch the frame directly through futex_frame_valid. */
+	if (runThr->futex_active) {
+		regs->x0 = (uint64_t)(int64_t)runThr->futex_result;
+		regs->x6 = (uint64_t)(int64_t)runThr->futex_result;
+		runThr->futex_frame_valid = 1;
+		runThr->futex_active = 0;
+	}
 	runThr->elr_el1 = read_elr_el1();
 	runThr->spsr_el1 = read_spsr_el1();
 	runThr->x0 = regs->x0;
