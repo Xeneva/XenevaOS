@@ -31,6 +31,7 @@
 
 #include "listview.h"
 #include <arm_neon.h>
+#include <sys/_keproc.h>
 
 #define LV_COLOR_BG				0xFF1E1E1E
 #define LV_COLOR_TEXT			0xFFE0E0E0
@@ -82,6 +83,7 @@ ListView* ChListViewCreate(int x, int y, int w, int h, int itemHeight) {
 	lv->base.y = y;
 	lv->base.w = w;
 	lv->base.h = h;
+	lv->base.visible = true;
 	lv->base.ChPaintHandler = ListViewDraw;
 	lv->base.ChMouseEvent = ListViewMouseEvent;
 
@@ -95,6 +97,9 @@ ListView* ChListViewCreate(int x, int y, int w, int h, int itemHeight) {
 	lv->prev_scroll_x = -1;
 	lv->prev_scroll_y = -1;
 	lv->force_full_redraw = true;
+	lv->onItemAction = NULL;
+	lv->last_click_tick = 0;
+	lv->last_click_row = -1;
 
 	lv->itemCapacity = 32;
 	lv->item = (ListItem*)malloc(sizeof(ListItem) * lv->itemCapacity);
@@ -190,22 +195,39 @@ void ListViewRemoveItem(ListView* lv, int index) {
 void ListViewClear(ListView* lv) {
 	lv->itemCount = 0;
 	lv->selectedIndex = -1;
+	lv->last_click_row = -1;
 	lv->scroll_y = 0;
 	lv->scroll_x = 0;
 	lv->force_full_redraw = true;
 	lv_recalc_content_metric(lv);
 }
 
+ListItem* ListViewGetSelectedItem(ListView* lv) {
+	if (!lv)
+		return NULL;
+	if (lv->selectedIndex >= 0 && lv->selectedIndex < lv->itemCount)
+		return &lv->item[lv->selectedIndex];
+	return NULL;
+}
+
+void ListViewSetActionHandler(
+	ListView* lv, void (*handler)(ListView* lv, int index, ListItem* item)) {
+	if (lv)
+		lv->onItemAction = handler;
+}
+
 void OnListViewScroll(ChWidget* wid, ChWindow* win, int currentVal, uint8_t orientation) {
 	ChScrollBar* sb = (ChScrollBar*)wid;
 	ListView* lv = (ListView*)sb->attachedTo;
 	lv->scroll_y = currentVal;
+	lv->force_full_redraw = true;
 }
 
 void OnListViewHScroll(ChWidget* wid, ChWindow* win, int currentVal, uint8_t orientation) {
 	ChScrollBar* sb = (ChScrollBar*)wid;
 	ListView* lv = (ListView*)sb->attachedTo;
 	lv->scroll_x = currentVal;
+	lv->force_full_redraw = true;
 }
 
 #define BASELINE_RATIO_NUM 4
@@ -531,6 +553,12 @@ static void _draw_column_strip(ListView* lv, ChWindow* win, int strip_x_local, i
 }
 
 static void _lv_draw_single_row_(ListView* lv, ChWindow* win, int index, ChRect* out_rect) {
+	if (out_rect) {
+		out_rect->x = 0;
+		out_rect->y = 0;
+		out_rect->w = 0;
+		out_rect->h = 0;
+	}
 	if (index < 0 || index >= lv->itemCount)
 		return;
 
@@ -761,6 +789,35 @@ static int lv_is_over_header(ListView* lv, ChWindow* win, int mx, int my) {
 
 void ListViewMouseEvent(ChWidget* wid, ChWindow* win, int mx, int my, int button) {
 	ListView* lv = (ListView*)wid;
+
+	if (button == DEODHAI_MOUSE_MSG_SCROLL_UP || button == DEODHAI_MOUSE_MSG_SCROLL_DOWN) {
+		int max_scroll = lv->content_height - lv->viewport_height;
+		if (max_scroll < 0)
+			max_scroll = 0;
+		int step = lv->itemHeight * 3;
+		if (step < 24)
+			step = 24;
+
+		int old_scroll = lv->scroll_y;
+		if (button == DEODHAI_MOUSE_MSG_SCROLL_UP) {
+			lv->scroll_y -= step;
+			if (lv->scroll_y < 0)
+				lv->scroll_y = 0;
+		} else {
+			lv->scroll_y += step;
+			if (lv->scroll_y > max_scroll)
+				lv->scroll_y = max_scroll;
+		}
+
+		if (lv->scroll_y != old_scroll) {
+			ChScrollBarSetValue(&lv->vscroll, lv->scroll_y);
+			lv->force_full_redraw = true;
+			ListViewDraw(wid, win);
+			ChWindowUpdate(win, lv->base.x, lv->base.y, lv->base.w, lv->base.h, 0, 1);
+		}
+		return;
+	}
+
 	uint8_t was_down = lv->prev_button;
 	uint8_t is_down = (button != 0);
 
@@ -787,18 +844,32 @@ void ListViewMouseEvent(ChWidget* wid, ChWindow* win, int mx, int my, int button
 	}
 
 	if (lv_is_over_vscrollbar(lv, win, mx, my) || lv->vscroll.state == SB_STATE_DRAGGING) {
+		int old_val = lv->vscroll.currentValue;
+		uint8_t old_state = lv->vscroll.state;
 		if (lv->vscroll.base.ChMouseEvent)
 			lv->vscroll.base.ChMouseEvent((ChWidget*)&lv->vscroll, win, mx, my, button);
-		ListViewDraw(wid, win);
-		ChWindowUpdate(win, lv->base.x, lv->base.y, lv->base.w, lv->base.h, 0, 1);
+		if (lv->vscroll.currentValue != old_val || lv->vscroll.state != old_state || is_down != was_down) {
+			lv->scroll_y = lv->vscroll.currentValue;
+			lv->force_full_redraw = true;
+			ListViewDraw(wid, win);
+			ChWindowUpdate(win, lv->base.x, lv->base.y, lv->base.w, lv->base.h, 0, 1);
+		}
+		lv->prev_button = is_down;
 		return;
 	}
 
 	if (lv_is_over_hscrollbar(lv, win, mx, my) || lv->hscroll.state == SB_STATE_DRAGGING) {
+		int old_val = lv->hscroll.currentValue;
+		uint8_t old_state = lv->hscroll.state;
 		if (lv->hscroll.base.ChMouseEvent)
 			lv->hscroll.base.ChMouseEvent((ChWidget*)&lv->hscroll, win, mx, my, button);
-		ListViewDraw(wid, win);
-		ChWindowUpdate(win, lv->base.x, lv->base.y, lv->base.w, lv->base.h, 0, 1);
+		if (lv->hscroll.currentValue != old_val || lv->hscroll.state != old_state || is_down != was_down) {
+			lv->scroll_x = lv->hscroll.currentValue;
+			lv->force_full_redraw = true;
+			ListViewDraw(wid, win);
+			ChWindowUpdate(win, lv->base.x, lv->base.y, lv->base.w, lv->base.h, 0, 1);
+		}
+		lv->prev_button = is_down;
 		return;
 	}
 
@@ -820,19 +891,36 @@ void ListViewMouseEvent(ChWidget* wid, ChWindow* win, int mx, int my, int button
 	int row = lv_row_at(lv, win, mx, my);
 
 	if (!was_down && is_down) {
+		size_t now = _KeGetSystemTimerTick();
+		bool is_dbl_click = (button == DEODHAI_MESSAGE_MOUSE_DBLCLK) ||
+							(row != -1 && row == lv->last_click_row && (now - lv->last_click_tick) < 500);
+		lv->last_click_tick = now;
+		lv->last_click_row = row;
+
 		if (row != -1 && row != lv->selectedIndex) {
 			int old_selected = lv->selectedIndex;
 			lv->selectedIndex = row;
 			lv->force_full_redraw = true;
-			//(lv->onselect) call it
 			ChRect dirty;
 			if (old_selected != -1) {
+				memset(&dirty, 0, sizeof(dirty));
 				_lv_draw_single_row_(lv, win, old_selected, &dirty);
-				ChWindowUpdate(win, dirty.x, dirty.y, dirty.w, dirty.h, 0, 1);
+				if (dirty.w > 0 && dirty.h > 0)
+					ChWindowUpdate(win, dirty.x, dirty.y, dirty.w, dirty.h, 0, 1);
 			}
+			memset(&dirty, 0, sizeof(dirty));
 			_lv_draw_single_row_(lv, win, row, &dirty);
-			ChWindowUpdate(win, dirty.x, dirty.y, dirty.w, dirty.h, 0, 1);
+			if (dirty.w > 0 && dirty.h > 0)
+				ChWindowUpdate(win, dirty.x, dirty.y, dirty.w, dirty.h, 0, 1);
 		}
+
+		if (is_dbl_click && row != -1) {
+			if (lv->onItemAction)
+				lv->onItemAction(lv, row, &lv->item[row]);
+			lv->prev_button = is_down;
+			return;
+		}
+
 		lv->prev_button = is_down;
 		return;
 	}
@@ -841,17 +929,20 @@ void ListViewMouseEvent(ChWidget* wid, ChWindow* win, int mx, int my, int button
 		if (row != lv->hoverIndex) {
 			int old_hover = lv->hoverIndex;
 			lv->hoverIndex = row;
-			//	lv->force_full_redraw = true;
-			//ListViewDraw(wid, win);
-			//ChWindowUpdate(win, lv->base.x, lv->base.y, lv->base.w, lv->base.h, 0, 1);
 			ChRect dirty;
 			if (old_hover != -1) {
+				memset(&dirty, 0, sizeof(dirty));
 				_lv_draw_single_row_(lv, win, old_hover, &dirty);
-				ChWindowUpdate(win, dirty.x, dirty.y, dirty.w, dirty.h, 0, 1);
+				if (dirty.w > 0 && dirty.h > 0)
+					ChWindowUpdate(win, dirty.x, dirty.y, dirty.w, dirty.h, 0, 1);
 			}
 
-			_lv_draw_single_row_(lv, win, row, &dirty);
-			ChWindowUpdate(win, dirty.x, dirty.y, dirty.w, dirty.h, 0, 1);
+			if (row != -1) {
+				memset(&dirty, 0, sizeof(dirty));
+				_lv_draw_single_row_(lv, win, row, &dirty);
+				if (dirty.w > 0 && dirty.h > 0)
+					ChWindowUpdate(win, dirty.x, dirty.y, dirty.w, dirty.h, 0, 1);
+			}
 		}
 	}
 

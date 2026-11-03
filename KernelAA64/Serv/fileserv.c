@@ -617,8 +617,29 @@ int OpenDir(char* filename) {
 	AuVFSNode* dirfile = NULL;
 	if (!fsys)
 		return -1;
+
+	char* path_to_open = filename;
+	if (strcmp(fsys->filename, "/") != 0) {
+		char* next = strchr(filename, '/');
+		if (next) {
+			next++;
+			char pathname[16];
+			int i = 0;
+			for (i = 0; i < 15; i++) {
+				if (next[i] == '/' || next[i] == '\0')
+					break;
+				pathname[i] = next[i];
+			}
+			pathname[i] = 0;
+			if (strcmp(fsys->filename, pathname) == 0) {
+				next += i;
+				path_to_open = (next[0] == '\0') ? "/" : next;
+			}
+		}
+	}
+
 	if (fsys->opendir)
-		dirfile = fsys->opendir(fsys, filename);
+		dirfile = fsys->opendir(fsys, path_to_open);
 
 	if (!dirfile)
 		return -1;
@@ -766,52 +787,4 @@ int CreateDir(char* filename) {
 	}
 
 	return -1;
-}
-
-/**
- * @brief Chmod -- change a file mode
- * @param filename -- name of the file
- * @param mode -- mode value
- */
-int Chmod(const char* pathname, unsigned int mode) {
-	if (!pathname)
-		return -1;
-
-	int pathlen = 4096;
-	char* kpath = kmalloc(pathlen);
-
-	long n = _bordoisila_strncpy_from_user(kpath, pathname, pathlen);
-	if (n < 0) {
-		kfree(kpath);
-		return -1;
-	} else if (n == 0) {
-		kfree(kpath);
-		return -1;
-	}
-
-	AuVFSNode* file = AuVFSOpen(kpath);
-	if (!file)
-		return -1;
-	AuVFSNode* fs = AuVFSFind(kpath);
-	if (!fs) {
-		kfree(file);
-		UARTDebugOut("[aurora-chmod]: file system not specified \r\n");
-		return -1;
-	}
-
-	int ret = AuVFSChmodNode(fs, file, mode);
-	if (ret < 0) {
-		kfree(file);
-		UARTDebugOut(
-			"[aurora-chmod]: failed to change mode of path : %s  filename : %s, ret = %d\r\n",
-			kpath,
-			file->filename,
-			ret);
-		return -1;
-	}
-
-	UARTDebugOut("[aurora]-chmod]: file mode changed successfully %s\r\n", file->filename);
-	kfree(kpath);
-	kfree(file);
-	return 0;
 }

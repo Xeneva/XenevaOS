@@ -325,24 +325,25 @@ AuVFSNode* FatOpenDir(AuVFSNode* fs, char* path) {
 		return NULL;
 	}
 	if (!ret) {
-		/* if no returnable file found, simply return
-		 * the root directory by creating a new vfs
-		 * instance
-		 */
-		ret = (AuVFSNode*)kmalloc(sizeof(AuVFSNode));
-		memset(ret, 0, sizeof(AuVFSNode));
-		strcpy(ret->filename, "/");
-		ret->current = fatfs->__RootDirFirstCluster;
-		ret->size = 0;
-		ret->eof = 0;
-		ret->status = FS_STATUS_FOUND;
-		ret->close = 0;
-		ret->first_block = fatfs->__RootDirFirstCluster;
-		ret->pos = 0;
-		ret->device = fs;
-		ret->parent_block = fatfs->__RootDirFirstCluster;
-		ret->flags |= FS_FLAG_DIRECTORY;
-		aa64_data_cache_clean_range(ret, sizeof(AuVFSNode));
+		/* Only return root directory if requested path is "/" or empty */
+		if (path && (strcmp(path, "/") == 0 || strlen(path) == 0)) {
+			ret = (AuVFSNode*)kmalloc(sizeof(AuVFSNode));
+			memset(ret, 0, sizeof(AuVFSNode));
+			strcpy(ret->filename, "/");
+			ret->current = fatfs->__RootDirFirstCluster;
+			ret->size = 0;
+			ret->eof = 0;
+			ret->status = FS_STATUS_FOUND;
+			ret->close = 0;
+			ret->first_block = fatfs->__RootDirFirstCluster;
+			ret->pos = 0;
+			ret->device = fs;
+			ret->parent_block = fatfs->__RootDirFirstCluster;
+			ret->flags |= FS_FLAG_DIRECTORY;
+			aa64_data_cache_clean_range(ret, sizeof(AuVFSNode));
+			return ret;
+		}
+		return NULL;
 	}
 	return ret;
 }
@@ -366,14 +367,23 @@ int FatDirectoryRead(AuVFSNode* fs, AuVFSNode* dir, AuDirectoryEntry* dirent) {
 	uint64_t* buf = (uint64_t*)P2V((uint64_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
 	memset(buf, 0, PAGE_SIZE);
 
-	if ((index / 16) > fatfs->__SectorPerCluster) {
-		dirent->index = -1;
-		AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
-		return -1;
+	uint32_t spc = fatfs->__SectorPerCluster ? fatfs->__SectorPerCluster : 1;
+	uint32_t total_sector = index / 16;
+	uint32_t cluster_offset = total_sector / spc;
+	uint32_t sector_in_cluster = total_sector % spc;
+
+	uint32_t current_cluster = dir->first_block;
+	for (uint32_t c = 0; c < cluster_offset; c++) {
+		current_cluster = FatReadFAT(fs, current_cluster);
+		if (FAT_IS_EOC(current_cluster) || current_cluster < 2) {
+			dirent->index = -1;
+			AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
+			return -1;
+		}
 	}
 
 	uint8_t* aligned_buf = (uint8_t*)buf;
-	AuVDiskRead(vdisk, FatClusterToSector32(fatfs, dir->first_block) + index / 16, 1, buf);
+	AuVDiskRead(vdisk, FatClusterToSector32(fatfs, current_cluster) + sector_in_cluster, 1, buf);
 	FatDir* dir_ = (FatDir*)(aligned_buf + ((index % 16) * sizeof(FatDir)));
 
 	if (dir_->filename[0] == 0x00) {
@@ -388,13 +398,7 @@ int FatDirectoryRead(AuVFSNode* fs, AuVFSNode* dir, AuDirectoryEntry* dirent) {
 		return -1;
 	}
 
-	if (dir_->attrib & 0x02) {
-		AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
-		dirent->index += 1;
-		return -1;
-	}
-
-	if (dir_->attrib & 0x04) {
+	if ((dir_->attrib & FAT_ATTRIBUTE_MASK) == FAT_ATTRIBUTE_LONG_NAME) {
 		AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
 		dirent->index += 1;
 		return -1;
@@ -406,7 +410,13 @@ int FatDirectoryRead(AuVFSNode* fs, AuVFSNode* dir, AuDirectoryEntry* dirent) {
 		return -1;
 	}
 
-	if (dir_->attrib & 0x01) {
+	if (dir_->attrib & 0x02) {
+		AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
+		dirent->index += 1;
+		return -1;
+	}
+
+	if (dir_->attrib & 0x04) {
 		AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
 		dirent->index += 1;
 		return -1;
