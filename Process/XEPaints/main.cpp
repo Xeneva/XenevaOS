@@ -154,6 +154,7 @@ void WindowHandleMessage(PostEvent* e) {
             ChWindow* pw = ChGetPopupWindowByHandle(mainWin, handle);
             ChPopupWindowHandleMouse(pw, e->dword, e->dword2, e->dword3);
         }
+        _KePrint("Mouse event \r\n");
         memset(e, 0, sizeof(PostEvent));
         break;
     }

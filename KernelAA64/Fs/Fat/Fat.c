@@ -413,6 +413,7 @@ AuVFSNode* FatLocateSubDir(AuVFSNode* fsys, AuVFSNode* kfile, const char* filena
 					file->first_block = file->current;
 					file->device = fsys;
 					file->parent_block = kfile->first_block;
+					file->uid = fsys->uid;
 					file->gid = AuCredGetGroupID(AURORA_GID_MISC_WORLD);
 					if (pkDir->attrib & 0x10) {
 						file->flags |= FS_FLAG_DIRECTORY;
@@ -486,6 +487,7 @@ AuVFSNode* FatLocateDir(AuVFSNode* fsys, const char* dir) {
 					file->open = 0;
 					file->write = 0;
 					file->create_file = 0;
+					file->uid = fsys->uid;
 
 					/* FAT32 doesn't has UID/GID value stored in file, so
 					 * using global misc world gid

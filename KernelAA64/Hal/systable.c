@@ -58,6 +58,7 @@
 #include <timer.h>
 #include <bordoisila_ptr.h>
 #include <Sync/poll.h>
+#include <Fs/vfsmod.h>
 
 AA64Registers* svcCurrentRegs;
 
@@ -216,6 +217,8 @@ static void* syscalls[AURORA_MAX_SYSCALL] = {
 	[SYS_THREAD_WAIT_FOR_TERMINATION] = AuThreadWaitForTermination,
 	[SYS_KERNEL_UNAME] = ExecUname,
 	[SYS_FILE_POLL] = AuPoll,
+	[SYS_FILE_CHMOD] = Chmod,
+	[SYS_FILE_FSYS_OWN] = AuVFSOwnFsys,
 };
 
 #ifdef __KERNEL_PROFILER_ON__

@@ -47,6 +47,7 @@
 #include <nanojpg.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #define MINIMP3_IMPLEMENTATION
 #include "minimp3.h"
@@ -670,7 +671,8 @@ int main(int argc, char* argv[]) {
 
 	ChWindowBroadcastIcon(app, "/icons/media.bmp");
 
-	play_mp3("/music/charlie.mp3");
+	chmod("/music/asilu.mp3", 0620);
+	play_mp3("/music/asilu.mp3");
 
 	//int threadIdx = _KeCreateThread(PlayerThread, "accent");
 

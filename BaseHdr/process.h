@@ -104,6 +104,8 @@ typedef struct _au_proc_cred_ {
 	uint8_t caps;
 	UID_NUM uid;
 	GID_NUM gid;
+	UID_NUM euid;
+	GID_NUM egid;
 	GID_NUM sgid[AURORA_MAX_GROUPS];
 	uint16_t num_sgid;
 } AuProcCredentials;

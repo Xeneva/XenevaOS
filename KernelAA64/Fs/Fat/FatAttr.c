@@ -142,4 +142,5 @@ done:
 		UARTDebugOut("[fat-setaatribute]: attribute : %x written successfully \r\n", file->mode);
 
 	AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
+	return 0;
 }

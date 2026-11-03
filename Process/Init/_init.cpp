@@ -429,6 +429,12 @@ extern "C" void main(int argc, char* argv[]) {
 
 	int proc = 0;
 
+	int fsys_own = _KeOwnFsys("/", UAC_NORMAL_USER, UAC_NORMAL_USER);
+	if (fsys_own == -1) {
+		_KePrint("[init]: failed to own root file system for normal user : %d, continuing \r\n",
+				 UAC_NORMAL_USER);
+	}
+
 	/* DCL self-test on every boot. Runs only while dcltest.exe is in the
 	 * image, so the binary itself is the opt-out -- same absence rule as
 	 * deoaud.exe below: a removed component stays absent and init does not

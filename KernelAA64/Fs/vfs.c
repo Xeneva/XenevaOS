@@ -44,6 +44,8 @@
 #include <Hal/AA64/aa64lowlevel.h>
 #include <Mm/mmfile.h>
 #include <Serv/sysserv.h>
+#include <bordoisila_ptr.h>
+#include <process.h>
 
 AuVFSContainer* __RootContainer;
 AuVFSNode* __RootFS;
@@ -449,4 +451,58 @@ AU_EXTERN AU_EXPORT int AuVFSPoll(AuVFSNode* file, AuPollTable* pt) {
 		return -1;
 	if (file->poll)
 		return file->poll(file, file, pt);
+}
+
+/**
+ * @brief AuVFSOwnFsys -- give the capability to root process, to
+ * own the file system for specific user id and group id
+ * @param path -- file system path
+ * @param uid -- User ID value
+ * @param gid -- Group ID value
+ */
+AU_EXTERN AU_EXPORT int AuVFSOwnFsys(char* path, UID_NUM uid, GID_NUM gid) {
+	if (!path)
+		return -1;
+
+	if (!__BORDOISILA_UPTR_VALIDATE(path))
+		return -1;
+
+	AuProcess* proc = AuProcessCurrent();
+	/** should also check process capabilities , but skipping for now*/
+
+	/** check if the setting process is root than only proceed */
+	if (!(proc->proc_id == 0 && proc->creds.uid == 0 && proc->creds.gid == 0)) {
+		UARTDebugOut("[AuVFSOwnFsys]: system call only valid for root user, your uid : %d \r\n",
+					 proc->creds.uid);
+		return -1;
+	}
+
+	/** also should check the effective user id, if user account got a priviledge mode */
+
+	int max_len = 4096;
+	char* kpath = (char*)kmalloc(max_len);
+	long n = _bordoisila_strncpy_from_user(kpath, path, max_len);
+	if (n < 0) {
+		kfree(kpath);
+		return -1;
+	} else if (n == 0) {
+		kfree(kpath);
+		return -1;
+	}
+
+	AuVFSNode* fsys = AuVFSFind(kpath);
+	if (!fsys) {
+		UARTDebugOut("[AuVFSOwnFsys]: no file system found for path : %s \r\n", kpath);
+		kfree(kpath);
+		return -1;
+	}
+
+	fsys->uid = uid;
+	fsys->gid = gid;
+	UARTDebugOut(
+		"[AuVFSOwnFsys]: file system successfully owned by user id : %d, group id : %d \r\n",
+		uid,
+		gid);
+	kfree(kpath);
+	return 0;
 }

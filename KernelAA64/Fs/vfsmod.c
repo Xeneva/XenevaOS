@@ -48,12 +48,15 @@ bool AuVFSCheckAccess(AuProcCredentials* c, AuVFSNode* n, int want) {
 
 int AuVFSChmodNode(AuVFSNode* fs, AuVFSNode* file, uint16_t mode) {
 	AuProcess* proc = AuProcessCurrent();
-	if (!proc)
+	if (!proc){
+		UARTDebugOut("[AuVFSChmodNode]: failed, no current process \r\n");
 		return -1;
+	}
 	AuProcCredentials* c = &proc->creds;
 
-	if (!AuCredIsRoot(c) && c->uid != file->uid)
+	if (!AuCredIsRoot(c) && c->uid != file->uid){
 		return -2;
+	}
 
 	mode &= S_IALLUGO;
 	if (!AuCredIsRoot(c) && (mode & S_ISGID) && !AuCredInGroup(c, file->gid))

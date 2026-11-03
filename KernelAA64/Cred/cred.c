@@ -385,6 +385,11 @@ int AuSetUID(int proc_id, UID_NUM uid) {
 	if (!proc)
 		return 1;
 
+	if (proc_id != 0 && proc->proc_id == proc_id) {
+		proc->creds.euid = uid;
+		return 0;
+	}
+
 	proc->creds.uid = uid;
 	return 0;
 }
@@ -404,8 +409,9 @@ int AuSetGID(int proc_id, GID_NUM gid) {
 	if (!proc)
 		return 1;
 
-	if (!CRED_IS_CAPABLE(proc->creds.caps, CRED_CAP_SETGID))
+	if (!CRED_IS_CAPABLE(proc->creds.caps, CRED_CAP_SETGID)) {
 		return 1;
+	}
 
 	/**
 	   *don't allow root process to change it's uid/gid,
@@ -421,6 +427,13 @@ int AuSetGID(int proc_id, GID_NUM gid) {
 	if (!proc)
 		return 1;
 
+	/** suppose a normal user process call setgid, then only
+	  its effective gid should change
+	   */
+	if (proc_id != 0 && proc_id == proc->proc_id) {
+		proc->creds.egid = gid;
+		return 0;
+	}
 	proc->creds.gid = gid;
 	return 0;
 }

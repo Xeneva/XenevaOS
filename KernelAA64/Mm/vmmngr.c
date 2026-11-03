@@ -653,3 +653,55 @@ void AuVmmngrBootFree() {
 	write_ttbr0_el1(_RootPaging);
 	tlb_flush_vmalle1is();
 }
+
+/**
+ * @brief AuVMmngrUserWalk -- user memory pte check function
+ * @param va -- virtual address
+ * @param write -- write bit
+ * @param span -- bytes from va to the end of mappings
+ */
+bool AuVmmngrUserWalk(uint64_t va, bool write, uint64_t* span) {
+#define PTE_APT_NOUSER (1ULL << 61)
+#define PTE_APT_RO	   (1ULL << 62)
+#define PTE_AP_USER	   (1ULL << 6)
+#define PTE_AP_RO	   (1ULL << 7)
+
+	uint64_t ttbr0;
+	__asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr0));
+
+	uint64_t* tbl = P2V(ttbr0 & 0x0000FFFFFFFFF000ULL);
+
+	for (int level = 0; level <= 3; level++) {
+		unsigned shift = 39 - 9 * level;
+		uint64_t pte = tbl[(va >> shift) & 0x1FF];
+
+		if (!(pte & PTE_VALID))
+			return false;
+
+		if (level < 3 && (pte & PTE_TABLE)) {
+			if (pte & PTE_APT_NOUSER)
+				return false;
+			if (write && (pte & PTE_APT_RO))
+				return false;
+			tbl = P2V(pte & 0x0000FFFFFFFFF000ULL);
+			continue;
+		}
+
+		if (level == 0)
+			return false;
+		if (level == 3 && !(pte & PTE_TABLE))
+			return false;
+
+		if (!(pte & PTE_AF))
+			return false;
+		if (!(pte & PTE_AP_USER))
+			return false;
+		if (write && (pte & PTE_AP_RO))
+			return false;
+
+		uint64_t size = 1ULL << shift;
+		*span = size - (va & (size - 1));
+		return true;
+	}
+	return false;
+}

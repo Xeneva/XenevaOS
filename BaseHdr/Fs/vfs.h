@@ -346,4 +346,13 @@ AU_EXTERN AU_EXPORT int AuVFSSetCred(AuVFSNode* node, UID_NUM uid, GID_NUM gid);
  */
 AU_EXTERN AU_EXPORT int AuVFSPoll(AuVFSNode* file, AuPollTable* pt);
 
+/**
+ * @brief AuVFSOwnFsys -- give the capability to root process, to
+ * own the file system for specific user id and group id
+ * @param path -- file system path
+ * @param uid -- User ID value
+ * @param gid -- Group ID value
+ */
+AU_EXTERN AU_EXPORT int AuVFSOwnFsys(char* path, UID_NUM uid, GID_NUM gid);
+
 #endif

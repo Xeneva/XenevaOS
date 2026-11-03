@@ -43,4 +43,6 @@
 
 extern bool AuVFSCheckAccess(AuProcCredentials* c, AuVFSNode* n, int want);
 
+extern int AuVFSChmodNode(AuVFSNode* fs, AuVFSNode* file, uint16_t mode);
+
 #endif

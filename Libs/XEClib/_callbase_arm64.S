@@ -790,3 +790,17 @@ poll:
 	svc #0
 	mov x0, x6
 	ret
+
+.global chmod
+chmod:
+    mov x16, 84
+	svc #0
+	mov x0, x6
+	ret
+	
+.global _KeOwnFsys
+_KeOwnFsys:
+    mov x16, 85
+	svc #0
+	mov x0, x6
+	ret

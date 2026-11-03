@@ -217,6 +217,13 @@ extern int FileIoControl(int fd, int code, void* arg);
 */
 extern int FileStat(int fd, void* buf);
 
+/**
+ * @brief Chmod -- change a file mode
+ * @param filename -- name of the file
+ * @param mode -- mode value
+ */
+extern int Chmod(const char* pathname, unsigned int mode);
+
 /*
 * GetSystemTimerTick -- returns the current system
 * tick
