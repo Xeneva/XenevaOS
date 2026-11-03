@@ -788,3 +788,52 @@ int CreateDir(char* filename) {
 
 	return -1;
 }
+
+/**
+ * @brief Chmod -- change a file mode
+ * @param filename -- name of the file
+ * @param mode -- mode value
+ */
+int Chmod(const char* pathname, unsigned int mode) {
+	if (!pathname)
+		return -1;
+
+	int pathlen = 4096;
+	char* kpath = kmalloc(pathlen);
+
+	long n = _bordoisila_strncpy_from_user(kpath, pathname, pathlen);
+	if (n < 0) {
+		kfree(kpath);
+		return -1;
+	} else if (n == 0) {
+		kfree(kpath);
+		return -1;
+	}
+
+	AuVFSNode* file = AuVFSOpen(kpath);
+	if (!file)
+		return -1;
+
+	AuVFSNode* fs = AuVFSFind(kpath);
+	if (!fs) {
+		kfree(file);
+		UARTDebugOut("[aurora-chmod]: file system not specified \r\n");
+		return -1;
+	}
+
+	int ret = AuVFSChmodNode(fs, file, mode);
+	if (ret < 0) {
+		kfree(file);
+		UARTDebugOut(
+			"[aurora-chmod]: failed to change mode of path : %s filename : %s, ret = %d \r\n",
+			kpath,
+			file->filename,
+			ret);
+		return -1;
+	}
+
+	UARTDebugOut("[aurora-chmod]: file mode changed successfully %s \r\n", file->filename);
+	kfree(kpath);
+	kfree(file);
+	return 0;
+}
