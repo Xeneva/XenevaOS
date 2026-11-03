@@ -53,6 +53,24 @@
 #include <sys/_keproc.h>
 #include <sys/socket.h>
 #include <https.h>
+#include <math.h>
+#include <fenv.h>
+#include <zlib.h>
+#include <brotli/decode.h>
+#include <mbedtls/aes.h>
+#include <mbedtls/base64.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/sha512.h>
+
+/* compiler-rt builtins that clang emits for 128-bit arithmetic the AArch64
+ * ISA cannot do in one instruction. */
+extern "C" {
+__int128 __multi3(__int128, __int128);
+__int128 __divti3(__int128, __int128);
+__int128 __modti3(__int128, __int128);
+unsigned __int128 __udivti3(unsigned __int128, unsigned __int128);
+unsigned __int128 __umodti3(unsigned __int128, unsigned __int128);
+}
 
 static int g_pass;
 static int g_fail;
@@ -3647,6 +3665,896 @@ static void test_netlibs(void) {
 	}
 }
 
+/* --- easy libraries: in-memory only, no new syscall -------------------- */
+/*
+ * These exercise the vendored, pure-compute libraries that need no additional
+ * kernel ABI: zlib, brotli (decoder), the mbedTLS primitives used by HTTPS,
+ * and XEClib's double-precision libm. Libraries from the easy set that are
+ * not vendored are reported as SKIP so a missing build is visible, not green.
+ */
+
+/* The shipped zlib is a Z_SOLO build: deflateInit/inflateInit reject a stream
+ * with NULL allocator hooks, so callers must supply them (https.cpp does the
+ * same). */
+static void* zlib_alloc(voidpf opaque, uInt items, uInt size) {
+	(void)opaque;
+	return malloc((size_t)items * (size_t)size);
+}
+
+static void zlib_free(voidpf opaque, voidpf address) {
+	(void)opaque;
+	free(address);
+}
+
+static void test_easylibs(void) {
+	uint64_t t0;
+
+	/* zlib: version, checksums, deflate/inflate round trip, corruption. */
+	{
+		static const char src[] =
+			"XenevaOS WebKit PE: zlib deflate/inflate round trip. "
+			"XenevaOS WebKit PE: zlib deflate/inflate round trip.";
+		unsigned char comp[512];
+		unsigned char decomp[512];
+		z_stream zs;
+		uLongf clen;
+		uLongf dlen;
+		const char* ver;
+		int rc;
+
+		ver = zlibVersion();
+		rec("lib.zlib.version", ver && ver[0] == '1',
+			ver ? (long)ver[0] : -1, 0);
+
+		rec("lib.zlib.crc32",
+			crc32(0, (const Bytef*)"123456789", 9) == 0xCBF43926UL, 0, 0);
+		rec("lib.zlib.adler32",
+			adler32(adler32(0, Z_NULL, 0), (const Bytef*)"Wikipedia", 9) ==
+				0x11E60398UL, 0, 0);
+
+		memset(&zs, 0, sizeof(zs));
+		zs.zalloc = zlib_alloc;
+		zs.zfree = zlib_free;
+		rc = deflateInit(&zs, 9);
+		zs.next_in = (Bytef*)src;
+		zs.avail_in = (uInt)strlen(src);
+		zs.next_out = comp;
+		zs.avail_out = (uInt)sizeof(comp);
+		t0 = now_us();
+		if (rc == Z_OK)
+			rc = deflate(&zs, Z_FINISH);
+		clen = (uLongf)zs.total_out;
+		if (zs.state)
+			deflateEnd(&zs);
+		rec("lib.zlib.compress", rc == Z_STREAM_END && clen > 0,
+			rc, now_us() - t0);
+
+		memset(&zs, 0, sizeof(zs));
+		zs.zalloc = zlib_alloc;
+		zs.zfree = zlib_free;
+		rc = inflateInit(&zs);
+		zs.next_in = comp;
+		zs.avail_in = (uInt)clen;
+		zs.next_out = decomp;
+		zs.avail_out = (uInt)sizeof(decomp);
+		t0 = now_us();
+		if (rc == Z_OK)
+			rc = inflate(&zs, Z_FINISH);
+		dlen = (uLongf)zs.total_out;
+		if (zs.state)
+			inflateEnd(&zs);
+		rec("lib.zlib.roundtrip",
+			rc == Z_STREAM_END && dlen == strlen(src) &&
+				memcmp(decomp, src, (size_t)dlen) == 0,
+			rc, now_us() - t0);
+
+		comp[0] ^= 0xFF;
+		memset(&zs, 0, sizeof(zs));
+		zs.zalloc = zlib_alloc;
+		zs.zfree = zlib_free;
+		rc = inflateInit(&zs);
+		zs.next_in = comp;
+		zs.avail_in = (uInt)clen;
+		zs.next_out = decomp;
+		zs.avail_out = (uInt)sizeof(decomp);
+		if (rc == Z_OK)
+			rc = inflate(&zs, Z_FINISH);
+		if (zs.state)
+			inflateEnd(&zs);
+		rec("lib.zlib.corrupt",
+			rc != Z_OK && rc != Z_STREAM_END, rc, 0);
+	}
+
+	/* brotli: decoder-only build, known stream, short output, corruption. */
+	{
+		static const unsigned char enc[] = {
+			0xa1, 0x88, 0x02, 0x00, 0x20, 0x57, 0xeb, 0x52, 0xdd, 0x90, 0x7e, 0x84,
+			0x52, 0xe0, 0x7a, 0xc2, 0x8b, 0xb9, 0x8a, 0x44, 0x2a, 0x55, 0x75, 0x86,
+			0x91, 0xcd, 0xec, 0x46, 0x45, 0x03, 0x78, 0x5f, 0x4e, 0xab, 0x80, 0x32,
+			0xb3, 0x03, 0x59, 0xe6, 0x0d, 0x73, 0xa0, 0x99, 0x30, 0x58, 0xd1, 0x67,
+			0x17, 0x44, 0x73, 0x70, 0x3d, 0x3f, 0x08, 0xa3, 0x38, 0x49, 0x33, 0x84,
+			0x09, 0x65, 0x5c, 0x48, 0xa5, 0x8d, 0x9d, 0xe6, 0x65, 0xdd, 0xf6, 0xe3,
+			0xbc, 0xee, 0xe7, 0xfd, 0x7e, 0x07
+		};
+		static const char plain[] =
+			"XenevaOS brotli decoder conformance payload: "
+			"0123456789abcdefghijklmnopqrstuvwxyz.";
+		unsigned char out[256];
+		unsigned char bad[sizeof(enc)];
+		size_t outlen;
+		uint32_t ver;
+		BrotliDecoderResult r;
+
+		ver = BrotliDecoderVersion();
+		rec("lib.brotli.version", ver >= 0x01000000u, (long)ver, 0);
+
+		outlen = sizeof(out);
+		t0 = now_us();
+		r = BrotliDecoderDecompress(sizeof(enc), enc, &outlen, out);
+		rec("lib.brotli.decode",
+			r == BROTLI_DECODER_RESULT_SUCCESS &&
+				outlen == sizeof(plain) - 1 &&
+				memcmp(out, plain, outlen) == 0,
+			(int)r, now_us() - t0);
+
+		{
+			BrotliDecoderState* st;
+			const uint8_t* next_in;
+			uint8_t* next_out;
+			size_t avail_in;
+			size_t avail_out;
+			uint8_t small[8];
+
+			st = BrotliDecoderCreateInstance(NULL, NULL, NULL);
+			avail_in = sizeof(enc);
+			next_in = enc;
+			avail_out = sizeof(small);
+			next_out = small;
+			r = st ? BrotliDecoderDecompressStream(st, &avail_in, &next_in,
+				&avail_out, &next_out, NULL)
+				: BROTLI_DECODER_RESULT_ERROR;
+			if (st)
+				BrotliDecoderDestroyInstance(st);
+			rec("lib.brotli.short-output",
+				r == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT, (int)r, 0);
+		}
+
+		memcpy(bad, (void*)enc, sizeof(enc));
+		bad[0] ^= 0xFF;
+		outlen = sizeof(out);
+		r = BrotliDecoderDecompress(sizeof(bad), bad, &outlen, out);
+		rec("lib.brotli.corrupt",
+			r != BROTLI_DECODER_RESULT_SUCCESS, (int)r, 0);
+	}
+
+	/* mbedTLS primitives used by the HTTPS client (no RNG, no sockets). */
+	{
+		static const unsigned char abc[] = { 'a', 'b', 'c' };
+		static const unsigned char sha256_want[32] = {
+			0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+			0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+			0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+			0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad
+		};
+		static const unsigned char sha512_want[64] = {
+			0xdd, 0xaf, 0x35, 0xa1, 0x93, 0x61, 0x7a, 0xba,
+			0xcc, 0x41, 0x73, 0x49, 0xae, 0x20, 0x41, 0x31,
+			0x12, 0xe6, 0xfa, 0x4e, 0x89, 0xa9, 0x7e, 0xa2,
+			0x0a, 0x9e, 0xee, 0xe6, 0x4b, 0x55, 0xd3, 0x9a,
+			0x21, 0x92, 0x99, 0x2a, 0x27, 0x4f, 0xc1, 0xa8,
+			0x36, 0xba, 0x3c, 0x23, 0xa3, 0xfe, 0xeb, 0xbd,
+			0x45, 0x4d, 0x44, 0x23, 0x64, 0x3c, 0xe8, 0x0e,
+			0x2a, 0x9a, 0xc9, 0x4f, 0xa5, 0x4c, 0xa4, 0x9f
+		};
+		static const unsigned char aes_key[16] = {
+			0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+			0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+		};
+		static const unsigned char aes_in[16] = {
+			0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+			0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff
+		};
+		static const unsigned char aes_want[16] = {
+			0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30,
+			0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a
+		};
+		unsigned char got[64];
+		unsigned char b64[32];
+		unsigned char dec[32];
+		size_t olen;
+		mbedtls_aes_context aes;
+		int rc;
+
+		rc = mbedtls_sha256(abc, sizeof(abc), got, 0);
+		rec("lib.mbedtls.sha256",
+			rc == 0 && memcmp(got, sha256_want, sizeof(sha256_want)) == 0,
+			rc, 0);
+
+		rc = mbedtls_sha512(abc, sizeof(abc), got, 0);
+		rec("lib.mbedtls.sha512",
+			rc == 0 && memcmp(got, sha512_want, sizeof(sha512_want)) == 0,
+			rc, 0);
+
+		olen = 0;
+		rc = mbedtls_base64_encode(b64, sizeof(b64), &olen,
+			(const unsigned char*)"XenevaOS", 8);
+		rec("lib.mbedtls.base64.encode",
+			rc == 0 && olen == 12 && memcmp(b64, "WGVuZXZhT1M=", 12) == 0,
+			rc, 0);
+
+		olen = 0;
+		rc = mbedtls_base64_decode(dec, sizeof(dec), &olen, b64,
+			sizeof("WGVuZXZhT1M=") - 1);
+		rec("lib.mbedtls.base64.decode",
+			rc == 0 && olen == 8 && memcmp(dec, "XenevaOS", 8) == 0,
+			rc, 0);
+
+		mbedtls_aes_init(&aes);
+		rc = mbedtls_aes_setkey_enc(&aes, aes_key, 128);
+		if (rc == 0)
+			rc = mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT,
+				aes_in, got);
+		mbedtls_aes_free(&aes);
+		rec("lib.mbedtls.aes128",
+			rc == 0 && memcmp(got, aes_want, sizeof(aes_want)) == 0, rc, 0);
+	}
+
+	/* libm: double-precision functions exported by XEClib. Volatile inputs
+	 * keep the compiler from constant-folding the calls away, so each
+	 * assertion really reaches the vendored musl/fdlibm code. */
+	{
+		volatile double a;
+		volatile double b;
+		double v;
+		double ip;
+		double d;
+		int e;
+
+		a = 2.0;
+		v = sqrt(a);
+		d = v - 1.4142135623730951;
+		rec("lib.m.sqrt", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 0.5;
+		v = sin(a);
+		d = v - 0.4794255386042030;
+		rec("lib.m.sin", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 0.5;
+		v = cos(a);
+		d = v - 0.8775825618903728;
+		rec("lib.m.cos", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 0.5;
+		v = tan(a);
+		d = v - 0.5463024898437905;
+		rec("lib.m.tan", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 0.5;
+		v = asin(a);
+		d = v - 0.5235987755982989;
+		rec("lib.m.asin", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 0.5;
+		v = acos(a);
+		d = v - 1.0471975511965979;
+		rec("lib.m.acos", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = atan(a);
+		d = v - 0.7853981633974483;
+		rec("lib.m.atan", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		b = 1.0;
+		v = atan2(a, b);
+		d = v - 0.7853981633974483;
+		rec("lib.m.atan2", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = exp(a);
+		d = v - 2.7182818284590452;
+		rec("lib.m.exp", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 10.0;
+		rec("lib.m.exp2", exp2(a) == 1024.0, 0, 0);
+
+		a = 2.7182818284590452;
+		v = log(a);
+		d = v - 1.0;
+		rec("lib.m.log", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 8.0;
+		rec("lib.m.log2", log2(a) == 3.0, 0, 0);
+
+		a = 1000.0;
+		rec("lib.m.log10", log10(a) == 3.0, 0, 0);
+
+		a = 2.0;
+		b = 10.0;
+		v = pow(a, b);
+		rec("lib.m.pow", v == 1024.0,
+			(long)(v > 1e9 ? 1e9 : v), 0);
+
+		a = 2.0;
+		b = -2.0;
+		rec("lib.m.pow.neg-exp", pow(a, b) == 0.25, 0, 0);
+
+		a = -2.0;
+		b = 3.0;
+		rec("lib.m.pow.neg-base", pow(a, b) == -8.0, 0, 0);
+
+		a = 0.0;
+		b = 0.0;
+		rec("lib.m.pow.zero", pow(a, b) == 1.0, 0, 0);
+
+		a = 10.5;
+		b = 3.0;
+		rec("lib.m.fmod", fmod(a, b) == 1.5,
+			(long)(fmod(a, b) * 1000.0), 0);
+
+		a = -1.5;
+		rec("lib.m.floor", floor(a) == -2.0,
+			(long)(floor(a) * 1000.0), 0);
+
+		a = -1.5;
+		rec("lib.m.ceil", ceil(a) == -1.0,
+			(long)(ceil(a) * 1000.0), 0);
+
+		a = -1.5;
+		rec("lib.m.trunc", trunc(a) == -1.0,
+			(long)(trunc(a) * 1000.0), 0);
+
+		a = 2.5;
+		rec("lib.m.round", round(a) == 3.0, 0, 0);
+
+		a = 2.5;
+		rec("lib.m.rint", rint(a) == 2.0, 0, 0);
+
+		a = 3.5;
+		rec("lib.m.nearbyint", nearbyint(a) == 4.0, 0, 0);
+
+		a = -3.75;
+		v = modf(a, &ip);
+		rec("lib.m.modf", ip == -3.0 && v == -0.75,
+			(long)(ip * 1000.0), 0);
+
+		a = 8.0;
+		e = 0;
+		v = frexp(a, &e);
+		rec("lib.m.frexp", v == 0.5 && e == 4, e, 0);
+
+		a = 0.5;
+		rec("lib.m.ldexp", ldexp(a, 4) == 8.0, 0, 0);
+		rec("lib.m.scalbn", scalbn(a, 4) == 8.0, 0, 0);
+
+		a = 3.0;
+		b = -2.0;
+		rec("lib.m.copysign", copysign(a, b) == -3.0, 0, 0);
+
+		a = -2.0;
+		rec("lib.m.fabs", fabs(a) == 2.0, 0, 0);
+
+		a = 1.0;
+		b = 2.0;
+		rec("lib.m.fmax", fmax(a, b) == 2.0 && fmax(a, NAN) == 1.0, 0, 0);
+		rec("lib.m.fmin", fmin(a, b) == 1.0 && fmin(NAN, b) == 2.0, 0, 0);
+		rec("lib.m.fdim", fdim(b, a) == 1.0 && fdim(a, b) == 0.0, 0, 0);
+
+		/* Domain and overflow cases: NaN / infinities, not crashes. */
+		a = -1.0;
+		v = sqrt(a);
+		rec("lib.m.sqrt.domain", isnan(v), 0, 0);
+
+		a = 0.0;
+		v = log(a);
+		rec("lib.m.log.zero", isinf(v) && v < 0.0, 0, 0);
+
+		a = 1000.0;
+		v = exp(a);
+		rec("lib.m.exp.overflow", isinf(v) && v > 0.0, 0, 0);
+	}
+
+	/* libm: float entry points. */
+	{
+		volatile float fa;
+		volatile float fb;
+		float fv;
+		float fip;
+		double d;
+
+		fa = 2.0f;
+		fv = sqrtf(fa);
+		d = (double)fv - 1.4142135623730951;
+		rec("lib.mf.sqrt", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 0.5f;
+		fv = sinf(fa);
+		d = (double)fv - 0.4794255386042030;
+		rec("lib.mf.sin", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 0.5f;
+		fv = cosf(fa);
+		d = (double)fv - 0.8775825618903728;
+		rec("lib.mf.cos", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 0.5f;
+		fv = tanf(fa);
+		d = (double)fv - 0.5463024898437905;
+		rec("lib.mf.tan", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 0.5f;
+		fv = asinf(fa);
+		d = (double)fv - 0.5235987755982989;
+		rec("lib.mf.asin", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 0.5f;
+		fv = acosf(fa);
+		d = (double)fv - 1.0471975511965979;
+		rec("lib.mf.acos", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 1.0f;
+		fv = atanf(fa);
+		d = (double)fv - 0.7853981633974483;
+		rec("lib.mf.atan", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 1.0f;
+		fb = 1.0f;
+		fv = atan2f(fa, fb);
+		d = (double)fv - 0.7853981633974483;
+		rec("lib.mf.atan2", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 2.0f;
+		fb = 10.0f;
+		rec("lib.mf.pow", powf(fa, fb) == 1024.0f, 0, 0);
+
+		fa = 1.0f;
+		fv = expf(fa);
+		d = (double)fv - 2.7182818284590452;
+		rec("lib.mf.exp", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 2.718281828f;
+		fv = logf(fa);
+		d = (double)fv - 1.0;
+		rec("lib.mf.log", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = -2.0f;
+		rec("lib.mf.fabs", fabsf(fa) == 2.0f, 0, 0);
+
+		fa = -1.5f;
+		rec("lib.mf.floor", floorf(fa) == -2.0f, 0, 0);
+		rec("lib.mf.ceil", ceilf(fa) == -1.0f, 0, 0);
+		rec("lib.mf.trunc", truncf(fa) == -1.0f, 0, 0);
+
+		fa = 2.5f;
+		rec("lib.mf.round", roundf(fa) == 3.0f, 0, 0);
+
+		fa = 10.5f;
+		fb = 3.0f;
+		rec("lib.mf.fmod", fmodf(fa, fb) == 1.5f, 0, 0);
+
+		fa = -3.75f;
+		fv = modff(fa, &fip);
+		rec("lib.mf.modf", fip == -3.0f && fv == -0.75f, 0, 0);
+
+		fa = 0.5f;
+		rec("lib.mf.ldexp", ldexpf(fa, 4) == 8.0f, 0, 0);
+		rec("lib.mf.scalbn", scalbnf(fa, 4) == 8.0f, 0, 0);
+	}
+
+	/* libm: remaining C99 double-precision surface. */
+	{
+		volatile double a;
+		volatile double b;
+		volatile double c;
+		double v;
+		double d;
+		int q;
+
+		a = 3.0;
+		b = 4.0;
+		rec("lib.m.hypot", hypot(a, b) == 5.0, 0, 0);
+
+		a = 27.0;
+		v = cbrt(a);
+		d = v - 3.0;
+		rec("lib.m.cbrt", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = expm1(a);
+		d = v - 1.7182818284590452;
+		rec("lib.m.expm1", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = log1p(a);
+		d = v - 0.6931471805599453;
+		rec("lib.m.log1p", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = sinh(a);
+		d = v - 1.1752011936438014;
+		rec("lib.m.sinh", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = cosh(a);
+		d = v - 1.5430806348152437;
+		rec("lib.m.cosh", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = tanh(a);
+		d = v - 0.7615941559557649;
+		rec("lib.m.tanh", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = asinh(a);
+		d = v - 0.8813735870195430;
+		rec("lib.m.asinh", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 2.0;
+		v = acosh(a);
+		d = v - 1.3169578969248166;
+		rec("lib.m.acosh", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 0.5;
+		v = atanh(a);
+		d = v - 0.5493061443340549;
+		rec("lib.m.atanh", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = erf(a);
+		d = v - 0.8427007929497149;
+		rec("lib.m.erf", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 1.0;
+		v = erfc(a);
+		d = v - 0.1572992070502851;
+		rec("lib.m.erfc", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		a = 5.0;
+		rec("lib.m.tgamma", tgamma(a) == 24.0, 0, 0);
+
+		a = 5.0;
+		v = lgamma(a);
+		d = v - 3.1780538303479458;
+		rec("lib.m.lgamma", d > -1e-12 && d < 1e-12,
+			(long)(v * 1000000.0), 0);
+
+		q = 0;
+		v = lgamma_r(a, &q);
+		d = v - 3.1780538303479458;
+		rec("lib.m.lgamma_r", d > -1e-12 && d < 1e-12 && q == 1, q, 0);
+
+		a = 10.0;
+		b = 3.0;
+		rec("lib.m.remainder", remainder(a, b) == 1.0, 0, 0);
+
+		q = 0;
+		v = remquo(a, b, &q);
+		rec("lib.m.remquo", v == 1.0 && q == 3, q, 0);
+
+		a = 1.0;
+		b = 2.0;
+		rec("lib.m.nextafter", nextafter(a, b) == 1.0000000000000002,
+			0, 0);
+
+		a = 2.0;
+		b = 3.0;
+		c = 4.0;
+		rec("lib.m.fma", fma(a, b, c) == 10.0, 0, 0);
+
+		a = 8.0;
+		rec("lib.m.logb", logb(a) == 3.0, 0, 0);
+		rec("lib.m.ilogb", ilogb(a) == 3, 0, 0);
+
+		a = 2.5;
+		rec("lib.m.lrint", lrint(a) == 2, 0, 0);
+		a = 3.5;
+		rec("lib.m.llrint", llrint(a) == 4, 0, 0);
+
+		a = 0.5;
+		rec("lib.m.scalbln", scalbln(a, 4) == 8.0, 0, 0);
+
+		rec("lib.m.nan", isnan(nan("")), 0, 0);
+	}
+
+	/* libm: float variants of the extended surface. */
+	{
+		volatile float fa;
+		volatile float fb;
+		float fv;
+		double d;
+		int q;
+
+		fa = 3.0f;
+		fb = 4.0f;
+		rec("lib.mf.hypot", hypotf(fa, fb) == 5.0f, 0, 0);
+
+		fa = 27.0f;
+		fv = cbrtf(fa);
+		d = (double)fv - 3.0;
+		rec("lib.mf.cbrt", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 1.0f;
+		fv = expm1f(fa);
+		d = (double)fv - 1.7182818284590452;
+		rec("lib.mf.expm1", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 1.0f;
+		fv = log1pf(fa);
+		d = (double)fv - 0.6931471805599453;
+		rec("lib.mf.log1p", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 1.0f;
+		rec("lib.mf.sinh", sinhf(fa) > 1.1752011f &&
+			sinhf(fa) < 1.1752013f, 0, 0);
+		rec("lib.mf.cosh", coshf(fa) > 1.5430805f &&
+			coshf(fa) < 1.5430808f, 0, 0);
+		rec("lib.mf.tanh", tanhf(fa) > 0.7615940f &&
+			tanhf(fa) < 0.7615943f, 0, 0);
+
+		fa = 1.0f;
+		rec("lib.mf.asinh", asinhf(fa) > 0.8813735f &&
+			asinhf(fa) < 0.8813737f, 0, 0);
+		fa = 2.0f;
+		fv = acoshf(fa);
+		d = (double)fv - 1.3169578969248166;
+		rec("lib.mf.acosh", d > -1e-6 && d < 1e-6, 0, 0);
+		fa = 0.5f;
+		rec("lib.mf.atanh", atanhf(fa) > 0.5493060f &&
+			atanhf(fa) < 0.5493063f, 0, 0);
+
+		fa = 1.0f;
+		fv = erff(fa);
+		d = (double)fv - 0.8427007929497149;
+		rec("lib.mf.erf", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 1.0f;
+		fv = erfcf(fa);
+		d = (double)fv - 0.1572992070502851;
+		rec("lib.mf.erfc", d > -1e-6 && d < 1e-6, 0, 0);
+
+		fa = 5.0f;
+		rec("lib.mf.tgamma", tgammaf(fa) == 24.0f, 0, 0);
+
+		fa = 5.0f;
+		fv = lgammaf(fa);
+		d = (double)fv - 3.1780538303479458;
+		rec("lib.mf.lgamma", d > -1e-6 && d < 1e-6, 0, 0);
+
+		q = 0;
+		fv = lgammaf_r(fa, &q);
+		d = (double)fv - 3.1780538303479458;
+		rec("lib.mf.lgamma_r", d > -1e-6 && d < 1e-6 && q == 1, q, 0);
+
+		fa = 10.0f;
+		fb = 3.0f;
+		rec("lib.mf.remainder", remainderf(fa, fb) == 1.0f, 0, 0);
+
+		q = 0;
+		fv = remquof(fa, fb, &q);
+		rec("lib.mf.remquo", fv == 1.0f && q == 3, q, 0);
+
+		fa = 1.0f;
+		fb = 2.0f;
+		rec("lib.mf.nextafter", nextafterf(fa, fb) > 1.0f, 0, 0);
+
+		fa = 2.0f;
+		fb = 3.0f;
+		fv = 4.0f;
+		rec("lib.mf.fma", fmaf(fa, fb, fv) == 10.0f, 0, 0);
+
+		fa = 8.0f;
+		rec("lib.mf.logb", logbf(fa) == 3.0f, 0, 0);
+		rec("lib.mf.ilogb", ilogbf(fa) == 3, 0, 0);
+
+		fa = 2.5f;
+		rec("lib.mf.lrint", lrintf(fa) == 2, 0, 0);
+		fa = 3.5f;
+		rec("lib.mf.llrint", llrintf(fa) == 4, 0, 0);
+
+		fa = 2.5f;
+		rec("lib.mf.lround", lroundf(fa) == 3, 0, 0);
+		fa = 3.5f;
+		rec("lib.mf.llround", llroundf(fa) == 4, 0, 0);
+
+		fa = 0.5f;
+		rec("lib.mf.scalbln", scalblnf(fa, 4) == 8.0f, 0, 0);
+
+		rec("lib.mf.nan", isnan(nanf("")), 0, 0);
+	}
+
+	/* fenv: rounding direction and sticky exception flags.  Inputs are
+	 * volatile so each operation reaches the FPU instead of being folded,
+	 * and results are stored to a volatile so they are not discarded. */
+	{
+		volatile double one = 1.0;
+		volatile double minus_one = -1.0;
+		volatile double zero = 0.0;
+		volatile double half = 0x1p-53;
+		volatile double quarter = 0x1p-54;
+		volatile double three = 3.0;
+		volatile double huge = 1e308;
+		volatile double tiny = 0x1p-1074;
+		volatile double v25 = 2.5;
+		volatile double r;
+		fenv_t saved;
+		fexcept_t flags;
+		double toward_zero;
+		double nearest_up;
+		double held;
+
+		rec("fenv.default.round", fegetround() == FE_TONEAREST, 0, 0);
+
+		/* 1 + 2^-53 lies halfway between 1 and 1 + 2^-52. */
+		fesetround(FE_UPWARD);
+		r = one + half;
+		rec("fenv.round.upward",
+			fegetround() == FE_UPWARD && r == 1.0 + 0x1p-52, 0, 0);
+
+		/* -1 - 2^-53 lies halfway between -1 - 2^-52 and -1. */
+		fesetround(FE_DOWNWARD);
+		r = minus_one - half;
+		rec("fenv.round.downward",
+			fegetround() == FE_DOWNWARD && r == -1.0 - 0x1p-52, 0, 0);
+
+		fesetround(FE_TOWARDZERO);
+		r = minus_one - half;
+		toward_zero = (r == -1.0);
+		r = one - quarter;
+		rec("fenv.round.towardzero",
+			fegetround() == FE_TOWARDZERO && toward_zero &&
+			r == 1.0 - 0x1p-53, 0, 0);
+
+		fesetround(FE_TONEAREST);
+		r = one + half;
+		nearest_up = (r == one);
+		r = minus_one - half;
+		rec("fenv.round.nearest",
+			fegetround() == FE_TONEAREST && nearest_up && r == -1.0, 0, 0);
+
+		feclearexcept(FE_ALL_EXCEPT);
+		rec("fenv.clear", fetestexcept(FE_ALL_EXCEPT) == 0, 0, 0);
+
+		r = one / zero;
+		rec("fenv.divbyzero", fetestexcept(FE_DIVBYZERO) != 0, 0, 0);
+
+		feclearexcept(FE_ALL_EXCEPT);
+		r = huge * 10.0;
+		rec("fenv.overflow", fetestexcept(FE_OVERFLOW) != 0, 0, 0);
+
+		feclearexcept(FE_ALL_EXCEPT);
+		r = tiny / 2.0;
+		rec("fenv.underflow", fetestexcept(FE_UNDERFLOW) != 0, 0, 0);
+
+		feclearexcept(FE_ALL_EXCEPT);
+		r = one / three;
+		rec("fenv.inexact", fetestexcept(FE_INEXACT) != 0, 0, 0);
+
+		feclearexcept(FE_ALL_EXCEPT);
+		r = zero / zero;
+		rec("fenv.invalid", fetestexcept(FE_INVALID) != 0, 0, 0);
+
+		feclearexcept(FE_ALL_EXCEPT);
+		feraiseexcept(FE_INEXACT);
+		rec("fenv.raise", fetestexcept(FE_INEXACT) != 0 &&
+			fetestexcept(FE_OVERFLOW) == 0, 0, 0);
+
+		fegetexceptflag(&flags, FE_ALL_EXCEPT);
+		feclearexcept(FE_ALL_EXCEPT);
+		fesetexceptflag(&flags, FE_ALL_EXCEPT);
+		rec("fenv.exceptflag", fetestexcept(FE_INEXACT) != 0, 0, 0);
+
+		feclearexcept(FE_INEXACT);
+		rec("fenv.clear.one", fetestexcept(FE_ALL_EXCEPT) == 0, 0, 0);
+
+		fesetround(FE_DOWNWARD);
+		fegetenv(&saved);
+		fesetround(FE_UPWARD);
+		fesetenv(&saved);
+		rec("fenv.getenv.setenv", fegetround() == FE_DOWNWARD, 0, 0);
+
+		fesetenv(FE_DFL_ENV);
+		rec("fenv.default.env", fegetround() == FE_TONEAREST &&
+			fetestexcept(FE_ALL_EXCEPT) == 0, 0, 0);
+
+		fesetround(FE_UPWARD);
+		feholdexcept(&saved);
+		held = (fegetround() == FE_UPWARD &&
+			fetestexcept(FE_ALL_EXCEPT) == 0);
+		r = one / three;
+		feupdateenv(&saved);
+		rec("fenv.hold.update", held &&
+			fegetround() == FE_UPWARD &&
+			fetestexcept(FE_INEXACT) != 0, 0, 0);
+		fesetenv(FE_DFL_ENV);
+
+		/* The C rounding functions differ in exactly this flag. */
+		feclearexcept(FE_ALL_EXCEPT);
+		r = nearbyint(v25);
+		rec("fenv.nearbyint.inexact",
+			fetestexcept(FE_INEXACT) == 0, 0, 0);
+
+		feclearexcept(FE_ALL_EXCEPT);
+		r = rint(v25);
+		rec("fenv.rint.inexact", fetestexcept(FE_INEXACT) != 0, 0, 0);
+		feclearexcept(FE_ALL_EXCEPT);
+	}
+
+	/* compiler-rt builtins: 128-bit integer helpers.  Clang inlines a
+	 * 64x64->128 multiply on AArch64, so __multi3 is called directly;
+	 * division and modulo always go through the library. */
+	{
+		typedef __int128 i128;
+		typedef unsigned __int128 u128;
+		i128 q, rem;
+		u128 uq, urem;
+		volatile i128 sa = -(((i128)1 << 100) + 12345);
+		volatile i128 sb = 7;
+		volatile u128 ua = ((u128)1 << 127) + 12345;
+		volatile u128 ub = 3;
+		const i128 wide = ((i128)1 << 100) + 12345;
+
+		rec("lib.crt.multi3",
+			__multi3((i128)0x123456789abcdef0LL, (i128)16) ==
+			(i128)0x123456789abcdef0LL * 16, 0, 0);
+		rec("lib.crt.multi3.neg",
+			__multi3((i128)-3, ((i128)1 << 64) + 1) ==
+			-(((i128)3 << 64) + 3), 0, 0);
+
+		rec("lib.crt.divti3", __divti3(-100, 7) == -14, 0, 0);
+		rec("lib.crt.modti3", __modti3(-100, 7) == -2, 0, 0);
+
+		/* 2^127 + 12345 exercises the full 128-bit unsigned path. */
+		rec("lib.crt.udivti3",
+			__udivti3(ua, ub) == (((u128)1 << 127) + 12343) / 3, 0, 0);
+		rec("lib.crt.umodti3", __umodti3(ua, ub) == 2, 0, 0);
+
+		q = sa / sb;
+		rem = sa % sb;
+		rec("lib.crt.int128.divmod",
+			q == -((wide - 6) / 7) && rem == -6, 0, 0);
+
+		uq = ua / ub;
+		urem = ua % ub;
+		rec("lib.crt.uint128.divmod",
+			uq == (((u128)1 << 127) + 12343) / 3 && urem == 2, 0, 0);
+	}
+
+	/* Easy, no-new-syscall libraries that are not vendored yet. */
+	skip("lib.webp", "not vendored");
+	skip("lib.tzdata", "no zoneinfo tree");
+	skip("lib.pixman", "not vendored");
+	skip("lib.expat", "not vendored");
+	skip("lib.png", "not vendored");
+	skip("lib.jpeg-turbo", "not vendored");
+	skip("lib.unwind", "not vendored");
+	skip("lib.freetype", "headers only");
+	skip("lib.harfbuzz", "not vendored");
+	skip("lib.fontconfig", "not vendored");
+	skip("lib.sqlite", "not vendored");
+}
+
 
 int main(int argc, char** argv) {
 	int poweroff = 0;
@@ -3685,6 +4593,7 @@ int main(int argc, char** argv) {
 	test_so_error();
 	test_inet_pton6();
 	test_netlibs();
+	test_easylibs();
 	test_real_network();
 	test_https();
 	test_perf_tcp_1m();

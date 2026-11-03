@@ -58,11 +58,12 @@ QJSLIB = ../../Ports/quickjs/libquickjs.a
 MBEDLIB = ../../Ports/mbedtls/libmbedtls.a
 ZLIB = ../../Ports/zlib/libz.a
 BROTLILIB = ../../Ports/brotli/libbrotlidec.a
+CRTLIB = ../../Ports/compiler-rt/libclang_rt.builtins-aarch64.a
 
 # Sources under Ports/. A newer file rebuilds that archive from this makefile.
 CSS_INPUTS := $(shell find ../../Ports/CssLibs \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) ! -path '*/obj/*')
 QJS_INPUTS := $(shell find ../../Ports/quickjs \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) ! -path '*/obj/*') \
-	../../Ports/quickjs/port/libm.c ../../Ports/quickjs/port/int128.o
+	../../Ports/quickjs/port/libm.c
 MBED_INPUTS := $(shell find ../../Ports/mbedtls \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.pem' -o -name 'Makefile' \) ! -path '*/obj/*')
 
 .PHONY: all clean llvm
@@ -86,6 +87,9 @@ $(ZLIB):
 $(BROTLILIB):
 	$(MAKE) -C ../../Ports/brotli llvm
 
+$(CRTLIB):
+	$(MAKE) -C ../../Ports/compiler-rt llvm
+
 llvm:
 	@$(MAKE) TOOLCHAIN=llvm all
 
@@ -101,10 +105,10 @@ $(CRT_OBJ): ../../Process/Init/crt0arm64.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CXXFLAGS) -Wno-unused-command-line-argument -c $< -o $@
 
-$(TARGET): $(OBJS) $(CSSLIB) $(QJSLIB) $(MBEDLIB) $(ZLIB) $(BROTLILIB)
+$(TARGET): $(OBJS) $(CSSLIB) $(QJSLIB) $(MBEDLIB) $(ZLIB) $(BROTLILIB) $(CRTLIB)
 	@echo "Linking $@ (LLVM)..."
 	$(LD) $(LDFLAGS) $(OBJS) $(CSSLIB) $(QJSLIB) ../../Libs/Chitralekha/libChitralekha.a \
-		$(MBEDLIB) $(ZLIB) $(BROTLILIB) ../../Libs/XEClib/libXEClib.a -o $@
+		$(MBEDLIB) $(ZLIB) $(BROTLILIB) ../../Libs/XEClib/libXEClib.a $(CRTLIB) -o $@
 
 clean:
 	rm -rf $(OBJDIR) $(TARGET)

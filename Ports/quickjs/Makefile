@@ -7,7 +7,8 @@
 #    gmtime/localtime and no-op pthread_cond_* (single JS thread).
 #  - port/libm.c is the double-precision gap (acos..trunc). The makefile
 #    compiles it, so deleting the object does not lose the functions.
-#  - port/int128.o is still the checked-in 128-bit division helper.
+#  - 128-bit division helpers now come from Ports/compiler-rt; the old
+#    checked-in port/int128.o workaround is gone.
 # Port shims for libc headers quickjs.c needs (fenv, math, time, pthread)
 # live in port/*.h and shadow the XEClib ones for this library only.
 
@@ -42,7 +43,6 @@ RANLIB = llvm-ranlib
 
 SRCS = src/quickjs.c src/cutils.c src/dtoa.c src/libregexp.c src/libunicode.c port/port.c port/libm.c
 OBJS = obj/quickjs.o obj/cutils.o obj/dtoa.o obj/libregexp.o obj/libunicode.o obj/port.o obj/libm.o
-PORT_OBJS = port/int128.o
 
 TARGET = libquickjs.a
 
@@ -64,8 +64,8 @@ obj/libm.o: port/libm.c
 	@mkdir -p $(dir $@)
 	clang $(CFLAGS) -Wno-unused-command-line-argument -c $< -o $@
 
-$(TARGET): $(OBJS) $(PORT_OBJS)
-	$(AR) rcs $@ $(OBJS) $(PORT_OBJS)
+$(TARGET): $(OBJS)
+	$(AR) rcs $@ $(OBJS)
 	@echo "linked $@" && llvm-nm $@ | head -0
 
 clean:
