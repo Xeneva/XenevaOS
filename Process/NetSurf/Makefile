@@ -62,8 +62,7 @@ CRTLIB = ../../Ports/compiler-rt/libclang_rt.builtins-aarch64.a
 
 # Sources under Ports/. A newer file rebuilds that archive from this makefile.
 CSS_INPUTS := $(shell find ../../Ports/CssLibs \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) ! -path '*/obj/*')
-QJS_INPUTS := $(shell find ../../Ports/quickjs \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) ! -path '*/obj/*') \
-	../../Ports/quickjs/port/libm.c
+QJS_INPUTS := $(shell find ../../Ports/quickjs \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) ! -path '*/obj/*')
 MBED_INPUTS := $(shell find ../../Ports/mbedtls \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.pem' -o -name 'Makefile' \) ! -path '*/obj/*')
 
 .PHONY: all clean llvm
