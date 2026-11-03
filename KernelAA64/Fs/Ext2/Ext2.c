@@ -39,6 +39,7 @@
 #include <string.h>
 #include <aucon.h>
 #include <Fs/Ext2/ext2.h>
+#include <Fs/Ext2/ext2dir.h>
 #include <_null.h>
 
 int Ext2FreeBlock(Ext2Fs* fs, uint32_t block_num) {
@@ -381,14 +382,20 @@ AuVFSNode* Ext2Open(AuVFSNode* fsys, char* path) {
 		}
 		memset(root_session, 0, sizeof(AuVFSNode));
 
+		Ext2Inode* cached_inode = (Ext2Inode*)kmalloc(sizeof(Ext2Inode));
+		if (cached_inode) {
+			if (Ext2ReadInode(fs, 2, cached_inode) == 0) {
+				root_session->private_data = cached_inode;
+				root_session->size = cached_inode->size;
+			}
+		}
+
 		strcpy(root_session->filename, fsys->filename);
 		root_session->flags = FS_FLAG_DIRECTORY | FS_FLAG_FILE_SYSTEM;
 		root_session->first_block = 2;
-		root_session->size = 0;
 		root_session->pos = 0;
 		root_session->read = Ext2Read;
-		root_session->device = fs;
-		root_session->private_data = NULL;
+		root_session->device = fsys;
 		return root_session;
 	}
 
@@ -470,7 +477,7 @@ AuVFSNode* Ext2Open(AuVFSNode* fsys, char* path) {
 
 	file_session->read = Ext2Read;
 	file_session->open = NULL;
-	file_session->device = fs;
+	file_session->device = fsys;
 
 	return file_session;
 };
@@ -558,8 +565,9 @@ AuVFSNode* Ext2Initialise(AuVDisk* vdisk, char* mountname) {
 	fsys->device = fs;
 
 	fsys->open = Ext2Open;
+	fsys->opendir = Ext2Open;
 	fsys->read = Ext2Read;
-	fsys->read_dir = NULL;
+	fsys->read_dir = Ext2ReadDir;
 
 	fsys->write = NULL;
 	fsys->create_dir = NULL;

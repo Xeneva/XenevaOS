@@ -246,51 +246,62 @@ bool virtioblk_read(VirtblkInst* inst, size_t lba, uint64_t buffer, size_t numSe
 	VirtioBLKQueue* requestQ = inst->requestQ;
 	uint64_t requestQ_sz = inst->requestQ_sz;
 	memset(inst->reqVirt, 0, 512);
-    virtio_blk_req_header_t* hdr = (virtio_blk_req_header_t*)inst->reqVirt;
+	virtio_blk_req_header_t* hdr = (virtio_blk_req_header_t*)inst->reqVirt;
 	uint8_t* status = (uint8_t*)((uint64_t)inst->reqVirt + 16);
-
-	uint16_t idx = requestQ->available.index % requestQ_sz;
-
 
 	hdr->type = VIRTIO_BLK_OP_IN;
 	hdr->reserved = 0;
 	hdr->sector = lba;
 	*status = 0xFF;
 
-	
-	requestQ->buffers[(idx + 0) % requestQ_sz].Addr = inst->reqPhys;
-	requestQ->buffers[(idx + 0) % requestQ_sz].Length = sizeof(virtio_blk_req_header_t);
-	requestQ->buffers[(idx + 0) % requestQ_sz].Flags = VIRTQ_DESC_F_NEXT;
-	requestQ->buffers[(idx + 0) % requestQ_sz].Next =  (idx + 1) % requestQ_sz;
-	
-	requestQ->buffers[(idx + 1) % requestQ_sz].Addr = buffer;
-	requestQ->buffers[(idx + 1) % requestQ_sz].Length = numSector * 512;
-	requestQ->buffers[(idx + 1) % requestQ_sz].Flags = VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE;
-	requestQ->buffers[(idx + 1) % requestQ_sz].Next = (idx + 2) % requestQ_sz;
+	aa64_dc_cvac_range(inst->reqVirt, 32);
+	isb_flush();
+	dsb_ish();
 
+	uint16_t dHdr = 0, dData = 1, dStatus = 2;
 
-	requestQ->buffers[(idx + 2) % requestQ_sz].Addr = (inst->reqPhys + 16);
-	requestQ->buffers[(idx + 2) % requestQ_sz].Length = 1;
-	requestQ->buffers[(idx + 2) % requestQ_sz].Flags = VIRTQ_DESC_F_WRITE;
-	requestQ->buffers[(idx + 2) % requestQ_sz].Next = 0;
+	requestQ->buffers[dHdr].Addr = inst->reqPhys;
+	requestQ->buffers[dHdr].Length = sizeof(virtio_blk_req_header_t);
+	requestQ->buffers[dHdr].Flags = VIRTQ_DESC_F_NEXT;
+	requestQ->buffers[dHdr].Next = dData;
+
+	requestQ->buffers[dData].Addr = buffer;
+	requestQ->buffers[dData].Length = numSector * 512;
+	requestQ->buffers[dData].Flags = VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE;
+	requestQ->buffers[dData].Next = dStatus;
+
+	requestQ->buffers[dStatus].Addr = (inst->reqPhys + 16);
+	requestQ->buffers[dStatus].Length = 1;
+	requestQ->buffers[dStatus].Flags = VIRTQ_DESC_F_WRITE;
+	requestQ->buffers[dStatus].Next = 0;
 
 	uint16_t ringSlot = requestQ->available.index % requestQ_sz;
-	requestQ->available.ring[ringSlot] = idx;
+	requestQ->available.ring[ringSlot] = dHdr;
 	isb_flush();
 	dsb_ish();
 
 	requestQ->available.index++;
-	//txq->available.index %= txq_sz;
 	isb_flush();
 	dsb_ish();
-	
 
 	virtioblk_notify_queu(inst, 0);
 
-	while (requestQ->used.index == inst->lastReq)
+	uint32_t spins = 0;
+	while (requestQ->used.index == inst->lastReq) {
+		aa64_dc_ivac_range((void*)&requestQ->used, sizeof(VirtioBLKUsed));
 		dsb_ish();
+		if (++spins > 50000000) {
+			UARTDebugOut("[virtio-blk]: read timed out (lba %d)\r\n", (uint32_t)lba);
+			return false;
+		}
+	}
 
 	inst->lastReq = requestQ->used.index;
+
+	aa64_dc_ivac_range((void*)P2V(buffer), numSector * 512);
+	aa64_dc_ivac_range((void*)status, 1);
+	isb_flush();
+	dsb_ish();
 
 	return (*status == VIRTIO_BLK_S_OK);
 }
@@ -306,33 +317,35 @@ bool virtioblk_write(VirtblkInst* inst, size_t lba, uint64_t buffer, size_t numS
 	virtio_blk_req_header_t* hdr = (virtio_blk_req_header_t*)inst->reqVirt;
 	uint8_t* status = (uint8_t*)((uint64_t)inst->reqVirt + 16);
 
-	uint16_t idx = requestQ->available.index % requestQ_sz;
-
-
 	hdr->type = VIRTIO_BLK_OP_OUT;
 	hdr->reserved = 0;
 	hdr->sector = lba;
 	*status = 0xFF;
 
-	requestQ->buffers[(idx + 0) % requestQ_sz].Addr = inst->reqPhys;
-	requestQ->buffers[(idx + 0) % requestQ_sz].Length = sizeof(virtio_blk_req_header_t);
-	requestQ->buffers[(idx + 0) % requestQ_sz].Flags = VIRTQ_DESC_F_NEXT;
-	requestQ->buffers[(idx + 0) % requestQ_sz].Next = (idx + 1) % requestQ_sz;
+	aa64_dc_cvac_range(inst->reqVirt, 32);
+	aa64_dc_cvac_range((void*)P2V(buffer), numSector * 512);
+	isb_flush();
+	dsb_ish();
 
+	uint16_t dHdr = 0, dData = 1, dStatus = 2;
 
-	requestQ->buffers[(idx + 1) % requestQ_sz].Addr = buffer;
-	requestQ->buffers[(idx + 1) % requestQ_sz].Length = numSector * 512;
-	requestQ->buffers[(idx + 1) % requestQ_sz].Flags = VIRTQ_DESC_F_NEXT;
-	requestQ->buffers[(idx + 1) % requestQ_sz].Next = (idx + 2) % requestQ_sz;
+	requestQ->buffers[dHdr].Addr = inst->reqPhys;
+	requestQ->buffers[dHdr].Length = sizeof(virtio_blk_req_header_t);
+	requestQ->buffers[dHdr].Flags = VIRTQ_DESC_F_NEXT;
+	requestQ->buffers[dHdr].Next = dData;
 
+	requestQ->buffers[dData].Addr = buffer;
+	requestQ->buffers[dData].Length = numSector * 512;
+	requestQ->buffers[dData].Flags = VIRTQ_DESC_F_NEXT;
+	requestQ->buffers[dData].Next = dStatus;
 
-	requestQ->buffers[(idx + 2) % requestQ_sz].Addr = (inst->reqPhys + 16);
-	requestQ->buffers[(idx + 2) % requestQ_sz].Length = 1;
-	requestQ->buffers[(idx + 2) % requestQ_sz].Flags = VIRTQ_DESC_F_WRITE;
-	requestQ->buffers[(idx + 2) % requestQ_sz].Next = 0;
+	requestQ->buffers[dStatus].Addr = (inst->reqPhys + 16);
+	requestQ->buffers[dStatus].Length = 1;
+	requestQ->buffers[dStatus].Flags = VIRTQ_DESC_F_WRITE;
+	requestQ->buffers[dStatus].Next = 0;
 
 	uint16_t ringSlot = requestQ->available.index % requestQ_sz;
-	requestQ->available.ring[ringSlot] = idx;
+	requestQ->available.ring[ringSlot] = dHdr;
 	isb_flush();
 	dsb_ish();
 
@@ -340,13 +353,23 @@ bool virtioblk_write(VirtblkInst* inst, size_t lba, uint64_t buffer, size_t numS
 	isb_flush();
 	dsb_ish();
 
-
 	virtioblk_notify_queu(inst, 0);
 
-	while (requestQ->used.index == inst->lastReq)
+	uint32_t spins = 0;
+	while (requestQ->used.index == inst->lastReq) {
+		aa64_dc_ivac_range((void*)&requestQ->used, sizeof(VirtioBLKUsed));
 		dsb_ish();
+		if (++spins > 50000000) {
+			UARTDebugOut("[virtio-blk]: write timed out (lba %d)\r\n", (uint32_t)lba);
+			return false;
+		}
+	}
 
 	inst->lastReq = requestQ->used.index;
+
+	aa64_dc_ivac_range((void*)status, 1);
+	isb_flush();
+	dsb_ish();
 
 	return (*status == VIRTIO_BLK_S_OK);
 }

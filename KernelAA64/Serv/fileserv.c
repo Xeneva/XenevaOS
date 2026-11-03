@@ -617,8 +617,29 @@ int OpenDir(char* filename) {
 	AuVFSNode* dirfile = NULL;
 	if (!fsys)
 		return -1;
+
+	char* path_to_open = filename;
+	if (strcmp(fsys->filename, "/") != 0) {
+		char* next = strchr(filename, '/');
+		if (next) {
+			next++;
+			char pathname[16];
+			int i = 0;
+			for (i = 0; i < 15; i++) {
+				if (next[i] == '/' || next[i] == '\0')
+					break;
+				pathname[i] = next[i];
+			}
+			pathname[i] = 0;
+			if (strcmp(fsys->filename, pathname) == 0) {
+				next += i;
+				path_to_open = (next[0] == '\0') ? "/" : next;
+			}
+		}
+	}
+
 	if (fsys->opendir)
-		dirfile = fsys->opendir(fsys, filename);
+		dirfile = fsys->opendir(fsys, path_to_open);
 
 	if (!dirfile)
 		return -1;
