@@ -566,6 +566,23 @@ XE_EXTERN XE_EXPORT void ChWindowHandleMouse(ChWindow* win, int x, int y, int bu
 		}
 	}
 
+	if (button == DEODHAI_MOUSE_MSG_SCROLL_UP || button == DEODHAI_MOUSE_MSG_SCROLL_DOWN) {
+		if (y > win->info->y + 26 && y < (win->info->y + win->info->height)) {
+			for (int i = 0; i < win->widgets->pointer; i++) {
+				ChWidget* widget = (ChWidget*)list_get_at(win->widgets, i);
+				if (!widget || !widget->visible)
+					continue;
+				if (x >= win->info->x + widget->x && x < (win->info->x + widget->x + widget->w) &&
+					(y >= win->info->y + widget->y && y < (win->info->y + widget->y + widget->h))) {
+					if (widget->ChMouseEvent)
+						widget->ChMouseEvent(widget, win, x, y, button);
+					break;
+				}
+			}
+		}
+		return;
+	}
+
 	if (win->focusedWidget) {
 		ChWidget* focusedWidget = (ChWidget*)win->focusedWidget;
 		if (focusedWidget->ChMouseEvent)
@@ -757,6 +774,8 @@ XE_EXTERN XE_EXPORT void ChWindowHandleFocus(ChWindow* win, bool focus_val, uint
  * @param wid -- Pointer to widget needs to be added
  */
 XE_EXTERN XE_EXPORT void ChWindowAddWidget(ChWindow* win, ChWidget* wid) {
+	if (wid)
+		wid->visible = true;
 	list_add(win->widgets, wid);
 }
 

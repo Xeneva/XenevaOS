@@ -68,8 +68,8 @@ void ExtensionManagerLaunch(char* pname, char* app_path, char* filename) {
 	memset(argv, 0, sizeof(char*));
 	char* path = FileManagerGetCurrentPath();
 	printf("extension manager: passing path - %s \r\n", path);
-	char* fname = (char*)malloc(strlen(path) + strlen(filename));
-	memset(fname, 0, strlen(path) + strlen(filename));
+	char* fname = (char*)malloc(strlen(path) + strlen(filename) + 2);
+	memset(fname, 0, strlen(path) + strlen(filename) + 2);
 	strcpy(fname, path);
 	int offset = strlen(fname);
 	strcpy(fname + offset, filename);
@@ -85,11 +85,11 @@ void ExtensionManagerLaunch(char* pname, char* app_path, char* filename) {
  * that is related to desired extension 
  */
 void ExtensionManagerSpawn(ChListItem* li) {
-	if (VerifyDocExtension(li->itemText, ".JPG") || VerifyDocExtension(li->itemText, ".jpg")) {
+	if (VerifyDocExtension(li->itemText, ".JPG") || VerifyDocExtension(li->itemText, ".jpg") ||
+		VerifyDocExtension(li->itemText, ".BMP") || VerifyDocExtension(li->itemText, ".bmp") ||
+		VerifyDocExtension(li->itemText, ".PNG") || VerifyDocExtension(li->itemText, ".png")) {
 		_KePrint("Launching ImageViewer for %s \r\n", li->itemText);
-	} else if (VerifyDocExtension(li->itemText, ".BMP") ||
-			   VerifyDocExtension(li->itemText, ".bmp")) {
-		_KePrint("Launching ImageViewer for %s \r\n", li->itemText);
+		ExtensionManagerLaunch("glimpse", "/glimpse.exe", li->itemText);
 	} else if (VerifyDocExtension(li->itemText, ".WAV") ||
 			   VerifyDocExtension(li->itemText, ".wav")) {
 		_KePrint("Launching Accent for %s \r\n", li->itemText);

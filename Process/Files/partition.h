@@ -55,6 +55,7 @@ typedef struct _partition_button_ {
 	char partitionName[32];
 	char guidString[32];
 	bool mounted;
+	bool selected;
 } FileManagerPartitionButton;
 
 typedef struct _partitionList_ {
@@ -63,6 +64,8 @@ typedef struct _partitionList_ {
 	list_t* partitionButtons;
 	int button_pos_y;
 	int button_pos_x;
+	FileManagerPartitionButton* selectedButton;
+	void (*onPartitionSelected)(FileManagerPartitionButton* pbut);
 } FileManagerPartitionList;
 
 /*

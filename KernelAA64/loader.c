@@ -274,7 +274,8 @@ int AuLoadExecToProcess(AuProcess* proc, char* filename, int argc, char** argv) 
 	char* v_ = strchr(filename, '.');
 	if (v_)
 		v_++;
-	if (strcmp(v_, "exe") != 0 && strcmp(v_, "elf") != 0) {
+	if (strcmp(v_, "exe") != 0 && strcmp(v_, "EXE") != 0 &&
+		strcmp(v_, "elf") != 0 && strcmp(v_, "ELF") != 0) {
 		UARTDebugOut("[aurora]: non-executable process \r\n");
 		return -1;
 	}

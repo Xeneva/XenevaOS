@@ -278,6 +278,14 @@ int main(int argc, char* argv[]) {
 	ChWindowAddWidget(mainWin, (ChWidget*)sb);
 	ChWindowAddWidget(mainWin, (ChWidget*)tb);
 
+	// Check if a specific image file was passed on the command line
+	if (argc > 1 && argv[1]) {
+		if (GlimpseViewerLoad(viewer, argv[1])) {
+			gv->wid.visible = false;
+			viewer->wid.visible = true;
+		}
+	}
+
 	// 9. Initial Paint
 	ChWindowPaint(mainWin);
 	ChWindowBroadcastIcon(app, (char*)"/icons/glim.bmp");

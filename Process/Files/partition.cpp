@@ -57,7 +57,7 @@ void FileManagerPartitionButtonPaintHandler(ChWidget* wid, ChWindow* win) {
 	int text_x = 2;
 	uint32_t default_text_col = BLACK;
 	uint32_t mounted_text_col = LIGHTBLACK;
-	if (wid->hover) {
+	if (wid->hover || pbut->selected) {
 		default_text_col = WHITE;
 		mounted_text_col = WHITE;
 		ChColorDrawVerticalGradient(
@@ -125,21 +125,42 @@ void FileManagerPartitionListPaintHandler(ChWidget* wid, ChWindow* win) {
 
 void FileManagerPartitionListMouseEvent(ChWidget* wid, ChWindow* win, int x, int y, int button) {
 	FileManagerPartitionList* plist = (FileManagerPartitionList*)wid;
+	bool is_down = (button != 0 && button != DEODHAI_MOUSE_MSG_SCROLL_UP &&
+					button != DEODHAI_MOUSE_MSG_SCROLL_DOWN);
+
 	for (int i = 0; i < plist->partitionButtons->pointer; i++) {
 		FileManagerPartitionButton* pbut =
 			(FileManagerPartitionButton*)list_get_at(plist->partitionButtons, i);
-		if ((x >= (win->info->x + pbut->wid.x) && x < (win->info->x + pbut->wid.x + pbut->wid.w)) &&
-			(y >= (win->info->y + pbut->wid.y) && y < (win->info->y + pbut->wid.y + pbut->wid.h))) {
-			pbut->wid.hover = true;
-			if (pbut->wid.ChPaintHandler)
-				pbut->wid.ChPaintHandler((ChWidget*)pbut, win);
-			ChWindowUpdate(win, wid->x, wid->y, wid->w, wid->h, 0, 1);
+		bool inside = ((x >= (win->info->x + pbut->wid.x) && x < (win->info->x + pbut->wid.x + pbut->wid.w)) &&
+					   (y >= (win->info->y + pbut->wid.y) && y < (win->info->y + pbut->wid.y + pbut->wid.h)));
+
+		if (inside) {
+			if (is_down) {
+				for (int j = 0; j < plist->partitionButtons->pointer; j++) {
+					FileManagerPartitionButton* b =
+						(FileManagerPartitionButton*)list_get_at(plist->partitionButtons, j);
+					b->selected = (b == pbut);
+				}
+				plist->selectedButton = pbut;
+				if (plist->wid.ChPaintHandler)
+					plist->wid.ChPaintHandler(wid, win);
+				ChWindowUpdate(win, wid->x, wid->y, wid->w, wid->h, 0, 1);
+				if (plist->onPartitionSelected)
+					plist->onPartitionSelected(pbut);
+				return;
+			}
+			if (!pbut->wid.hover) {
+				pbut->wid.hover = true;
+				if (pbut->wid.ChPaintHandler)
+					pbut->wid.ChPaintHandler((ChWidget*)pbut, win);
+				ChWindowUpdate(win, pbut->wid.x, pbut->wid.y, pbut->wid.w, pbut->wid.h, 0, 1);
+			}
 		} else {
 			if (pbut->wid.hover) {
 				pbut->wid.hover = false;
 				if (pbut->wid.ChPaintHandler)
 					pbut->wid.ChPaintHandler((ChWidget*)pbut, win);
-				ChWindowUpdate(win, wid->x, wid->y, wid->w, wid->h, 0, 1);
+				ChWindowUpdate(win, pbut->wid.x, pbut->wid.y, pbut->wid.w, pbut->wid.h, 0, 1);
 			}
 		}
 	}
@@ -161,6 +182,7 @@ FileManagerPartitionList* FileManagerCreatePartitionList(int x, int y, int w, in
 	list->wid.y = y;
 	list->wid.w = w;
 	list->wid.h = h;
+	list->wid.visible = true;
 	list->wid.ChPaintHandler = FileManagerPartitionListPaintHandler;
 	list->wid.ChMouseEvent = FileManagerPartitionListMouseEvent;
 	list->partitionButtons = initialize_list();
@@ -173,6 +195,7 @@ FileManagerPartitionButton*
 FileManageCreatePartitionButton(FileManagerPartitionList* partitionList) {
 	FileManagerPartitionButton* pbut =
 		(FileManagerPartitionButton*)malloc(sizeof(FileManagerPartitionButton));
+	memset(pbut, 0, sizeof(FileManagerPartitionButton));
 	pbut->wid.x = partitionList->wid.x + partitionList->button_pos_x;
 	pbut->wid.y = partitionList->wid.y + partitionList->button_pos_y;
 	pbut->wid.w = partitionList->wid.w - partitionList->button_pos_x * 2;
