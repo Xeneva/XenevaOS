@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XenevaOS xHCI/USB progress history</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1000px;margin:auto;padding:24px;background:#f6f8fa;color:#1f2328}
+svg{max-width:100%;height:auto;border:1px solid #30363d;border-radius:6px}
+table{border-collapse:collapse;margin:16px 0}
+th,td{border:1px solid #d0d7de;padding:4px 10px}
+th{background:#eaeef2}td+td,th+th{text-align:right}
+.muted{color:#57606a}
+</style></head><body>
+<h1>xHCI/USB progress history</h1>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 300" width="900" height="300" role="img" aria-label="Green, partial, and tracked xHCI features over time" font-family="sans-serif" font-size="12" fill="#c9d1d9">
+<style>.hit{fill:#fff;fill-opacity:0}.hit:hover{fill-opacity:0.06}</style>
+<rect width="900" height="300" rx="6" fill="#0d1117"/>
+<text x="64" y="20" font-size="13" font-weight="bold">xHCI/USB features</text>
+<line x1="64" x2="720" y1="230.0" y2="230.0" stroke="#30363d"/>
+<text x="58" y="234.0" text-anchor="end" fill="#8b949e">0</text>
+<line x1="64" x2="720" y1="181.0" y2="181.0" stroke="#30363d"/>
+<text x="58" y="185.0" text-anchor="end" fill="#8b949e">22.5</text>
+<line x1="64" x2="720" y1="132.0" y2="132.0" stroke="#30363d"/>
+<text x="58" y="136.0" text-anchor="end" fill="#8b949e">45</text>
+<line x1="64" x2="720" y1="83.0" y2="83.0" stroke="#30363d"/>
+<text x="58" y="87.0" text-anchor="end" fill="#8b949e">67.5</text>
+<line x1="64" x2="720" y1="34.0" y2="34.0" stroke="#30363d"/>
+<text x="58" y="38.0" text-anchor="end" fill="#8b949e">90</text>
+<line x1="392.0" x2="392.0" y1="34" y2="230" stroke="#30363d" stroke-width="0.5"/>
+<text x="392.0" y="248" text-anchor="middle" font-size="11" fill="#8b949e">Nov 4</text>
+<line x1="64" x2="720" y1="34.0" y2="34.0" stroke="#8b949e" stroke-width="2" stroke-dasharray="6 4"/>
+<circle cx="392.0" cy="179.9" r="3.5" fill="#d29922"/>
+<circle cx="392.0" cy="110.2" r="3.5" fill="#2ea043"/>
+<text x="400.0" y="102.2" fill="#2ea043" font-weight="bold">55/90 (61.1%)</text>
+<rect class="hit" x="64.0" y="34" width="656.0" height="196"><title>2026-11-04
+Green 55, partial 23, missing 12 of 90 tracked</title></rect>
+<text x="728" y="46" fill="#8b949e">Tracked 90</text>
+<text x="728" y="64" fill="#c9d1d9" font-weight="bold"><tspan fill="#2ea043">●</tspan> Green 55 (61.1%)</text>
+<text x="728" y="82" fill="#c9d1d9" font-weight="bold"><tspan fill="#d29922">●</tspan> Partial 23</text>
+<text x="728" y="100" fill="#c9d1d9" font-weight="bold"><tspan fill="#6e7681">●</tspan> Missing 12</text>
+</svg>
+<p class="muted">Generated 2026-11-04 by <a href="../../Tools/xhci-progress.py">Tools/xhci-progress.py</a>. Only one snapshot has been recorded so far. The chart will grow each day this generator runs; re-running on the same day replaces that day&#x27;s point. Green = implemented and gate-tested, amber = implemented but untested, dashed gray = tracked total. Raw numbers: <a href="xhci-progress-history.json">xhci-progress-history.json</a>.</p>
+<table>
+<tr><th>Date</th><th>Green</th><th>Partial</th><th>Missing</th><th>Tracked</th><th>Green share</th></tr>
+<tr><td>2026-11-04</td><td>55</td><td>23</td><td>12</td><td>90</td><td>61.1%</td></tr>
+</table>
+<p><a href="xhci-progress.html">Back to current progress</a></p>
+</body></html>

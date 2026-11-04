@@ -1330,6 +1330,14 @@ QEMU_ARGS=(
     # usb-serial only attaches when its chardev reports open.  A null
     # backend never opens, so ask the model to plug in at realize time.
     -device usb-serial,chardev=ser0,id=usb-serial0,always-plugged=on,port=4.2
+    # A second hub below usb-hub0 exercises the multi-tier scan: the device
+    # below it has a two-nibble route string and its log path is 8.8.1.
+    # Hub ports 4.1-4.7 are already taken by the boot devices and the gate's
+    # storage batteries, so the nested hub uses the last free port.
+    # QEMU's PenPartner tablet is a HID pointer whose report descriptor uses
+    # report IDs, so this one device covers nested hubs and the ID path.
+    -device usb-hub,id=usb-hub1,port=4.8
+    -device usb-wacom-tablet,id=usb-wacom0,port=4.8.1
     -serial stdio
 )
 

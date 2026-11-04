@@ -370,18 +370,61 @@ static int polling_started;
 static AuBtUsbOps bt_ops;
 static int bt_ops_valid;
 
+/* Format a device's path as root-port[.hub-port...].  The controller port
+ * number is the first component; each non-zero route-string nibble adds the
+ * downstream hub port for that tier.  This is log evidence only: the route
+ * string itself stays the source of truth for addressing. */
+static void usb_port_path(const UsbDev* d, char* out, size_t size) {
+	int n;
+	int tier;
+
+	if (!out || !size)
+		return;
+	n = _snprintf(out, size, "%d", (int)d->port);
+	if (n < 0 || (size_t)n >= size) {
+		out[0] = 0;
+		return;
+	}
+	for (tier = 0; tier < HUB_MAX_TIER; tier++) {
+		uint32_t port = (d->route >> (4 * tier)) & 0xfu;
+		if (!port)
+			break;
+		n += _snprintf(out + n, size - (size_t)n, ".%d", (int)port);
+		if (n < 0 || (size_t)n >= size)
+			break;
+	}
+}
+
+static void usb_child_path(const UsbDev* hub, int port, char* out, size_t size) {
+	char base[24];
+	usb_port_path(hub, base, sizeof base);
+	_snprintf(out, size, "%s.%d", base, port);
+}
+
 /* The BT thread and the HID poll thread both reach the command/event rings.
  * Every multi-TRB sequence takes this lock for its whole lifetime so a
- * completion can never be consumed by the other caller. */
+ * completion can never be consumed by the other caller.
+ *
+ * The sections only poll the event ring and never need the controller IRQ,
+ * so interrupts stay masked for the whole hold. Without that, the timer can
+ * preempt a kernel-mode holder and this scheduler only switches on return
+ * to EL0: a user thread that then spun on usb_busy at EL1 would keep the
+ * holder from ever running. Masking makes the lock invisible to any other
+ * thread on this single-core target. */
 static volatile int usb_busy;
+static uint64_t usb_daif;
 
 static void usb_lock(void) {
+	uint64_t daif = read_daif();
+	mask_irqs();
 	while (__atomic_exchange_n(&usb_busy, 1, __ATOMIC_ACQUIRE))
 		;
+	usb_daif = daif;
 }
 
 static void usb_unlock(void) {
 	__atomic_store_n(&usb_busy, 0, __ATOMIC_RELEASE);
+	restore_daif(usb_daif);
 }
 
 static void spin_ms(uint32_t ms) {
@@ -2082,9 +2125,13 @@ static int claim_hid(UsbDev* d, const uint8_t* desc, int len, uint8_t cfgval) {
 		if (p->kind == 1 && hid_set_leds(d, p, 0) == 1)
 			UARTDebugOut("[xhci-hid]: leds %x\r\n", 0);
 		hid_count++;
-		UARTDebugOut("[xhci]: HID %s ready on port %d slot %d ep=%x mps=%d\r\n",
-					 p->kind == 1 ? "keyboard" : "pointer", d->port, d->slot,
-					 p->ep_addr, p->mps);
+		{
+			char path[24];
+			usb_port_path(d, path, sizeof path);
+			UARTDebugOut("[xhci]: HID %s ready on port %s slot %d ep=%x mps=%d\r\n",
+						 p->kind == 1 ? "keyboard" : "pointer", path, d->slot,
+						 p->ep_addr, p->mps);
+		}
 	}
 	if (niface > XHCI_MAX_HID)
 		UARTDebugOut("[xhci]: hid %d interfaces, kept %d\r\n", niface,
@@ -3604,7 +3651,9 @@ static int hub_update_context(UsbDev* d, const uint8_t* hd, int dci) {
 	if (think)
 		s[2] = (s[2] & ~(3u << 16)) | (think << 16);
 	if (configure_eps(d, 0, (uint32_t)dci)) {
-		UARTDebugOut("[xhci]: hub context update failed on port %d\r\n", d->port);
+		char path[24];
+		usb_port_path(d, path, sizeof path);
+		UARTDebugOut("[xhci]: hub context update failed on port %s\r\n", path);
 		return -1;
 	}
 	return 0;
@@ -3696,8 +3745,12 @@ static int claim_hub(UsbDev* d, const uint8_t* desc, int len, uint8_t cfgval) {
 
 	d->is_hub = 1;
 	arm_intr(d);
-	UARTDebugOut("[xhci]: hub ready on port %d slot %d ports %d\r\n",
-				 d->port, d->slot, d->hub_ports);
+	{
+		char path[24];
+		usb_port_path(d, path, sizeof path);
+		UARTDebugOut("[xhci]: hub ready on port %s slot %d ports %d\r\n",
+					 path, d->slot, d->hub_ports);
+	}
 	return 1;
 }
 
@@ -3899,7 +3952,7 @@ static int enum_port(int port) {
  * then release its slot and DMA pages. The static device array stays valid,
  * so a stale BT bridge pointer cannot dereference freed memory. */
 static void dev_disconnect(UsbDev* d) {
-	int port;
+	char path[24];
 	uint32_t route;
 	int was_bt;
 	int idx;
@@ -3911,7 +3964,7 @@ static void dev_disconnect(UsbDev* d) {
 		return;
 	}
 	d->state = XDEV_CLOSING;
-	port = d->port;
+	usb_port_path(d, path, sizeof path);
 	route = d->route;
 	was_bt = d->bt;
 	idx = (int)(d - devices) + 1;
@@ -3934,8 +3987,8 @@ static void dev_disconnect(UsbDev* d) {
 	usb_lock();
 	dev_release_locked(d);
 	usb_unlock();
-	UARTDebugOut("[xhci]: device on port %d route %x released\r\n",
-				 port, (unsigned)route);
+	UARTDebugOut("[xhci]: device on port %s route %x released\r\n",
+				 path, (unsigned)route);
 }
 
 static uint16_t hub_le16(const uint8_t* p) {
@@ -3948,10 +4001,13 @@ static int hub_port_status(UsbDev* hub, int port, uint8_t st[4]) {
 }
 
 static void hub_clear_feature(UsbDev* hub, int port, uint16_t feature) {
+	char path[32];
 	int rc = ctrl(hub, 0x23, 1, feature, (uint16_t)port, NULL, 0, 0);
-	if (rc)
-		UARTDebugOut("[xhci-hub]: clear %x port %d.%d rc %d\r\n",
-					 feature, hub->port, port, rc);
+	if (rc) {
+		usb_child_path(hub, port, path, sizeof path);
+		UARTDebugOut("[xhci-hub]: clear %x port %s rc %d\r\n",
+					 feature, path, rc);
+	}
 }
 
 static void hub_set_feature(UsbDev* hub, int port, uint16_t feature) {
@@ -4016,13 +4072,15 @@ static int hub_enum_child(UsbDev* hub, int port) {
 		spin_ms(20);
 	}
 	if (r == XCT_DEV) {
-		UARTDebugOut("[xhci-hotplug]: enumerated port %d.%d\r\n",
-					 hub->port, port);
-		UARTDebugOut("[xhci-hub]: child enumerated on port %d.%d\r\n",
-					 hub->port, port);
-	} else if (r == XCT_FAIL)
-		UARTDebugOut("[xhci-hub]: enumeration failed on port %d.%d\r\n",
-					 hub->port, port);
+		char path[32];
+		usb_child_path(hub, port, path, sizeof path);
+		UARTDebugOut("[xhci-hotplug]: enumerated port %s\r\n", path);
+		UARTDebugOut("[xhci-hub]: child enumerated on port %s\r\n", path);
+	} else if (r == XCT_FAIL) {
+		char path[32];
+		usb_child_path(hub, port, path, sizeof path);
+		UARTDebugOut("[xhci-hub]: enumeration failed on port %s\r\n", path);
+	}
 	return r;
 }
 
@@ -4034,13 +4092,15 @@ static void hub_port_changed(UsbDev* hub, int port) {
 	uint16_t ws, wc;
 	uint32_t route = hub->route | ((uint32_t)port << (4 * hub->tier));
 	UsbDev* child;
+	char path[32];
 
+	usb_child_path(hub, port, path, sizeof path);
 	if (hub_port_status(hub, port, st))
 		return;
 	ws = hub_le16(st);
 	wc = hub_le16(st + 2);
-	UARTDebugOut("[xhci-hub]: port %d.%d status %x change %x\r\n",
-				 hub->port, port, ws, wc);
+	UARTDebugOut("[xhci-hub]: port %s status %x change %x\r\n",
+				 path, ws, wc);
 
 	if (wc & (1u << HUB_CHANGE_CONNECTION)) {
 		hub_clear_feature(hub, port, HUB_CLEAR_CONNECTION);
@@ -4049,8 +4109,8 @@ static void hub_port_changed(UsbDev* hub, int port) {
 			child = dev_for_route_locked(hub->port, route);
 			usb_unlock();
 			if (child) {
-				UARTDebugOut("[xhci-hotplug]: disconnect on port %d.%d\r\n",
-							 hub->port, port);
+				UARTDebugOut("[xhci-hotplug]: disconnect on port %s\r\n",
+							 path);
 				dev_disconnect(child);
 			}
 			if (wc & (1u << HUB_CHANGE_ENABLE))
@@ -4064,8 +4124,7 @@ static void hub_port_changed(UsbDev* hub, int port) {
 		hub_clear_feature(hub, port, HUB_CLEAR_RESET);
 	if (wc & (1u << HUB_CHANGE_OVERCURRENT)) {
 		hub_clear_feature(hub, port, HUB_CLEAR_OVERCURRENT);
-		UARTDebugOut("[xhci-hub]: port %d.%d overcurrent\r\n",
-					 hub->port, port);
+		UARTDebugOut("[xhci-hub]: port %s overcurrent\r\n", path);
 		return;
 	}
 

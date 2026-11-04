@@ -1,0 +1,1208 @@
+{
+  "generated": "2026-11-04",
+  "source": [
+    "KernelAA64/Usb/xhci.c",
+    "Tests/dcl_test_all.sh",
+    "Tests/dcl_input_inject.py"
+  ],
+  "legend": {
+    "done": "implemented and exercised by the DCL xHCI gate",
+    "partial": "implemented but untested or only conditionally tested",
+    "todo": "not implemented"
+  },
+  "totals": {
+    "done": 55,
+    "partial": 23,
+    "todo": 12,
+    "total": 90,
+    "percent": 61.1
+  },
+  "panels": [
+    {
+      "name": "Controller and transport",
+      "done": 26,
+      "partial": 12,
+      "todo": 5,
+      "total": 43,
+      "percent": 60.5,
+      "groups": [
+        {
+          "name": "Bringup",
+          "done": 5,
+          "partial": 4,
+          "todo": 1,
+          "total": 10
+        },
+        {
+          "name": "Ports and hubs",
+          "done": 5,
+          "partial": 2,
+          "todo": 0,
+          "total": 7
+        },
+        {
+          "name": "Enumeration",
+          "done": 8,
+          "partial": 2,
+          "todo": 0,
+          "total": 10
+        },
+        {
+          "name": "Transfers and recovery",
+          "done": 4,
+          "partial": 4,
+          "todo": 1,
+          "total": 9
+        },
+        {
+          "name": "Lifecycle",
+          "done": 4,
+          "partial": 0,
+          "todo": 0,
+          "total": 4
+        },
+        {
+          "name": "Power management",
+          "done": 0,
+          "partial": 0,
+          "todo": 3,
+          "total": 3
+        }
+      ]
+    },
+    {
+      "name": "Device classes and verification",
+      "done": 29,
+      "partial": 11,
+      "todo": 7,
+      "total": 47,
+      "percent": 61.7,
+      "groups": [
+        {
+          "name": "HID and input",
+          "done": 8,
+          "partial": 2,
+          "todo": 1,
+          "total": 11
+        },
+        {
+          "name": "Bulk-Only storage",
+          "done": 10,
+          "partial": 2,
+          "todo": 1,
+          "total": 13
+        },
+        {
+          "name": "UAS storage",
+          "done": 9,
+          "partial": 0,
+          "todo": 0,
+          "total": 9
+        },
+        {
+          "name": "Serial",
+          "done": 2,
+          "partial": 2,
+          "todo": 1,
+          "total": 5
+        },
+        {
+          "name": "Bluetooth",
+          "done": 0,
+          "partial": 5,
+          "todo": 0,
+          "total": 5
+        },
+        {
+          "name": "Other USB classes",
+          "done": 0,
+          "partial": 0,
+          "todo": 4,
+          "total": 4
+        }
+      ]
+    }
+  ],
+  "features": [
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "PCIe discovery and BAR mapping",
+      "state": "done",
+      "evidence": {
+        "code": "AuPCIEScanClassIF(0x0c, 0x03, 0x30",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": "Every gate assertion depends on the controller being found and its BAR mapped."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "Controller reset and start",
+      "state": "done",
+      "evidence": {
+        "code": "wr(caplen, rd(caplen) | 2u);",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": "HCRST is waited out before any ring or slot is touched."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "Command and event rings",
+      "state": "done",
+      "evidence": {
+        "code": "erst[0] = (uint32_t)evt_phys;",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "MSI-X interrupt handling",
+      "state": "done",
+      "evidence": {
+        "code": "AuPCIEAllocMSI(pci, (size_t)spi",
+        "kind": "gate",
+        "marker": "[xhci]: irq delivered"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "Extended capabilities and protocols",
+      "state": "done",
+      "evidence": {
+        "code": "xhci_ext_caps((uint32_t)((hcc1 >> 16)",
+        "kind": "gate",
+        "marker": "[xhci]: ext cap 2 protocol"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "32-bit DMA ceiling",
+      "state": "partial",
+      "evidence": {
+        "code": "dma_ceiling = 0xffffffffull;",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Implemented, but QEMU advertises 64-bit addressing, so the low-4-GiB path never runs."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "Controller page size",
+      "state": "partial",
+      "evidence": {
+        "code": "page_bytes = controller_page_bytes",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Implemented, but every test boots with 4 KiB controller pages."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "Scratchpad buffers",
+      "state": "partial",
+      "evidence": {
+        "code": "scratchpad_setup(scratchpad_count(hcc2))",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "QEMU reports zero scratchpads; allocating a non-zero scratchpad array is not exercised."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "BIOS legacy handoff",
+      "state": "partial",
+      "evidence": {
+        "code": "xhci_legacy_handoff",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Implemented; QEMU exposes no legacy capability, so BIOS handoff never runs."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Bringup",
+      "name": "Debug capability",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "The xHCI debug capability is not implemented."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Ports and hubs",
+      "name": "Root-port power and reset",
+      "state": "done",
+      "evidence": {
+        "code": "wr(base, rd(base) | (1u << 9));",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Ports and hubs",
+      "name": "Root-port hotplug",
+      "state": "done",
+      "evidence": {
+        "code": "static void xhci_port_scan(void)",
+        "kind": "gate",
+        "marker": "[xhci-hotplug]: enumerated port"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Ports and hubs",
+      "name": "USB 2.0 hub",
+      "state": "done",
+      "evidence": {
+        "code": "desc_type = d->speed >= 4 ? 0x2a : HUB_DESC_TYPE;",
+        "kind": "gate",
+        "marker": "[xhci]: hub ready on port"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Ports and hubs",
+      "name": "USB 3.0 hub",
+      "state": "partial",
+      "evidence": {
+        "code": "if (d->speed >= 4 && ctrl(d, 0x20, 0x0c",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "The SuperSpeed hub path exists, but the gate attaches only a USB 2.0 usb-hub."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Ports and hubs",
+      "name": "Multi-tier hub scan",
+      "state": "done",
+      "evidence": {
+        "code": "for (pass = 0; pass < HUB_MAX_TIER; pass++)",
+        "kind": "gate",
+        "marker": "[xhci-hub]: child enumerated on port 8.8.1"
+      },
+      "note": "A second hub under usb-hub0 puts a Wacom tablet at 8.8.1, so the route string and log path carry two hub tiers."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Ports and hubs",
+      "name": "Hub port power and reset",
+      "state": "done",
+      "evidence": {
+        "code": "static int hub_port_reset",
+        "kind": "gate",
+        "marker": "[xhci-hub]: child enumerated on port"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Ports and hubs",
+      "name": "Overcurrent recovery",
+      "state": "partial",
+      "evidence": {
+        "code": "HUB_CHANGE_OVERCURRENT",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Overcurrent changes are cleared and logged; no test injects an overcurrent event."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "Device descriptor",
+      "state": "done",
+      "evidence": {
+        "code": "ctrl(d, 0x80, 6, 0x0100, 0, devdesc, 18, 1)",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "Configuration descriptor",
+      "state": "done",
+      "evidence": {
+        "code": "ctrl(d, 0x80, 6, 0x0200, 0, cfg, cfg_len, 1)",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "String descriptors",
+      "state": "done",
+      "evidence": {
+        "code": "usb_read_strings(d, devdesc)",
+        "kind": "gate",
+        "marker": "[xhci]: product QEMU USB Keyboard"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "Set configuration",
+      "state": "done",
+      "evidence": {
+        "code": "ctrl(d, 0x00, 9, cfgval",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "Class-driver dispatch",
+      "state": "done",
+      "evidence": {
+        "code": "usb_classes[i].probe(d, cfg, cfg_len, cfgval)",
+        "kind": "gate",
+        "marker": "[xhci]: HID keyboard ready on port"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "Unsupported class handling",
+      "state": "done",
+      "evidence": {
+        "code": "has no supported interface",
+        "kind": "host",
+        "marker": "has no supported interface"
+      },
+      "note": "The input helper attaches usb-audio, waits for the no-driver verdict, then removes it."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "SuperSpeed companion descriptors",
+      "state": "done",
+      "evidence": {
+        "code": "usb_log_companions(cfg, cfg_len)",
+        "kind": "gate",
+        "marker": "[xhci]: ss companion ep"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "Transaction translator for low/full speed",
+      "state": "partial",
+      "evidence": {
+        "code": "TT Port Number is the hub port",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "TT fields exist for low/full-speed children behind a high-speed hub; the gate's hub is full speed, so the path is unused."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "EP0 max packet update",
+      "state": "done",
+      "evidence": {
+        "code": "static int ep0_set_mps",
+        "kind": "gate",
+        "marker": "[xhci]: ep0 max packet 64"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Enumeration",
+      "name": "Large configuration descriptors",
+      "state": "partial",
+      "evidence": {
+        "code": "if (cfg_len > sizeof cfg_buf)",
+        "kind": "conditional",
+        "marker": "[xhci]: product QEMU USB BIGCFG DISK"
+      },
+      "note": "The big-config boot is skipped unless QEMU provides the test-only usb-storage-bigcfg model."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Control transfers",
+      "state": "done",
+      "evidence": {
+        "code": "static int ctrl_locked",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Interrupt IN transfers",
+      "state": "done",
+      "evidence": {
+        "code": "static int intr_xfer",
+        "kind": "gate",
+        "marker": "[xhci-hid]: poll thread running"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Bulk IN transfers",
+      "state": "done",
+      "evidence": {
+        "code": "static int bulk_in_locked",
+        "kind": "gate",
+        "marker": "[xhci-msc]: read lba0"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Bulk OUT transfers",
+      "state": "done",
+      "evidence": {
+        "code": "static int xhci_bulk_out",
+        "kind": "gate",
+        "marker": "[xhci-msc]: write lba0 ok"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Transfer timeout handling",
+      "state": "partial",
+      "evidence": {
+        "code": "transfer timed out",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Timeouts are logged and the command ring can recover, but no test forces a timed-out transfer."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Endpoint halt recovery",
+      "state": "partial",
+      "evidence": {
+        "code": "static int ep_recover_locked",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Stop/Reset/Set-Dequeue recovery exists, but no test halts an endpoint."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Command ring abort and restart",
+      "state": "partial",
+      "evidence": {
+        "code": "static void cmd_ring_abort",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Ring abort and restart are implemented for stuck commands; no test forces a command timeout."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Isochronous OUT",
+      "state": "partial",
+      "evidence": {
+        "code": "static int xhci_iso_out",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Wired for USB Bluetooth SCO; no test adapter emits isochronous traffic."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Transfers and recovery",
+      "name": "Isochronous IN",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Only isochronous OUT exists; there is no isochronous IN ring."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Lifecycle",
+      "name": "Slot allocation and addressing",
+      "state": "done",
+      "evidence": {
+        "code": "TRB_ENABLE_SLOT << 10",
+        "kind": "boot",
+        "marker": null
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Lifecycle",
+      "name": "Disconnect and release",
+      "state": "done",
+      "evidence": {
+        "code": "static void dev_disconnect",
+        "kind": "gate",
+        "marker": "[xhci-hotplug]: disconnect on port"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Lifecycle",
+      "name": "DMA reclaim and replug reuse",
+      "state": "done",
+      "evidence": {
+        "code": "vdisk reuse slot",
+        "kind": "host",
+        "marker": "[xhci-msc]: vdisk reuse slot"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Lifecycle",
+      "name": "Hotplug while HID polling",
+      "state": "done",
+      "evidence": {
+        "code": "xhci_hid_thread",
+        "kind": "host",
+        "marker": "[xhci-hid]: key 30 down"
+      },
+      "note": "The helper removes the boot keyboard and tablet while the poll thread is running, then decodes input from the replacements."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Power management",
+      "name": "Suspend and resume",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Port suspend/resume and U3 transitions are not implemented."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Power management",
+      "name": "USB link power management",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "USB link power management (LPM) is not implemented."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Power management",
+      "name": "ACPI power transitions",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "There is no ACPI power-transition handling for the controller."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Boot keyboard",
+      "state": "done",
+      "evidence": {
+        "code": "static void hid_keyboard_report",
+        "kind": "gate",
+        "marker": "[xhci]: HID keyboard ready on port"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Boot pointer/tablet",
+      "state": "done",
+      "evidence": {
+        "code": "static void hid_pointer_report",
+        "kind": "gate",
+        "marker": "[xhci]: HID pointer ready on port"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "HID report descriptor parser",
+      "state": "done",
+      "evidence": {
+        "code": "static int hid_parse_report",
+        "kind": "gate",
+        "marker": "[xhci-hid]: report iface"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Report ID support",
+      "state": "done",
+      "evidence": {
+        "code": "p->rep.has_ids",
+        "kind": "gate",
+        "marker": "[xhci-hid]: report iface 0 len 110 fields 4 kind pointer ids 1"
+      },
+      "note": "QEMU's PenPartner tablet report descriptor carries report IDs; the parser records the ID stream and the device decodes through it."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Generic keyboard decoder",
+      "state": "done",
+      "evidence": {
+        "code": "static void hid_keyboard_generic",
+        "kind": "gate",
+        "marker": "[xhci-hid]: key 1E down"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Generic absolute pointer decoder",
+      "state": "done",
+      "evidence": {
+        "code": "static void hid_pointer_generic",
+        "kind": "host",
+        "marker": "[xhci-hid]: pointer"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Relative pointer and wheel",
+      "state": "partial",
+      "evidence": {
+        "code": "have_wheel",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Relative motion and wheel fields are decoded, but the gate's tablet is absolute and has no wheel."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Keyboard LED output",
+      "state": "done",
+      "evidence": {
+        "code": "static int hid_set_leds",
+        "kind": "host",
+        "marker": "[xhci-hid]: leds 2"
+      },
+      "note": "The host helper presses Caps Lock and checks the SET_REPORT path."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Composite HID interfaces",
+      "state": "partial",
+      "evidence": {
+        "code": "hid_collect(desc, len, ifaces, XHCI_MAX_HID)",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Multiple HID interfaces per device are collected and armed; the gate devices are single-interface."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "HID poll thread",
+      "state": "done",
+      "evidence": {
+        "code": "static void xhci_hid_thread",
+        "kind": "gate",
+        "marker": "[xhci-hid]: poll thread running"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "HID and input",
+      "name": "Gamepad and consumer controls",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "No gamepad, consumer-control, or other HID usage maps to the input API."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "Bulk-Only CBW/CSW transport",
+      "state": "done",
+      "evidence": {
+        "code": "static int msc_transport_locked",
+        "kind": "gate",
+        "marker": "[xhci-msc]: inquiry"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "SCSI INQUIRY",
+      "state": "done",
+      "evidence": {
+        "code": "static int msc_inquiry",
+        "kind": "gate",
+        "marker": "[xhci-msc]: inquiry"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "READ CAPACITY (10/16)",
+      "state": "done",
+      "evidence": {
+        "code": "static int msc_capacity",
+        "kind": "gate",
+        "marker": "[xhci-msc]: capacity 3145728 MB x 512 bytes"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "READ/WRITE (10/16)",
+      "state": "done",
+      "evidence": {
+        "code": "static int msc_rw_blocks",
+        "kind": "gate",
+        "marker": "[xhci-msc]: read lba0 58 45 4E 45"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "64-bit LBA access",
+      "state": "done",
+      "evidence": {
+        "code": "cdb[0] = in ? 0x88 : 0x8a",
+        "kind": "gate",
+        "marker": "[xhci-msc]: read last lba ok"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "REQUEST SENSE / CHECK CONDITION",
+      "state": "done",
+      "evidence": {
+        "code": "static int msc_sense_locked",
+        "kind": "gate",
+        "marker": "[xhci-msc]: sense status 1 key 7 asc 27"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "BOT reset recovery",
+      "state": "partial",
+      "evidence": {
+        "code": "static int msc_reset_locked",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Reset recovery exists, but no test forces a transport or phase error."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "REPORT LUNS and multi-LUN",
+      "state": "done",
+      "evidence": {
+        "code": "static int msc_report_luns",
+        "kind": "gate",
+        "marker": "[xhci-msc]: report luns 1"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "Vdisk reuse across replug",
+      "state": "done",
+      "evidence": {
+        "code": "vdisk reuse slot",
+        "kind": "host",
+        "marker": "[xhci-msc]: vdisk reuse slot"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "SYNCHRONIZE CACHE",
+      "state": "partial",
+      "evidence": {
+        "code": "static int msc_sync",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "SYNCHRONIZE CACHE runs after writes and on vdisk flush, but no gate assertion checks the flush result."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "GPT partition scan",
+      "state": "done",
+      "evidence": {
+        "code": "AuVDiskRegister(vd)",
+        "kind": "gate",
+        "marker": "[vdisk]: USB QEMU HARDDISK gpt partition 1 lba 2048"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "FAT32 mount",
+      "state": "done",
+      "evidence": {
+        "code": "AuVDiskRegister(vd)",
+        "kind": "gate",
+        "marker": "[fat]: USB QEMU HARDDISK mounted at"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "SCSI UNMAP/TRIM",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "SCSI UNMAP/TRIM is not implemented."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "UAS endpoint discovery",
+      "state": "done",
+      "evidence": {
+        "code": "static int claim_uas",
+        "kind": "gate",
+        "marker": "[xhci-uas]: inquiry QEMU HARDDISK"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "Stream context arrays",
+      "state": "done",
+      "evidence": {
+        "code": "static void ep_init_streams",
+        "kind": "gate",
+        "marker": "[xhci]: primary stream arrays"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "Streams enabled",
+      "state": "done",
+      "evidence": {
+        "code": "streams enabled, max",
+        "kind": "gate",
+        "marker": "[xhci-uas]: streams enabled"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "No-stream shared rings",
+      "state": "done",
+      "evidence": {
+        "code": "streams off, shared rings",
+        "kind": "gate",
+        "marker": "[xhci-uas]: streams off, shared rings"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "Command and status IUs",
+      "state": "done",
+      "evidence": {
+        "code": "static int uas_transport_locked",
+        "kind": "gate",
+        "marker": "[xhci-uas]: read lba0 58 45 4E 45"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "Data IUs",
+      "state": "done",
+      "evidence": {
+        "code": "static int uas_cmd_out_locked",
+        "kind": "gate",
+        "marker": "[xhci-uas]: write lba0 ok"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "Multi-LUN discovery",
+      "state": "done",
+      "evidence": {
+        "code": "msc_publish_luns(d, m, \"uas\")",
+        "kind": "gate",
+        "marker": "[xhci-uas]: report luns 1"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "UAS sense handling",
+      "state": "done",
+      "evidence": {
+        "code": "static int msc_uas_cmd_locked",
+        "kind": "gate",
+        "marker": "[xhci-uas]: capacity"
+      },
+      "note": "The probe's unit-attention retry is what reaches the capacity assertion."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "UAS storage",
+      "name": "Stream release on replug",
+      "state": "done",
+      "evidence": {
+        "code": "msc_release_uas",
+        "kind": "host",
+        "marker": "[xhci-uas]: vdisk reuse slot"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Serial",
+      "name": "FTDI probe and init",
+      "state": "done",
+      "evidence": {
+        "code": "static int ftdi_init",
+        "kind": "gate",
+        "marker": "[xhci-serial]: FTDI ready"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Serial",
+      "name": "CDC ACM probe and line coding",
+      "state": "partial",
+      "evidence": {
+        "code": "static int cdc_init",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "CDC ACM parsing and line coding exist; the gate only attaches QEMU's FTDI clone."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Serial",
+      "name": "ttyUSB VFS node",
+      "state": "done",
+      "evidence": {
+        "code": "static void serial_register",
+        "kind": "gate",
+        "marker": "[xhci-serial]: /dev/ttyUSB"
+      },
+      "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Serial",
+      "name": "Serial read/write path",
+      "state": "partial",
+      "evidence": {
+        "code": "static size_t serial_read",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "The VFS read/write callbacks exist, but no test opens /dev/ttyUSB and moves bytes."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Serial",
+      "name": "CDC notifications and flow control",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "The CDC notification pipe is configured but never polled; flow control is not implemented."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bluetooth",
+      "name": "USB HCI class probe",
+      "state": "partial",
+      "evidence": {
+        "code": "static int claim_bt",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "USB HCI class probing exists; no gate test attaches a Bluetooth adapter."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bluetooth",
+      "name": "HCI event and bulk pipes",
+      "state": "partial",
+      "evidence": {
+        "code": "d->intr_len = BT_HCI_EVENT_MAX",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Event and bulk pipes are wired for HCI; untested without a USB adapter."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bluetooth",
+      "name": "SCO isochronous pipes",
+      "state": "partial",
+      "evidence": {
+        "code": "static int xhci_iso_out",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Isochronous OUT is wired for SCO; isochronous IN is missing and no adapter is tested."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bluetooth",
+      "name": "Kernel Bluetooth bridge",
+      "state": "partial",
+      "evidence": {
+        "code": "AuBtUsbReady(&bt_ops)",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "The bridge to the kernel Bluetooth stack exists; no USB adapter is tested."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bluetooth",
+      "name": "USB BT hotplug attach/detach",
+      "state": "partial",
+      "evidence": {
+        "code": "AuBtUsbDetach()",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "Attach/detach hooks exist; no USB Bluetooth hotplug test."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Other USB classes",
+      "name": "USB audio class",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "No USB audio class driver."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Other USB classes",
+      "name": "USB network (CDC ECM/NCM)",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "No CDC ECM/NCM network class driver."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Other USB classes",
+      "name": "USB video class",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "No USB video class driver."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Other USB classes",
+      "name": "USB printer class",
+      "state": "todo",
+      "evidence": {
+        "code": null,
+        "kind": "none",
+        "marker": null
+      },
+      "note": "No USB printer class driver."
+    }
+  ]
+}
