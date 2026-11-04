@@ -44,6 +44,8 @@ typedef struct _au_bt_usb_ops_ {
 } AuBtUsbOps;
 
 void AuXhciInitialize(void);
+void AuXhciStartPolling(void);
 void AuBtUsbReady(const AuBtUsbOps* ops);
+void AuBtUsbDetach(void);
 
 #endif

@@ -1308,8 +1308,28 @@ QEMU_ARGS=(
     -device ramfb,id=ramfb
     -device virtio-keyboard-pci
     -device virtio-tablet-pci
-    -device qemu-xhci
-    -device usb-kbd
+    -device qemu-xhci,id=xhci0
+    # External hub coverage.  QEMU's xHCI exposes four dual-speed root
+    # ports with bus paths 1..4 (PORTSC numbers 5..8 cover their USB2
+    # side); path 4 is the last USB2 root port.  The tablet below sits on
+    # hub port 1 so the gate exercises hub enumeration, the status-change
+    # endpoint and downstream hotplug.  The keyboard stays on a root port
+    # so keyboard input does not depend on the hub path.  The serial sits
+    # on hub port 2, which leaves a root port free for a SuperSpeed disk.
+    -device usb-hub,id=usb-hub0,port=4
+    # Bind the USB HID devices to the virtio-gpu console: QEMU only
+    # attaches a HID handler to a console when the qdev "display" property
+    # names a display device.  With the binding, QMP can address these
+    # handlers via input-send-event's device=gpu0, which selects them
+    # ahead of the unbound virtio input devices.
+    -device usb-kbd,id=usb-kbd0,display=gpu0
+    -device usb-tablet,id=usb-tablet0,display=gpu0,port=4.1
+    # A serial function on the same controller: exercises the CDC/FTDI bulk
+    # pair and the devfs tty node without needing a host-side client.
+    -chardev null,id=ser0
+    # usb-serial only attaches when its chardev reports open.  A null
+    # backend never opens, so ask the model to plug in at realize time.
+    -device usb-serial,chardev=ser0,id=usb-serial0,always-plugged=on,port=4.2
     -serial stdio
 )
 

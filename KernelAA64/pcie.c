@@ -635,11 +635,19 @@ bool AuPCIEAllocMSI(uint64_t device, size_t vector, int bus, int dev, int func) 
 				uint8_t pba_bir = pbaOffset & 0x7;
 				size_t barsz = 0;
 				uint64_t msi_bar = AuPCIEReadBAR(device, bus, dev, func, table_bir, &barsz);
-				uint64_t mappedMsiBar = (uint64_t)AuMapMMIO(msi_bar, 1);
 				uint64_t tablecount = (msixctl & 0x7ff) + 1;
+				uint32_t offset = tableOffset & ~0x7;
+				/* The table can sit past the first BAR page (qemu-xhci
+				 * puts it at 0x3000), so map through its last entry
+				 * instead of faulting on the next page. */
+				size_t table_pages = (offset + tablecount * 16 + 0xfff) >> 12;
+				if (barsz && table_pages > (barsz >> 12))
+					table_pages = barsz >> 12;
+				if (!table_pages)
+					table_pages = 1;
+				uint64_t mappedMsiBar = (uint64_t)AuMapMMIO(msi_bar, table_pages);
 				uint64_t msi_address = AuGICGetMSIAddress((int)vector);
 				uint32_t msi_data = AuGICGetMSIData((int)vector);
-				uint32_t offset = tableOffset & ~0x7;
 				volatile uint32_t* msitab = RAW_OFFSET(volatile uint32_t*, mappedMsiBar, offset);
 				for (int n = 0; n < tablecount; ++n) {
 					msitab[0 + 4 * n] = (uint32_t)msi_address;

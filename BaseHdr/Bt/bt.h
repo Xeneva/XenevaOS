@@ -92,6 +92,7 @@ typedef struct _au_bt_usb_ops_ {
 } AuBtUsbOps;
 
 extern void AuBtUsbReady(const AuBtUsbOps* ops);
+extern void AuBtUsbDetach(void);
 extern void AuVirtioBtInitialize(uint64_t device, int bus, int dev, int func);
 
 #endif

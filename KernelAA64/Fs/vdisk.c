@@ -174,70 +174,89 @@ void AuVDiskFlushAll() {
  * @param vdisk -- VDisk structure pointer
  */
 void AuVDiskRegisterPartition(AuVDisk* vdisk) {
-	uint64_t* buffer = (uint64_t*)AuPmmngrAllocPage(AURORA_PAGE_NORMAL);
-	memset(buffer, 0, 4096);
-	if (!vdisk->Read)
+	/* The allocator returns a physical address.  The kernel runs from the
+	 * higher half, so only the direct map alias is dereferenceable here. */
+	uint64_t buffer_phys = AuPmmngrAllocPage(AURORA_PAGE_NORMAL);
+	uint64_t* buffer;
+	GPTHeader* header;
+	uint32_t entry_size, entries, per_sector, sector, scanned;
+	uint64_t table_lba;
+
+	if (buffer_phys == PMM_INVALID_PHYS)
 		return;
-
-	vdisk->Read(vdisk, 1, 1, buffer);
-	uint8_t* aligned_buf = (uint8_t*)buffer;
-
-	GPTHeader* header = (GPTHeader*)aligned_buf;
-
-	/* check if it's Efi partition */
-	if (strcmp(header->sig, "EFI PART") != 0) {
-		AuTextOut("[aurora]: vdisk %s doesn't have valid GPT partition \r\n", vdisk->diskname);
+	buffer = (uint64_t*)P2V(buffer_phys);
+	if (!vdisk->Read) {
+		AuPmmngrReleasePage(buffer_phys);
 		return;
 	}
-	for (int i = 0; i < 8; i++)
-		UARTDebugOut("%c", aligned_buf[i]);
 
-	uint64_t part_lba = header->part_table_lba;
-	vdisk->num_partition = header->num_part_entries;
-	for (int i = 0; i < header->num_part_entries; i++) {
+	memset(buffer, 0, 4096);
+	if (vdisk->Read(vdisk, 1, 1, buffer) <= 0 ||
+		memcmp(buffer, "EFI PART", 8) != 0) {
+		AuPmmngrReleasePage(buffer_phys);
+		return;
+	}
+
+	header = (GPTHeader*)buffer;
+	entry_size = header->size_of_part;
+	entries = header->num_part_entries;
+	table_lba = header->part_table_lba;
+	/* The kernel stores one partition per vdisk, so stop at the first used
+	 * entry.  An entry is 128 bytes by default but the header is allowed to
+	 * grow it; reject anything that cannot fit in a sector buffer. */
+	if (entry_size < sizeof(GPTPartition) || entry_size > 512 || !entries ||
+		!table_lba) {
+		UARTDebugOut("[vdisk]: %s bad gpt entry size %d\r\n", vdisk->diskname,
+					 (int)entry_size);
+		AuPmmngrReleasePage(buffer_phys);
+		return;
+	}
+	if (entries > MAX_PARTITION_PER_DISK)
+		entries = MAX_PARTITION_PER_DISK;
+	per_sector = 512 / entry_size;
+	scanned = 0;
+	for (sector = 0; scanned < entries; sector++) {
+		uint32_t in_sector = entries - scanned;
+		uint32_t i;
+
+		if (in_sector > per_sector)
+			in_sector = per_sector;
 		memset(buffer, 0, 4096);
-		vdisk->Read(vdisk, part_lba, 1, buffer);
-		aligned_buf = (uint8_t*)buffer;
-		GPTPartition* part = (GPTPartition*)aligned_buf;
-		if (part->first_lba != 0) {
+		if (vdisk->Read(vdisk, table_lba + sector, 1, buffer) <= 0)
+			break;
+		for (i = 0; i < in_sector; i++) {
+			GPTPartition* part =
+				(GPTPartition*)((uint8_t*)buffer + i * entry_size);
+			char name[37];
+			int n = 0;
+
+			if (!part->first_lba || part->last_lba < part->first_lba)
+				continue;
+			/* Partition names are UTF-16LE.  The log is ASCII, so copy
+			 * the low byte of each code unit and stop at the terminator
+			 * or the end of the field. */
+			while (n < 36 && part->part_name[n * 2]) {
+				name[n] = (char)part->part_name[n * 2];
+				n++;
+			}
+			name[n] = '\0';
+
 			vdisk->startingLBA = part->first_lba;
 			vdisk->currentLBA = vdisk->startingLBA;
 			vdisk->num_partition = 1;
-			vdisk->part_guid.Data1 = part->part_guid.Data1;
-			vdisk->part_guid.Data2 = part->part_guid.Data2;
-			vdisk->part_guid.Data3 = part->part_guid.Data3;
-			for (int m = 0; m < 8; m++)
-				vdisk->part_guid.Data4[m] = part->part_guid.Data4[m];
-
-			vdisk->part_unique_guid.Data1 = part->part_unique_guid.Data1;
-			vdisk->part_unique_guid.Data2 = part->part_unique_guid.Data2;
-			vdisk->part_unique_guid.Data3 = part->part_unique_guid.Data3;
-			for (int m = 0; m < 8; m++)
-				vdisk->part_unique_guid.Data4[m] = part->part_guid.Data4[m];
-
-			for (int j = 0; j < 70; j++)
-				AuTextOut("%c", part->part_name[j]);
+			vdisk->part_guid = part->part_guid;
+			vdisk->part_unique_guid = part->part_unique_guid;
+			UARTDebugOut("[vdisk]: %s gpt partition %d lba %d name %s\r\n",
+						 vdisk->diskname, (int)(scanned + i),
+						 (int)part->first_lba, name);
+			AuPmmngrReleasePage(buffer_phys);
+			return;
 		}
-		part_lba++;
+		scanned += in_sector;
 	}
-	AuTextOut("\r\n");
-	AuTextOut("VDisk partition created startLBA -> %d \r\n", vdisk->startingLBA);
-	AuTextOut("vDisk partition guid : ");
-	AuTextOut("0x%x-0x%x-0x%x-0x",
-			  vdisk->part_guid.Data1,
-			  vdisk->part_guid.Data2,
-			  vdisk->part_guid.Data3);
-	for (int k = 0; k < 8; k++)
-		AuTextOut("%x", vdisk->part_guid.Data4[k]);
 
-	AuTextOut("\r\n");
-	/* call gpt file system verifier to load
-	 * the desired file system
-	 */
-	//AuGPTInitialise_FileSystem(vdisk);
-
-	AuTextOut("\r\n");
-	AuPmmngrReleasePage((uint64_t)buffer);
+	UARTDebugOut("[vdisk]: %s has no gpt partition\r\n", vdisk->diskname);
+	AuPmmngrReleasePage(buffer_phys);
 }
 
 /**
@@ -269,6 +288,7 @@ void AuVDiskRegister(AuVDisk* disk) {
 		break;
 	case AURORA_FS_FAT32:
 		AuTextOut("[aurora]: vdisk : %s, has FAT32 file system \r\n", disk->diskname);
+		UARTDebugOut("[vdisk]: %s has FAT32 file system\r\n", disk->diskname);
 		char* mpt = AuVFSReserveMountPointLetter();
 
 		/** make letter /a reserved for root '/' **/

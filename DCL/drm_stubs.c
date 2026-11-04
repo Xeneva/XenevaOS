@@ -649,13 +649,22 @@ void vkms_configfs_unregister(void)
 /* ── xarray's node cache (lib/xarray.c) ────────────────────────────────── */
 
 /*
- * The cache is a size and nothing else: kmem_cache_alloc_lru() (slab.h)
- * hands back that many bytes and zeroes them, which is what mainline's
- * radix-tree node allocation does before first use (the nodes carry slots[]
- * of pointers a walk treats as NULL until filled).
+ * xarray's node cache is a size and a constructor, the two fields slab.h's
+ * descriptor carries.  The constructor is the one mainline installs for the
+ * radix-tree nodes: allocation hands back a fresh object whose slots[] must
+ * read as NULL until xas_alloc() installs a child, so the whole node is
+ * cleared.  Doing it here rather than in kmem_cache_alloc_lru() keeps the
+ * generic allocator path intact -- every other cache still gets exactly the
+ * gfp semantics it asks for.
  */
+static void dcl_radix_tree_node_ctor(void *arg)
+{
+	memset(arg, 0, sizeof(struct xa_node));
+}
+
 static struct kmem_cache dcl_radix_tree_cache = {
-	.size = (unsigned int)sizeof(struct xa_node)
+	.size = (unsigned int)sizeof(struct xa_node),
+	.ctor = dcl_radix_tree_node_ctor
 };
 
 struct kmem_cache *radix_tree_node_cachep = &dcl_radix_tree_cache;

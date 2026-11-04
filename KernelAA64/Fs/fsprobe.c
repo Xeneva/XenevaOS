@@ -60,7 +60,9 @@ aurora_fs_type AuProbeFileSystem(AuVDisk* vdisk) {
 	uint8_t* sector = (uint8_t*)P2V((uint64_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
 	memset(sector, 0, 512);
 
-	vdisk->Read(vdisk, 0, 1, sector);
+	/* Use the vdisk read path so a partitioned disk is probed at its
+	 * partition start rather than at absolute LBA 0. */
+	AuVDiskRead(vdisk, 0, 1, (uint64_t*)sector);
 
 	/** check Windows type file systems first */
 	// it should be char[9] like "NTFS-----" total
@@ -86,7 +88,7 @@ aurora_fs_type AuProbeFileSystem(AuVDisk* vdisk) {
 	/* check ext2/3/4 -- superblocks */
 	memset(sector, 0, 512);
 
-	vdisk->Read(vdisk, 2, 1, sector);
+	AuVDiskRead(vdisk, 2, 1, (uint64_t*)sector);
 
 	uint16_t ext_magic = *(uint16_t*)(sector + 0x38);
 	if (ext_magic == 0xEF53) {

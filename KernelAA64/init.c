@@ -52,6 +52,7 @@
 #include <Fs/Dev/devclip.h>
 #include <Fs/initrd.h>
 #include <Drivers/virtio.h>
+#include <Drivers/usb.h>
 #include <audrv.h>
 #include <Hal/AA64/sched.h>
 #include <Fs/tty.h>
@@ -275,6 +276,14 @@ void _AuMain(KERNEL_BOOT_INFO* info) {
 	 * build these PCI functions belong to DCL's virtio scan instead. */
 //	AuVirtIOInputInitialize();
 #endif
+#ifdef __TARGET_BOARD_QEMU_VIRT__
+	/* qemu-xhci is independent of the virtio input pair: it owns the
+	 * usb-kbd/usb-tablet devices on the same machine and delivers their
+	 * HID reports through the native /dev/kybrd and /dev/mice queues.
+	 * Enumeration runs here; AuXhciStartPolling() starts its threads after
+	 * the scheduler's thread list exists. */
+	AuXhciInitialize();
+#endif
 	/* required virtio-mouse and keyboard */
 	//Here goes board pre driver initialize
 	AuDrvMngrInitialize(info);
@@ -354,6 +363,13 @@ void _AuMain(KERNEL_BOOT_INFO* info) {
 	UARTDebugOut("[aurora]: boot freed up \r\n");
 
 	AuSchedulerInitialize();
+
+#ifdef __TARGET_BOARD_QEMU_VIRT__
+	/* The controller is already enumerated. Starting the HID poll thread
+	 * here, after AuSchedulerInitialize(), ensures it survives the thread
+	 * list reset and receives CPU once the scheduler starts. */
+	AuXhciStartPolling();
+#endif
 	//AuBtInitialize();
 	//AuEDFSelfTestStart();
 #ifdef __XENEVA_SOAK__

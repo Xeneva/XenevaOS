@@ -3284,9 +3284,21 @@ void AuBtUsbReady(const AuBtUsbOps* ops) {
 	usb = *ops;
 	have_usb = 1;
 	identity();
+	/* A replacement adapter after AuBtUsbDetach() reuses the parked
+	 * bthost thread: it polls have_usb, so updating the ops table and
+	 * setting the flag is enough.  Creating a second thread would give
+	 * two consumers the same HCI event stream. */
+	if (bt_started)
+		return;
 	thr = AuCreateKthread(bt_thread, AuGetRootPageTable(), "bthost");
 	(void)thr;
 	bt_started = 1;
+}
+
+/* The host controller no longer has a live Bluetooth device: stop routing
+ * HCI through the old ops table. The thread stays parked on have_usb. */
+void AuBtUsbDetach(void) {
+	have_usb = 0;
 }
 
 void AuBtInitialize(void) {
