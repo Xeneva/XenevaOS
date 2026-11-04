@@ -106,7 +106,7 @@ echo "build + boot (log: $LOG)"
 if [ -n "${CLEAN:-}" ]; then
 	echo "  CLEAN=1 -> make clean"
 	make -C KernelAA64 clean >/dev/null 2>&1
-	for app in Init Clipd dcltest XEShell Terminal; do
+	for app in Init Clipd dcltest XEShell Terminal bttest; do
 		( cd "Process/$app" && make clean >/dev/null 2>&1 )
 	done
 fi
@@ -125,8 +125,8 @@ fi
 # and the GUI Terminal carries Ctrl+Shift+C/V on the same clipboard node.
 # A source change that never reaches the image reads as a bug somewhere
 # else entirely.
-echo "  building Process/{Init,Clipd,dcltest,XEShell,Terminal}"
-for app in Init Clipd dcltest XEShell Terminal; do
+echo "  building Process/{Init,Clipd,dcltest,XEShell,Terminal,bttest}"
+for app in Init Clipd dcltest XEShell Terminal bttest; do
 	( cd "Process/$app" && make llvm ) >>"$LOG" 2>&1
 done
 cp -f Process/Init/init.exe Resources/resources/ >>"$LOG" 2>&1
@@ -134,6 +134,20 @@ cp -f Process/Clipd/clipd.exe Resources/resources/ >>"$LOG" 2>&1
 cp -f Process/dcltest/dcltest.exe Resources/resources/ >>"$LOG" 2>&1
 cp -f Process/XEShell/xesh.exe Resources/resources/ >>"$LOG" 2>&1
 cp -f Process/Terminal/term.exe Resources/resources/ >>"$LOG" 2>&1
+cp -f Process/bttest/bttest.exe Resources/resources/ >>"$LOG" 2>&1
+
+# Host-side BT unit tests (crypto, H4, event parsing, LC3). They are
+# independent of the guest, so a break here is reported before QEMU starts
+# and the guest bttest cannot mask it. Build outside the tree: Tests/bt/
+# bt_test is tracked, and running a stale copy after a failed build would
+# report the old result.
+echo "  host BT unit tests"
+BT_BIN="$(dirname "$LOG")/bt_test"
+rm -f "$BT_BIN"
+make -C Tests/bt OUT="$BT_BIN" >>"$LOG" 2>&1
+if [ -x "$BT_BIN" ]; then
+	"$BT_BIN" >>"$LOG" 2>&1
+fi
 
 # stdin from /dev/null rather than inherited. `-serial stdio` makes the
 # guest's console this process's stdin, and a TTY there gives a guest that
@@ -610,6 +624,15 @@ expect "stage 1 primitives"                 "dcl primitives: $EXP_PRIM ok, 0 fai
 expect "stage 2 tty_buffer"                 "dcl tty_buffer: $EXP_TTYBUF ok, 0 failed"
 expect "stage 3 serial core"                "dcl serial: $EXP_SERIAL ok, 0 failed"
 expect "userspace dcltest"                  "[dcltest] SUMMARY $EXP_DCLTEST ok, 0 failed"
+
+# BT: QEMU virt always exposes UART1, but --no-bt leaves it unconnected, so
+# Bt/host.c falls back to the deterministic in-guest mock controller and
+# publishes /dev/bt0. bttest then drives the user-space ioctl ABI: identity,
+# scan, LE connect, ATT name, LE audio, disconnect.
+expect "BT mock controller"                 "[virtio-bt]: mock controller ready (2 fake advertisers)"
+expect "BT device node"                     "[bt]: /dev/bt0 ready"
+expect "userspace bttest"                   "[bttest] SUMMARY 22 ok, 0 failed"
+expect "host BT unit tests"                 "PASSED (0)"
 
 # The vendored driver, compiled from source into the image.
 expect "vendored driver registered"         "[dcl]: virtio_rng driver registered"

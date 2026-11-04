@@ -369,8 +369,12 @@ void _AuMain(KERNEL_BOOT_INFO* info) {
 	 * here, after AuSchedulerInitialize(), ensures it survives the thread
 	 * list reset and receives CPU once the scheduler starts. */
 	AuXhciStartPolling();
+	/* QEMU virt always has UART1 (a null backend under --no-bt), and the
+	 * gate does not add a USB Bluetooth dongle. Bt/host.c probes UART1,
+	 * then the virtio-serial function, then falls back to the in-guest
+	 * mock controller, which publishes /dev/bt0. */
+	AuBtInitialize();
 #endif
-	//AuBtInitialize();
 	//AuEDFSelfTestStart();
 #ifdef __XENEVA_SOAK__
 	AuSoakStart();
