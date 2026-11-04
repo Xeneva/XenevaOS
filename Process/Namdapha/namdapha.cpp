@@ -40,6 +40,7 @@
 #include "nmdapha.h"
 #include "section.h"
 #include <widgets/window.h>
+#include <livetile.h>
 #ifdef __XENEVA_UNIKERNEL__
 int NamdaphaMain(int argc, char* arv[]);
 extern "C" void NamdaphaThread() {
@@ -172,8 +173,16 @@ void NamdaphaMouseHandler(ChWindow* win, int x, int y, int button, int scroll) {
 	}
 }
 
+/* NamdaphaToggleLauncher -- ask XELnch to show/hide itself so it can run
+ * its Metro tile animation; fall back to the plain Deodhai toggle when no
+ * launcher has registered its live-tile token (older XELnch builds). */
+static void NamdaphaToggleLauncher() {
+	if (XelnchToggleLauncher(app->postboxfd) != 0)
+		NamdaphaHideWindow(gobutton);
+}
+
 void NamdaphaGoButtonAction(NamdaphaButton* button, ChWindow* win) {
-	NamdaphaHideWindow(gobutton);
+	NamdaphaToggleLauncher();
 }
 
 void NamdaphaPaint(ChWindow* win) {
@@ -251,7 +260,7 @@ void NamdaphaHandleMessage(PostEvent* e) {
 		int code = e->dword;
 		if (code == DEODHAI_FORCE_OPEN_LAUNCHER) {
 			_KePrint("Namdapha: force launcher open received \r\n");
-			NamdaphaHideWindow(gobutton);
+			NamdaphaToggleLauncher();
 		}
 		memset(e, 0, sizeof(PostEvent));
 		break;
