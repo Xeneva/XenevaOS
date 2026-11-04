@@ -142,6 +142,25 @@ AU_EXTERN AU_EXPORT void AuVFSAddFileSystem(AuVFSNode* node) {
 }
 
 /**
+ * @brief AuVFSRemoveFileSystem -- detaches a file system from the
+ * VFS list without freeing it
+ * @param node -- file system node to remove
+ * @return 0 on success, -1 when the node is not in the list
+ */
+AU_EXTERN AU_EXPORT int AuVFSRemoveFileSystem(AuVFSNode* node) {
+	if (!node || !__RootContainer || !__RootContainer->childs)
+		return -1;
+	for (int i = 0; i < __RootContainer->childs->pointer; i++) {
+		AuVFSNode* node_ = (AuVFSNode*)list_get_at(__RootContainer->childs, i);
+		if (node_ != node)
+			continue;
+		list_remove(__RootContainer->childs, (unsigned int)i);
+		return 0;
+	}
+	return -1;
+}
+
+/**
  * @brief AuVFSRegisterRoot -- register the root file
  * system
  * @param fs -- fsnode to add
@@ -379,33 +398,6 @@ int AuVFSRemoveDir(AuVFSNode* fsys, AuVFSNode* file) {
 AU_EXTERN AU_EXPORT void AuVFSNodeClose(AuVFSNode* node, AuVFSNode* file) {
 	if (node->close)
 		node->close(node, file);
-}
-
-/**
- * @brief AuVFSRemoveFileSystem -- removes a file system
- * @param node -- file system node to remove
- */
-AU_EXTERN AU_EXPORT int AuVFSRemoveFileSystem(AuVFSNode* node) {
-	if (!node)
-		return -1;
-	int index = -1;
-	for (unsigned int i = 0; i < __RootContainer->childs->pointer; i++) {
-		AuVFSNode* _node = (AuVFSNode*)list_get_at(__RootContainer->childs, i);
-		if (_node == node) {
-			index = (int)i;
-			break;
-		}
-	}
-
-	if (index < 0)
-		return -1;
-	list_remove(__RootContainer->childs, (unsigned int)index);
-	if (node->close)
-		return node->close(node, NULL);
-	else {
-		kfree(node);
-		return 0;
-	}
 }
 
 /**

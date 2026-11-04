@@ -3023,8 +3023,13 @@ static int msc_publish(UsbDev* d, MscDisk* m, const char* tag) {
 	vd->Flush = msc_vdisk_flush;
 	if (fresh)
 		AuVDiskRegister(vd);
-	else
+	else {
+		/* The disk entry and its file system outlive an unplug.  Mark
+		 * the transport present again and reattach the same volume
+		 * under the letter it reserved at first registration. */
+		AuVDiskSetOnline(vd, 1);
 		UARTDebugOut("[xhci-%s]: vdisk reuse slot %d\r\n", tag, d->slot);
+	}
 
 	UARTDebugOut("[xhci-%s]: vdisk %s ready on port %d slot %d\r\n", tag, vd->diskname,
 				 d->port, d->slot);
@@ -3983,6 +3988,15 @@ static void dev_disconnect(UsbDev* d) {
 
 	while (__atomic_load_n(&d->refs, __ATOMIC_ACQUIRE) != 0)
 		spin_ms(1);
+
+	/* Drop the volumes before the transport goes away.  The fs node and
+	 * its FatFS are deliberately kept: a re-plug reuses the same vdisk,
+	 * and an open file descriptor may still point at the node. */
+	if (d->msc && d->msc->vd)
+		AuVDiskSetOnline(d->msc->vd, 0);
+	for (i = 0; i < XHCI_MAX_EXTRA_LUN; i++)
+		if (msc_extra[i].dev == d && msc_extra[i].vd)
+			AuVDiskSetOnline(msc_extra[i].vd, 0);
 
 	usb_lock();
 	dev_release_locked(d);

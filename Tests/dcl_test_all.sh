@@ -71,10 +71,12 @@ EXP_PRIM=10
 EXP_TTYBUF=25
 EXP_SERIAL=21
 # 44 stage-1..4 + 38 KMS objects + 22 dumb/atomic + 3 client caps + 1 wb
-# encoder lookup + 20 writeback pixel proof + 13 page flip event. Stage 5
-# (45 checks) and stage 6 (34) are added only when their driver is present;
-# the guest finds both by the name DRM VERSION reports.
-EXP_DCLTEST=141
+# encoder lookup + 20 writeback pixel proof + 13 page flip event + 6 VFS
+# checks on the gate's USB FAT32 volume (list, find, unmount, absent,
+# remount, find again). Stage 5 (45 checks) and stage 6 (34) are added only
+# when their driver is present; the guest finds both by the name DRM VERSION
+# reports.
+EXP_DCLTEST=147
 # Upstream's QEMU command no longer adds bochs-display. A caller can still
 # add one through XENEVA_QEMU_EXTRA_ARGS; when it does, stage 5 runs and the
 # gate holds its assertions to that. Otherwise the guest must report the skip.
@@ -299,8 +301,10 @@ def write_gpt(path, sectors, part_start, part_end, name, slot, payload=None):
 
 def make_fat32(part_start, part_sectors):
     """Build a minimal FAT32 volume: 512-byte sectors, one sector per
-    cluster, volume label only.  sectors-per-FAT grows until it describes
-    every cluster the data area can hold."""
+    cluster.  The root holds a volume label and a deleted record ahead of
+    GATE.TXT, so a directory reader that reports end-of-dir on the first
+    skipped record hides the real file.  sectors-per-FAT grows until it
+    describes every cluster the data area can hold."""
     vol = bytearray(part_sectors * SECTOR)
     reserved = 32
     nfats = 2
@@ -360,12 +364,22 @@ def make_fat32(part_start, part_sectors):
         off = (reserved + n * spf) * SECTOR
         vol[off:off + len(fat)] = fat
 
-    # Root directory: one volume-label entry, the rest is end-of-directory.
+    # Root directory: volume label, deleted record, GATE.TXT, then
+    # end-of-directory.  The two skipped records come first on purpose;
+    # dcltest asserts the real file is still listed.
     root_off = (reserved + nfats * spf) * SECTOR
     label = bytearray(32)
     label[0:11] = b'XENEVAUSB  '
     label[11] = 0x08
     vol[root_off:root_off + 32] = label
+    deleted = bytearray(32)
+    deleted[0:11] = b'\xe5ATE    TXT'
+    deleted[11] = 0x20
+    vol[root_off + 32:root_off + 64] = deleted
+    gate = bytearray(32)
+    gate[0:11] = b'GATE    TXT'
+    gate[11] = 0x20
+    vol[root_off + 64:root_off + 96] = gate
     return vol
 
 
@@ -512,6 +526,10 @@ UAS_NS_ARGS="$UAS_NS_ARGS -device usb-bot,id=botnsdev0,port=2"
 UAS_NS_ARGS="$UAS_NS_ARGS -device scsi-hd,drive=botns0,bus=botnsdev0.0,lun=0,product=BOTLUNZERO"
 UAS_NS_ARGS="$UAS_NS_ARGS -drive if=none,id=botns1,file=$BOT_NS_LUN1_IMG,format=raw"
 UAS_NS_ARGS="$UAS_NS_ARGS -device scsi-hd,drive=botns1,bus=botnsdev0.0,lun=1,product=BOTLUNONE"
+# Carry the FAT32 volume on this boot too, so dcltest's root-directory walk
+# covers the USB2 BOT path and not just the SuperSpeed one.
+UAS_NS_ARGS="$UAS_NS_ARGS -drive if=none,id=mscfatns0,file=$MSC_FAT_IMG,format=raw"
+UAS_NS_ARGS="$UAS_NS_ARGS -device usb-storage,drive=mscfatns0,id=mscfatnsdev0,port=4.6"
 echo
 echo "USB2 transport boot (log: $UAS_NS_LOG)"
 XENEVA_QEMU_EXTRA_ARGS="$UAS_NS_ARGS" QEMU_TIMEOUT="${UAS_NS_TIMEOUT:-60}" \
@@ -624,6 +642,12 @@ expect "stage 1 primitives"                 "dcl primitives: $EXP_PRIM ok, 0 fai
 expect "stage 2 tty_buffer"                 "dcl tty_buffer: $EXP_TTYBUF ok, 0 failed"
 expect "stage 3 serial core"                "dcl serial: $EXP_SERIAL ok, 0 failed"
 expect "userspace dcltest"                  "[dcltest] SUMMARY $EXP_DCLTEST ok, 0 failed"
+expect "usb fat directory lists entries"    "[dcltest] PASS vfs usb dir lists entries (1)"
+expect "usb fat directory finds GATE.TXT"   "[dcltest] PASS vfs usb dir finds GATE.TXT (1)"
+expect "usb volume unmounts"                "[dcltest] PASS vfs unmounts usb volume (1)"
+expect "unmounted volume is absent"         "[dcltest] PASS vfs unmounted volume is absent (1)"
+expect "usb volume remounts"                "[dcltest] PASS vfs remounts usb volume (1)"
+expect "remounted volume finds GATE.TXT"    "[dcltest] PASS vfs remount finds GATE.TXT (1)"
 
 # BT: QEMU virt always exposes UART1, but --no-bt leaves it unconnected, so
 # Bt/host.c falls back to the deterministic in-guest mock controller and

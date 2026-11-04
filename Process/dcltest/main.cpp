@@ -60,6 +60,34 @@ static void note(const char* what, int value) {
 	emit(line);
 }
 
+/* fat_find_name -- open a directory and look for one 8.3 name.  Returns 1
+ * when found, 0 when the directory was read but the name is absent, and -1
+ * when the directory could not be opened. */
+static int fat_find_name(const char* path, const char* name, int* entries) {
+	int dfd = _KeOpenDir((char*)path);
+	XEDirectoryEntry ent;
+	int items = 0;
+	int found = 0;
+	if (entries)
+		*entries = 0;
+	if (dfd < 0)
+		return -1;
+	memset(&ent, 0, sizeof ent);
+	while (items < 64) {
+		int code = _KeReadDir(dfd, &ent);
+		if (code == -1 || ent.index == -1)
+			break;
+		items++;
+		if (strcmp(ent.filename, name) == 0)
+			found = 1;
+		memset(ent.filename, 0, sizeof ent.filename);
+	}
+	_KeCloseFile(dfd);
+	if (entries)
+		*entries = items;
+	return found;
+}
+
 /* opendev -- open a node through the real syscall path; the open itself is a
  * check, because that is where mainline's memory_open() per-minor fops swap
  * happens (fileserv calls node->open at Serv/fileserv.c:127). */
@@ -2055,6 +2083,36 @@ int main(int argc, char* argv[]) {
 			report(what, pfd < 0, 1);
 			if (pfd >= 0)
 				_KeCloseFile(pfd);
+		}
+	}
+
+	/* A FAT directory read must walk past deleted records, volume labels and
+	 * long-name fragments instead of reporting end-of-directory.  The gate's
+	 * USB FAT image puts a label and a deleted record ahead of GATE.TXT, so
+	 * the old skip-returns-minus-one path would hide that file. */
+	{
+		int items = 0;
+		int found = fat_find_name("/b", "GATE.TXT", &items);
+		/* Only the gate's USB volume carries GATE.TXT.  A manual run
+		 * may have an unrelated FAT volume on b, so a missing marker
+		 * is a skip, not a failure; the gate asserts the PASS lines. */
+		if (found <= 0) {
+			note("usb fat dir has no gate file, stage skipped", found);
+		} else {
+			report("vfs usb dir lists entries", items > 0, 1);
+			report("vfs usb dir finds GATE.TXT", found, 1);
+
+			int rc = _KeUnmount((char*)"b");
+			report("vfs unmounts usb volume", rc == 0, 1);
+			int gone = _KeOpenDir((char*)"/b");
+			report("vfs unmounted volume is absent", gone < 0, 1);
+			if (gone >= 0)
+				_KeCloseFile(gone);
+
+			rc = _KeMount((char*)"b");
+			report("vfs remounts usb volume", rc == 0, 1);
+			found = fat_find_name("/b", "GATE.TXT", &items);
+			report("vfs remount finds GATE.TXT", found == 1, 1);
 		}
 	}
 

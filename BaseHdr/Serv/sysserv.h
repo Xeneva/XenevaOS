@@ -294,6 +294,20 @@ extern int OpenDir(char* filename);
 extern int ReadDir(int dirfd, void* dirent);
 
 /**
+* @brief VFSMount -- attach a registered volume's file system
+* @param name -- one-letter mount point
+* @return 0 on success, -1 on failure
+*/
+extern int VFSMount(char* name);
+
+/**
+* @brief VFSUnmount -- flush and detach a mounted volume
+* @param name -- one-letter mount point
+* @return 0 on success, -1 on failure
+*/
+extern int VFSUnmount(char* name);
+
+/**
 * @brief CreateTimer -- create timer service
 * @param maxTickLimit -- maximum tick limit
 * @param updatemode -- Timer update mode

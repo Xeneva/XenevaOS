@@ -895,9 +895,14 @@ int main(int argc, char* argv[]) {
 			} else {
 				FileManagerPartitionButton* pbut = FileManageCreatePartitionButton(partitionList);
 				pbut->icon = drive;
-				pbut->mounted = true;
+				if (partitionInfo.mountedName[0] != '\0') {
+					pbut->mounted = true;
+					strcpy(pbut->guidString, partitionInfo.mountedName);
+				} else {
+					pbut->mounted = false;
+					strcpy(pbut->guidString, "Raw Drive");
+				}
 				strcpy(pbut->partitionName, diskInfo.diskname);
-				strcpy(pbut->guidString, partitionInfo.mountedName);
 			}
 			memset(&partitionInfo, 0, sizeof(XEVDiskPartitionInfo));
 		}

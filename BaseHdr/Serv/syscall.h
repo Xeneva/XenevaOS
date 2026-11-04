@@ -102,8 +102,10 @@
 #define SYS_RECVFROM	   191
 #define SYS_IF_NAMETOINDEX 192
 #define SYS_GETIFADDRS	   193
+#define SYS_VFS_MOUNT	   194
+#define SYS_VFS_UNMOUNT	   195
 
-#define SYS_MAX_SYSCALL 195
+#define SYS_MAX_SYSCALL 196
 
 /* Backward-compat alias */
 #define AURORA_MAX_SYSCALL SYS_MAX_SYSCALL

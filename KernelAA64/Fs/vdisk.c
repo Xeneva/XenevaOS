@@ -168,6 +168,91 @@ void AuVDiskFlushAll() {
 	}
 }
 
+/* Find a registered disk by its reserved mount point.  The mount name lives
+ * on the file-system node, which survives both an unmount and an unplug, so
+ * the same lookup serves mount, unmount and reattach. */
+static AuVDisk* vdisk_by_mount_name(const char* name) {
+	if (!name)
+		return NULL;
+	if (name[0] == '/')
+		name++;
+	if (!name[0] || name[1])
+		return NULL;
+	for (int i = 0; i < MAX_VDISK_DEVICES; i++) {
+		AuVDisk* vdisk = VdiskArray[i];
+		if (vdisk && vdisk->fsys &&
+			strcmp(vdisk->fsys->filename, name) == 0)
+			return vdisk;
+	}
+	return NULL;
+}
+
+/**
+ * @brief AuVDiskMount -- reattach a volume's file system at the letter
+ * reserved when it was first registered
+ * @param name -- one-letter mount point, with or without a leading '/'
+ * @return 0 on success, -1 for an unknown or offline volume
+ */
+int AuVDiskMount(const char* name) {
+	AuVDisk* vdisk = vdisk_by_mount_name(name);
+	if (!vdisk || !vdisk->online)
+		return -1;
+	if (vdisk->mounted)
+		return 0;
+	AuVFSAddFileSystem(vdisk->fsys);
+	vdisk->mounted = 1;
+	UARTDebugOut("[vdisk]: %s mounted at %s\r\n", vdisk->diskname,
+				 vdisk->fsys->filename);
+	return 0;
+}
+
+/**
+ * @brief AuVDiskUnmount -- flush and detach a volume's file system.  The
+ * node, its FatFS and the reserved letter stay allocated for a remount.
+ * @param name -- one-letter mount point, with or without a leading '/'
+ * @return 0 on success, -1 for an unknown/unmounted volume or the root
+ */
+int AuVDiskUnmount(const char* name) {
+	AuVDisk* vdisk = vdisk_by_mount_name(name);
+	if (!vdisk || !vdisk->mounted)
+		return -1;
+	/* The root file system is not a removable volume; the 26 mount
+	 * letters only describe the disks registered below it. */
+	if (strcmp(vdisk->fsys->filename, "/") == 0)
+		return -1;
+	AuVDiskFlush(vdisk);
+	AuVFSRemoveFileSystem(vdisk->fsys);
+	vdisk->mounted = 0;
+	UARTDebugOut("[vdisk]: %s unmounted from %s\r\n", vdisk->diskname,
+				 vdisk->fsys->filename);
+	return 0;
+}
+
+/**
+ * @brief AuVDiskSetOnline -- record whether the backing device is present.
+ * Going offline detaches the file system without flushing because a surprise
+ * unplug leaves no device to flush to; coming online reattaches it.
+ * @param vdisk -- virtual disk to update
+ * @param online -- non-zero when the device is present
+ */
+void AuVDiskSetOnline(AuVDisk* vdisk, int online) {
+	if (!vdisk)
+		return;
+	if (online) {
+		vdisk->online = 1;
+		if (vdisk->fsys && !vdisk->mounted) {
+			AuVFSAddFileSystem(vdisk->fsys);
+			vdisk->mounted = 1;
+		}
+		return;
+	}
+	vdisk->online = 0;
+	if (vdisk->fsys && vdisk->mounted) {
+		AuVFSRemoveFileSystem(vdisk->fsys);
+		vdisk->mounted = 0;
+	}
+}
+
 /**
  * @brief AuVDiskRegisterPartition - Gether all informations about the partition
  * for now, only GUID Partition is supported
@@ -275,6 +360,7 @@ void AuVDiskRegister(AuVDisk* disk) {
 			  disk->serialNumber);
 
 	disk->__VDiskID = _index;
+	disk->online = 1;
 	/* Register a partition and initialise the file system*/
 
 	AuVDiskRegisterPartition(disk);
@@ -290,6 +376,11 @@ void AuVDiskRegister(AuVDisk* disk) {
 		AuTextOut("[aurora]: vdisk : %s, has FAT32 file system \r\n", disk->diskname);
 		UARTDebugOut("[vdisk]: %s has FAT32 file system\r\n", disk->diskname);
 		char* mpt = AuVFSReserveMountPointLetter();
+		if (!mpt) {
+			UARTDebugOut("[vdisk]: no free mount letter for %s\r\n",
+						 disk->diskname);
+			break;
+		}
 
 		/** make letter /a reserved for root '/' **/
 		if (strcmp(mpt, "a") == 0)
@@ -303,9 +394,15 @@ void AuVDiskRegister(AuVDisk* disk) {
 	case AURORA_FS_EXT2:
 		AuTextOut("[aurora]: vdisk : %s has Ext2 file system \r\n", disk->diskname);
 		mpt = AuVFSReserveMountPointLetter();
+		if (!mpt) {
+			UARTDebugOut("[vdisk]: no free mount letter for %s\r\n",
+						 disk->diskname);
+			break;
+		}
 		Ext2Initialise(disk, mpt);
 		break;
 	}
+	disk->mounted = disk->fsys ? 1 : 0;
 }
 
 /**
@@ -340,6 +437,8 @@ int AuGetVDiskInfo(uint8_t vdiskID, void* buffer) {
 	AuVDisk* vdisk = VdiskArray[vdiskID];
 	if (!vdisk)
 		return -1;
+	if (!vdisk->online)
+		return -1;
 	AuVDiskInfo* info = (AuVDiskInfo*)buffer;
 	strcpy(info->diskname, vdisk->diskname);
 	strcpy(info->serialNumber, vdisk->serialNumber);
@@ -371,10 +470,14 @@ int AuGetVDiskPartitionInfo(uint8_t vdiskID, uint8_t partition_ID, void* buffer)
 	AuVDisk* vdisk = VdiskArray[vdiskID];
 	if (!vdisk)
 		return -1;
-	if (!vdisk->fsys)
-		return 1;
+	if (!vdisk->online)
+		return -1;
 	AuVDiskPartitionInfo* pinfo = (AuVDiskPartitionInfo*)buffer;
-	strcpy(pinfo->mountedName, vdisk->fsys->filename);
+	pinfo->mountedName[0] = '\0';
+	/* An explicit unmount keeps fsys alive but must not advertise the
+	 * letter, otherwise the file manager would offer a dead path. */
+	if (vdisk->mounted && vdisk->fsys)
+		strcpy(pinfo->mountedName, vdisk->fsys->filename);
 	//SeTextOut("FILE SYSTEM NAME -> %s \r\n", vdisk->fsys->filename);
 	pinfo->partitionGUID.Data1 = vdisk->part_guid.Data1;
 	pinfo->partitionGUID.Data2 = vdisk->part_guid.Data2;

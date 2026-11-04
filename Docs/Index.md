@@ -41,3 +41,4 @@ Use the Table of Contents below to navigate through the project's documentation.
 - [**Project Architecture(MSVC)**](Development/ProjectArchitecture(MSVC).md)- Discusses various artifacts and project inter dependencies.
 - [**DeodhaiXR Guide**](Development/DeodhaiXR-Guide.md) — Complete study guide for the DeodhaiXR window compositor and XR shell: surfaces, the shared-memory atomic door, damage algebra, composition passes, the frame loop, and the three present paths.
 - [**Memory System Guide**](Development/MemorySystem-Guide.md) — Complete study guide for the AArch64 memory system: the TLSF kernel heap, its kmalloc wiring layer, the region-aware buddy physical allocator, the verification harness, and the x86 contrast set (bitmap PMM, list heap, `#if 0` buddy draft).
+- [**Live demo**](Development/demo.md) — Boot the real desktop in QEMU with the USB stick, nested hub, and Wacom tablet, plus a recording shot list and the limits of what the demo proves.
