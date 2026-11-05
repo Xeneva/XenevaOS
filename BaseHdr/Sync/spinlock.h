@@ -63,4 +63,13 @@ AU_EXTERN AU_EXPORT void AuAcquireSpinlock(Spinlock* lock);
 */
 AU_EXTERN AU_EXPORT void AuReleaseSpinlock(Spinlock* lock);
 
+#ifdef ARCH_ARM64
+/*
+ * IRQ-safe spinlock helpers. The saved DAIF value must be restored by the
+ * matching release call on the same CPU.
+ */
+AU_EXTERN AU_EXPORT void AuAcquireSpinlockIrqSave(Spinlock* lock, uint64_t* daif);
+AU_EXTERN AU_EXPORT void AuReleaseSpinlockIrqRestore(Spinlock* lock, uint64_t daif);
+#endif
+
 #endif
