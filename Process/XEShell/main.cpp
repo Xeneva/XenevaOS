@@ -354,10 +354,8 @@ void XEShellReadLine() {
 }
 
 /*
- * XEShellCD -- Change working Directory command
- * @param path -- path to change (supported only 
- * relative path)
- * absolute path changing not implemented
+ * XEShellCD -- change the working directory
+ * @param path -- absolute path, or a path relative to the current directory
  */
 void XEShellCD(char* path) {
 	if (!currentDirectory || !path) {
@@ -511,11 +509,6 @@ void XEShellCD(char* path) {
 
 	free(currentDirectory);
 	currentDirectory = newPath;
-
-	// Remove trailing slash if not root
-	if (strlen(currentDirectory) > 1 && currentDirectory[strlen(currentDirectory) - 1] == '/') {
-		currentDirectory[strlen(currentDirectory) - 1] = '\0';
-	}
 
 	printf("\n[xeshell]: Changed directory to: %s\r\n", currentDirectory);
 

@@ -187,6 +187,22 @@ static AuVDisk* vdisk_by_mount_name(const char* name) {
 	return NULL;
 }
 
+/* Attach a volume's file system unless it is already attached. */
+static void vdisk_attach(AuVDisk* vdisk) {
+	if (!vdisk->fsys || vdisk->mounted)
+		return;
+	AuVFSAddFileSystem(vdisk->fsys);
+	vdisk->mounted = 1;
+}
+
+/* Detach a volume's file system unless it is already detached. */
+static void vdisk_detach(AuVDisk* vdisk) {
+	if (!vdisk->fsys || !vdisk->mounted)
+		return;
+	AuVFSRemoveFileSystem(vdisk->fsys);
+	vdisk->mounted = 0;
+}
+
 /**
  * @brief AuVDiskMount -- reattach a volume's file system at the letter
  * reserved when it was first registered
@@ -197,12 +213,11 @@ int AuVDiskMount(const char* name) {
 	AuVDisk* vdisk = vdisk_by_mount_name(name);
 	if (!vdisk || !vdisk->online)
 		return -1;
-	if (vdisk->mounted)
-		return 0;
-	AuVFSAddFileSystem(vdisk->fsys);
-	vdisk->mounted = 1;
-	UARTDebugOut("[vdisk]: %s mounted at %s\r\n", vdisk->diskname,
-				 vdisk->fsys->filename);
+	if (!vdisk->mounted) {
+		vdisk_attach(vdisk);
+		UARTDebugOut("[vdisk]: %s mounted at %s\r\n", vdisk->diskname,
+					 vdisk->fsys->filename);
+	}
 	return 0;
 }
 
@@ -221,8 +236,7 @@ int AuVDiskUnmount(const char* name) {
 	if (strcmp(vdisk->fsys->filename, "/") == 0)
 		return -1;
 	AuVDiskFlush(vdisk);
-	AuVFSRemoveFileSystem(vdisk->fsys);
-	vdisk->mounted = 0;
+	vdisk_detach(vdisk);
 	UARTDebugOut("[vdisk]: %s unmounted from %s\r\n", vdisk->diskname,
 				 vdisk->fsys->filename);
 	return 0;
@@ -238,19 +252,11 @@ int AuVDiskUnmount(const char* name) {
 void AuVDiskSetOnline(AuVDisk* vdisk, int online) {
 	if (!vdisk)
 		return;
-	if (online) {
-		vdisk->online = 1;
-		if (vdisk->fsys && !vdisk->mounted) {
-			AuVFSAddFileSystem(vdisk->fsys);
-			vdisk->mounted = 1;
-		}
-		return;
-	}
-	vdisk->online = 0;
-	if (vdisk->fsys && vdisk->mounted) {
-		AuVFSRemoveFileSystem(vdisk->fsys);
-		vdisk->mounted = 0;
-	}
+	vdisk->online = online ? 1 : 0;
+	if (vdisk->online)
+		vdisk_attach(vdisk);
+	else
+		vdisk_detach(vdisk);
 }
 
 /**

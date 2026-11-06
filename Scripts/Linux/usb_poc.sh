@@ -1,16 +1,8 @@
 #!/usr/bin/env bash
 # One entry point for the USB mass-storage and HID proof of concept.
-#
-# usage:
-#   usb_poc.sh demo [--fresh] [--skip-build] [build options...]
-#   usb_poc.sh verify
-#   usb_poc.sh commands
-#   usb_poc.sh evidence [log]
-#
-#   demo      print the XEShell command card, then boot the live desktop
-#   verify    run the automated DCL gate (Tests/dcl_test_all.sh)
-#   commands  print only the XEShell command card
-#   evidence  summarize the latest gate log for a pull request
+# Run with no arguments (or "demo") for the live desktop, "verify" for the
+# automated gate, "commands" for the XEShell card, and "evidence" for the
+# latest gate log.
 
 set -euo pipefail
 
@@ -18,7 +10,22 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 MODE=${1:-demo}
 shift || true
 
-commands() {
+usage() {
+	cat <<'EOF'
+usage:
+  usb_poc.sh demo [--fresh] [--skip-build] [build options...]
+  usb_poc.sh verify
+  usb_poc.sh commands
+  usb_poc.sh evidence [log]
+
+  demo      print the XEShell command card, then boot the live desktop
+  verify    run the automated DCL gate (Tests/dcl_test_all.sh)
+  commands  print only the XEShell command card
+  evidence  summarize the latest gate log for a pull request
+EOF
+}
+
+command_card() {
 	cat <<'EOF'
 XEShell -- USB mass storage
 ===========================
@@ -59,7 +66,7 @@ evidence() {
 
 case "$MODE" in
 demo)
-	commands
+	command_card
 	echo
 	echo "expected serial evidence:"
 	echo "  [xhci-hid]: report iface ... kind keyboard"
@@ -73,13 +80,13 @@ verify)
 	exec "$ROOT/Tests/dcl_test_all.sh" "$@"
 	;;
 commands)
-	commands
+	command_card
 	;;
 evidence)
 	evidence "$@"
 	;;
 *)
-	sed -n '4,14p' "$0" | sed 's/^# \{0,1\}//' >&2
+	usage >&2
 	exit 1
 	;;
 esac

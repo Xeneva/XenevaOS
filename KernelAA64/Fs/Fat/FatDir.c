@@ -403,20 +403,21 @@ int FatDirectoryRead(AuVFSNode* fs, AuVFSNode* dir, AuDirectoryEntry* dirent) {
 			dirent->index = index + 1;
 			continue;
 		}
-		if ((dir_->attrib & FAT_ATTRIBUTE_MASK) == FAT_ATTRIBUTE_LONG_NAME ||
-			(dir_->attrib & (0x08 | 0x02 | 0x04))) {
+		/* Volume labels and long-name fragments carry the volume bit,
+		 * hidden/system entries are not listable either.  This also
+		 * covers FAT_ATTRIBUTE_LONG_NAME (0x0f). */
+		if (dir_->attrib & (FAT_ATTRIBUTE_HIDDEN | FAT_ATTRIBUTE_SYSTEM |
+							FAT_ATTRIBUTE_VOLUME)) {
 			dirent->index = index + 1;
 			continue;
 		}
 
-		char filename[16];
-		memset(filename, 0, 16);
-		FatFromDosToFilename(filename, (char*)dir_->filename);
-		strcpy(dirent->filename, filename);
+		FatFromDosToFilename(dirent->filename, (char*)dir_->filename);
 		dirent->size = dir_->file_size;
 		dirent->time = dir_->time_created;
 		dirent->date = dir_->date_created;
-		dirent->flags = (dir_->attrib & 0x10) ? FS_FLAG_DIRECTORY : FS_FLAG_GENERAL;
+		dirent->flags = (dir_->attrib & FAT_ATTRIBUTE_DIRECTORY) ?
+			FS_FLAG_DIRECTORY : FS_FLAG_GENERAL;
 		dirent->index = index + 1;
 		AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
 		return 0;

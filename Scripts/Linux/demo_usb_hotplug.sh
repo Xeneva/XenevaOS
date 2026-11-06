@@ -23,7 +23,10 @@ MON=${XENEVA_MONITOR:-/tmp/xeneva-mon.sock}
 DEFAULT_IMG=${XENEVA_DEMO_USB_IMG:-$ROOT/Build/xeneva-demo-usb.img}
 
 usage() {
-	sed -n '8,9p' "$0" | sed 's/^# //'
+	cat <<'EOF'
+usage: demo_usb_hotplug.sh remove [device-id]
+       demo_usb_hotplug.sh add [image] [port]
+EOF
 }
 
 hmp() {
