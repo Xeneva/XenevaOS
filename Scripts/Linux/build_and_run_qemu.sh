@@ -1616,8 +1616,11 @@ fi
 # Extra QEMU options, for tests that need more than the defaults, e.g. a QMP socket to
 # inject absolute pointer events from the host (the human monitor can only do relative):
 #   XENEVA_QEMU_EXTRA_ARGS='-qmp unix:/tmp/xeneva-qmp.sock,server=on,wait=off'
+# Words are split the way a shell would, so an argument holding a path with spaces
+# can be single- or double-quoted, e.g. -drive 'file=/media/New Volume/x.img,...'.
+# xargs only honours the quoting; nothing in the string is expanded or executed.
 if [ -n "${XENEVA_QEMU_EXTRA_ARGS:-}" ]; then
-    read -r -a extra_qemu_args <<<"${XENEVA_QEMU_EXTRA_ARGS}"
+    mapfile -d '' -t extra_qemu_args < <(xargs -r printf '%s\0' <<<"${XENEVA_QEMU_EXTRA_ARGS}")
     QEMU_ARGS+=("${extra_qemu_args[@]}")
 fi
 

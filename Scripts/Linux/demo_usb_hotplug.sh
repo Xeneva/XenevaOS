@@ -84,7 +84,12 @@ add)
 	stamp=$(date +%s)
 	drive="demo-drive-$stamp"
 	dev="demo-usb-$stamp"
-	hmp "drive_add 0 if=none,id=$drive,file=$img,format=raw"
+	# HMP splits on spaces, so the options go in double quotes (with \ and "
+	# escaped); QEMU also needs commas in the path doubled.
+	drive_opts="if=none,id=$drive,file=${img//,/,,},format=raw"
+	drive_opts=${drive_opts//\\/\\\\}
+	drive_opts=${drive_opts//\"/\\\"}
+	hmp "drive_add 0 \"$drive_opts\""
 	hmp "device_add usb-storage,drive=$drive,id=$dev,port=$port"
 	echo "[+] added $dev on port $port (drive $drive)"
 	echo "    remove it with: $0 remove $dev"

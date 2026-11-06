@@ -123,7 +123,13 @@ fi
 # bus path 4.3 is the guest's root port 8, hub port 3. The boot topology
 # leaves that hub port free; the nested hub uses 4.8, so the two do not
 # collide.
-export XENEVA_QEMU_EXTRA_ARGS="${XENEVA_QEMU_EXTRA_ARGS:-} -drive if=none,id=demo-drive0,file=$DEMO_IMG,format=raw -device usb-storage,drive=demo-drive0,id=demo-usb0,port=4.3"
+#
+# The image path may contain spaces (e.g. a checkout on "/run/media/.../New
+# Volume"), so the -drive option is single-quoted for build_and_run_qemu.sh's
+# quote-aware split, and any comma in the path is doubled as QEMU requires.
+demo_drive_opts="if=none,id=demo-drive0,file=${DEMO_IMG//,/,,},format=raw"
+demo_drive_opts="'${demo_drive_opts//\'/\'\\\'\'}'"
+export XENEVA_QEMU_EXTRA_ARGS="${XENEVA_QEMU_EXTRA_ARGS:-} -drive $demo_drive_opts -device usb-storage,drive=demo-drive0,id=demo-usb0,port=4.3"
 
 cat <<'EOF'
 
