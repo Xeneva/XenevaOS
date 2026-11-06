@@ -37,6 +37,8 @@
 #define WINDOW_DEFAULT_TITLEBAR_HEIGHT 26
 #define WINDOW_DEFAULT_BACKGROUND	   0xFFD2D2D2
 
+#include "winstyle.h"
+
 extern void ChDefaultWinPaint(ChWindow* win);
 extern void ChWindowPaintCloseButton(ChWindow* win, ChWinGlobalControl* button);
 extern void ChWindowPaintMaximButton(ChWindow* win, ChWinGlobalControl* button);
@@ -238,13 +240,17 @@ ChCreateWindow(ChitralekhaApp* app, uint16_t attrib, char* title, int x, int y, 
 													 WINDOW_DEFAULT_TITLEBAR_HEIGHT / 2 - 20 / 2,
 													 20,
 													 20,
-													 WINDOW_GLOBAL_CONTROL_MAXIMIZE);
+													 WINDOW_GLOBAL_CONTROL_MINIMIZE);
 	minim->ChGlobalButtonPaint = ChWindowPaintMinimButton;
 	minim->outlineColor = 0xFF868686;
 	minim->hoverOutlineColor = 0xFFAFA3A3;
 	minim->clickedOutlineColor = 0xFF444444;
 	minim->ChGlobalMouseEvent = ChGlobalCtlMouseHandler;
 	minim->ChGlobalActionEvent = ChGlobalMinimiseAction;
+
+	/* a chrome style module (WINDOW_STYLE_MASK bits) takes over from here;
+	 * the classic chrome needs nothing more */
+	ChWindowStyleInstall(win);
 	return win;
 }
 
@@ -359,7 +365,10 @@ XE_EXTERN XE_EXPORT void ChWindowPaint(ChWindow* win) {
 		win->ChWinPaint(win);
 	}
 
-	if (win->flags & WINDOW_FLAG_GLASS)
+	const ChWindowStyleOps* style = ChWindowStyleOf(win);
+	if (style)
+		_apply_rounded_corner(win->buffer, style->cornerRadius, win->info->width, win->info->height);
+	else if (win->flags & WINDOW_FLAG_GLASS)
 		_apply_rounded_corner(win->buffer, 4, win->info->width, win->info->height);
 	else
 		_apply_rounded_corner(win->buffer, 8, win->info->width, win->info->height);
@@ -564,6 +573,36 @@ XE_EXTERN XE_EXPORT void ChWindowHandleMouse(ChWindow* win, int x, int y, int bu
 				}
 			}
 		}
+	} else {
+		/* the pointer left the title bar: un-hover whatever was hovered so
+		 * it repaints (and a knot re-ties). Never an action: button = 0 */
+		for (int i = 0; i < win->GlobalControls->pointer; i++) {
+			ChWinGlobalControl* globalCtrl =
+				(ChWinGlobalControl*)list_get_at(win->GlobalControls, i);
+			if (globalCtrl->hover) {
+				globalCtrl->hover = false;
+				globalCtrl->clicked = false;
+				if (globalCtrl->ChGlobalMouseEvent)
+					globalCtrl->ChGlobalMouseEvent(win, globalCtrl, x, y, 0);
+			}
+		}
+	}
+
+	if (button == DEODHAI_MOUSE_MSG_SCROLL_UP || button == DEODHAI_MOUSE_MSG_SCROLL_DOWN) {
+		if (y > win->info->y + 26 && y < (win->info->y + win->info->height)) {
+			for (int i = 0; i < win->widgets->pointer; i++) {
+				ChWidget* widget = (ChWidget*)list_get_at(win->widgets, i);
+				if (!widget || !widget->visible)
+					continue;
+				if (x >= win->info->x + widget->x && x < (win->info->x + widget->x + widget->w) &&
+					(y >= win->info->y + widget->y && y < (win->info->y + widget->y + widget->h))) {
+					if (widget->ChMouseEvent)
+						widget->ChMouseEvent(widget, win, x, y, button);
+					break;
+				}
+			}
+		}
+		return;
 	}
 
 	if (win->focusedWidget) {
@@ -744,6 +783,12 @@ XE_EXTERN XE_EXPORT void ChPopupWindowHandleMouse(ChWindow* win, int x, int y, i
  */
 XE_EXTERN XE_EXPORT void ChWindowHandleFocus(ChWindow* win, bool focus_val, uint32_t handle) {
 	win->focused = focus_val;
+	const ChWindowStyleOps* style = ChWindowStyleOf(win);
+	if (style) {
+		if (style->Focus)
+			style->Focus(win);
+		return;
+	}
 	ChWindowPaintTitlebar(win);
 	ChDrawHorizontalLine(win->canv, 0, 0, win->info->width, GRAY);
 	ChDrawVerticalLine(win->canv, 0, 0, 26, GRAY);
@@ -752,11 +797,43 @@ XE_EXTERN XE_EXPORT void ChWindowHandleFocus(ChWindow* win, bool focus_val, uint
 }
 
 /*
+ * ChWindowHandleMouseLeave -- the pointer left the window: clear the
+ * hover state of global controls and widgets so they repaint plain.
+ * @param win -- Pointer to window
+ */
+XE_EXTERN XE_EXPORT void ChWindowHandleMouseLeave(ChWindow* win) {
+	if (!win)
+		return;
+	int far = -100000; /* a point outside every window */
+	for (int i = 0; i < win->GlobalControls->pointer; i++) {
+		ChWinGlobalControl* g = (ChWinGlobalControl*)list_get_at(win->GlobalControls, i);
+		if (g && g->hover) {
+			g->hover = false;
+			g->clicked = false;
+			if (g->ChGlobalMouseEvent)
+				g->ChGlobalMouseEvent(win, g, far, far, 0);
+		}
+	}
+	for (int i = 0; i < win->widgets->pointer; i++) {
+		ChWidget* w = (ChWidget*)list_get_at(win->widgets, i);
+		if (w && w->hover) {
+			w->hover = false;
+			w->KillFocus = true;
+			if (w->ChMouseEvent)
+				w->ChMouseEvent(w, win, far, far, 0);
+		}
+	}
+	win->focusedWidget = NULL;
+}
+
+/*
  * ChWindowAddWidget -- adds a widget to window
  * @param win -- Pointer to root window
  * @param wid -- Pointer to widget needs to be added
  */
 XE_EXTERN XE_EXPORT void ChWindowAddWidget(ChWindow* win, ChWidget* wid) {
+	if (wid)
+		wid->visible = true;
 	list_add(win->widgets, wid);
 }
 

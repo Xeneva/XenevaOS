@@ -63,21 +63,22 @@ int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t*
 #include <sys/_kefile.h>
 #include <sys/_keproc.h>
 
-int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t* olen) {
+static int read_entropy_file(const char* path, unsigned char* output, size_t len) {
 	int fd;
 	size_t got = 0;
 	int spins = 0;
-	(void)data;
-	*olen = 0;
-	fd = _KeOpenFile("/dev/hwrng", FILE_OPEN_READ_ONLY);
+
+	fd = _KeOpenFile((char*)path, FILE_OPEN_READ_ONLY);
 	if (fd < 0)
-		return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+		return -1;
 	/* The first virtio-rng buffer is still in flight at boot. A read
 	 * then returns 0; the same read after the used ring lands succeeds.
 	 * Wait for that buffer instead of failing the first TLS handshake. */
 	while (got < len && spins < 40) {
-		size_t n = _KeReadFile(fd, output + got, len - got);
-		if (n == 0) {
+		size_t room = len - got;
+		size_t n = _KeReadFile(fd, output + got, room);
+		/* A failed read comes back as a negative int in a size_t. */
+		if (n == 0 || n > room) {
 			spins++;
 			_KeProcessSleep(25);
 			continue;
@@ -86,9 +87,18 @@ int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t*
 		spins = 0;
 	}
 	_KeCloseFile(fd);
-	if (got != len)
+	return got == len ? 0 : -1;
+}
+
+int mbedtls_hardware_poll(void* data, unsigned char* output, size_t len, size_t* olen) {
+	(void)data;
+	*olen = 0;
+	/* /dev/urandom is the normal source; /dev/hwrng stays as the fallback
+	 * for images where the random device was not created. */
+	if (read_entropy_file("/dev/urandom", output, len) != 0 &&
+		read_entropy_file("/dev/hwrng", output, len) != 0)
 		return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
-	*olen = got;
+	*olen = len;
 	return 0;
 }
 #endif

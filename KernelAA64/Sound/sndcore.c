@@ -306,6 +306,7 @@ void AuSoundInitialise() {
 	dsp->read = AuSoundRead;
 	dsp->write = AuSoundWrite;
 	dsp->iocontrol = AuSoundIOControl;
+	dsp->mode = 0660;
 	AuDevFSAddFile(fsys, "/", dsp);
 
 	/** clear up the card data structure */

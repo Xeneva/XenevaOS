@@ -87,7 +87,7 @@
 #define PROCESS_TYPE_BACKGROUND	  (1 << 2)
 #define PROCESS_TYPE_NON_KILLABLE (1 << 3)
 /* Static Linux ELF. svc #0 reads x8, not x16. */
-#define PROCESS_TYPE_LINUX		  (1 << 4)
+#define PROCESS_TYPE_LINUX (1 << 4)
 
 #define PROCESS_BREAK_ADDRESS 0x0000003000000000
 #ifdef ARCH_X64
@@ -104,6 +104,8 @@ typedef struct _au_proc_cred_ {
 	uint8_t caps;
 	UID_NUM uid;
 	GID_NUM gid;
+	UID_NUM euid;
+	GID_NUM egid;
 	GID_NUM sgid[AURORA_MAX_GROUPS];
 	uint16_t num_sgid;
 } AuProcCredentials;
@@ -163,6 +165,8 @@ typedef struct _au_proc_ {
 	AuVFSNode* fds[FILE_DESC_PER_PROCESS];
 	/* capability table -- parallel to fds[]*/
 	AuCapability caps[FILE_DESC_PER_PROCESS];
+	/* vfs access flags */
+	uint8_t access[FILE_DESC_PER_PROCESS];
 	/*loader related data*/
 	AuVFSNode* file;
 	AuVFSNode* fsys;
@@ -376,5 +380,7 @@ extern int AuProcessFetch(AuProcessList* list, int num_proc_count);
  * @param num_count -- total number of threads to decrease
  */
 extern void AuProcessReapWaitcount(AuProcess* proc, int num_count);
+
+extern AuProcess* AuProcessCurrent();
 
 #endif

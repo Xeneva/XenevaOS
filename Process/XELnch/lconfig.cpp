@@ -1,7 +1,7 @@
 /**
 * BSD 2-Clause License
 *
-* Copyright (c) 2022-2023, Manas Kamal Choudhury
+* Copyright (c) 2022-2026, Manas Kamal Choudhury
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -27,131 +27,220 @@
 *
 **/
 
-#include "launcher.h"
-#include <sys/_kefile.h>
-#include <sys/mman.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include "button.h"
-#include "appgrid.h"
-
-uint8_t* launcher_config_file;
-
 /*
- * LauncherConfigInitialise -- initialise the config file
+ * lconfig.cpp -- /lncher.cnf parser.
+ *
+ * Entry format (one per app, fields in any order, separated by '|'):
+ *
+ *   {[Title]Accent Player|
+ *   [Icon]/icons/medial.bmp|
+ *   [Param]Null|
+ *   [App]/audplr.exe|
+ *   [Size]M|          optional: S small, M tall (default), W wide, L hero
+ *   [Pin]1|           optional: 1 pinned (default), 0 only in "all apps"
+ *   [Color]red|       optional: red, deep, muga, mugadeep, ink, ivory
+ *   [Name]accent|     optional: the lower-case name on the card
+ *   [Kicker]LISTEN|   optional: the small label at the top of the card
+ *   [Deck]music...}   optional: one line under the name
+ *
+ * The old files (no Size/Pin/Color, last entry closed with '>') parse
+ * unchanged. Single pass, O(file size); the file buffer is freed after
+ * parsing and the app table is allocated at its exact size.
  */
-void LauncherConfigInitialise() {
-	launcher_config_file = NULL;
-	int fd = _KeOpenFile("/lncher.cnf", FILE_OPEN_READ_ONLY);
-	if (fd == -1) {
-		printf("failed to open launcher config file \n");
-		return;
-	}
-	XEFileStatus stat;
-	_KeFileStat(fd, &stat);
-	printf("Launcher config file sz -> %d bytes \n", stat.size);
-	launcher_config_file = (uint8*)_KeMemMap(NULL, stat.size, 0, 0, MEMMAP_NO_FILEDESC, 0);
-	memset(launcher_config_file, 0, stat.size);
 
-	_KeReadFile(fd, launcher_config_file, stat.size);
-	printf("Launcher config file read \n");
-	/* now read is completed, close the file */
-	//_KeCloseFile(fd);
+#include "launcher.h"
+#include <livetile.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <sys/_kefile.h>
+
+static bool _key_is(const char* k, int kl, const char* name) {
+	int n = (int)strlen(name);
+	if (n != kl)
+		return false;
+	for (int i = 0; i < n; i++) {
+		char a = k[i], b = name[i];
+		if (a >= 'A' && a <= 'Z')
+			a += 32;
+		if (b >= 'A' && b <= 'Z')
+			b += 32;
+		if (a != b)
+			return false;
+	}
+	return true;
+}
+
+static void _copy_trim(char* dst, int dstSize, const char* s, int len) {
+	while (len > 0 && (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')) {
+		s++;
+		len--;
+	}
+	while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t' || s[len - 1] == '\r' ||
+					   s[len - 1] == '\n'))
+		len--;
+	if (len > dstSize - 1)
+		len = dstSize - 1;
+	XlMemcpy(dst, s, len);
+	dst[len] = '\0';
+}
+
+static int _parse_size(const char* v, int def) {
+	switch (v[0]) {
+	case 'S':
+	case 's':
+		return XL_TILE_S;
+	case 'M':
+	case 'm':
+		return XL_TILE_M;
+	case 'W':
+	case 'w':
+		return XL_TILE_W;
+	case 'L':
+	case 'l':
+		return XL_TILE_L;
+	}
+	return def;
+}
+
+static int _parse_color(const char* v, int def) {
+	static const char* names[XL_COL_COUNT] = { "red", "deep", "muga", "mugadeep", "ink", "ivory" };
+	for (int i = 0; i < XL_COL_COUNT; i++)
+		if (_key_is(v, (int)strlen(v), names[i]))
+			return i;
+	return def;
+}
+
+/* one {...} block -> app. s points after '{', e at the closing char */
+static bool _parse_entry(const char* s, const char* e, XlApp* a, int ordinal) {
+	memset(a, 0, sizeof(XlApp));
+	a->size = XL_TILE_M;
+	a->defPinned = 1;
+	/* default colours cycle through the woven palette */
+	static const uint8_t cycle[] = { XL_COL_RED,  XL_COL_MUGA,	XL_COL_INK,
+									 XL_COL_RED_DEEP, XL_COL_IVORY, XL_COL_MUGA_DEEP };
+	a->color = cycle[ordinal % (int)sizeof(cycle)];
+	strcpy(a->param, "Null");
+	const char* p = s;
+	while (p < e) {
+		const char* lb = (const char*)memchr(p, '[', e - p);
+		if (!lb)
+			break;
+		const char* rb = (const char*)memchr(lb, ']', e - lb);
+		if (!rb)
+			break;
+		const char* val = rb + 1;
+		const char* end = (const char*)memchr(val, '|', e - val);
+		if (!end)
+			end = e;
+		const char* key = lb + 1;
+		int kl = (int)(rb - key);
+		int vl = (int)(end - val);
+		char tmp[XL_PATH_MAX];
+		if (_key_is(key, kl, "title"))
+			_copy_trim(a->title, XL_TITLE_MAX, val, vl);
+		else if (_key_is(key, kl, "icon"))
+			_copy_trim(a->icon, XL_PATH_MAX, val, vl);
+		else if (_key_is(key, kl, "param"))
+			_copy_trim(a->param, XL_PARAM_MAX, val, vl);
+		else if (_key_is(key, kl, "app"))
+			_copy_trim(a->path, XL_PATH_MAX, val, vl);
+		else if (_key_is(key, kl, "size")) {
+			_copy_trim(tmp, sizeof(tmp), val, vl);
+			a->size = (uint8_t)_parse_size(tmp, a->size);
+		} else if (_key_is(key, kl, "pin")) {
+			_copy_trim(tmp, sizeof(tmp), val, vl);
+			a->defPinned = (tmp[0] == '0' || tmp[0] == 'n' || tmp[0] == 'N') ? 0 : 1;
+		} else if (_key_is(key, kl, "color")) {
+			_copy_trim(tmp, sizeof(tmp), val, vl);
+			a->color = (uint8_t)_parse_color(tmp, a->color);
+		} else if (_key_is(key, kl, "name")) {
+			_copy_trim(a->name, XL_TITLE_MAX, val, vl);
+		} else if (_key_is(key, kl, "kicker")) {
+			_copy_trim(a->kicker, XL_KICK_MAX, val, vl);
+		} else if (_key_is(key, kl, "deck")) {
+			_copy_trim(a->deck, XL_DECK_MAX, val, vl);
+		}
+		p = end + 1;
+	}
+	if (!a->title[0] || !a->path[0])
+		return false;
+	/* cards speak lower case, kickers upper case */
+	if (!a->name[0])
+		strcpy(a->name, a->title);
+	for (char* q = a->name; *q; q++)
+		if (*q >= 'A' && *q <= 'Z')
+			*q = (char)(*q + 32);
+	for (char* q = a->kicker; *q; q++)
+		if (*q >= 'a' && *q <= 'z')
+			*q = (char)(*q - 32);
+	a->card = XL_NONE;
+	a->tick = 255;
+	a->titleHash = XelnchHash(a->title);
+	a->pathHash = XelnchHash(a->path);
+	a->live.progress = XELNCH_NO_PROGRESS;
+	return true;
 }
 
 /*
- * LauncherSetupByConfigFile -- setup the launcher
- * by config file
+ * XlConfigLoad -- read the launcher config, fill xlnch.apps.
+ * Returns the number of apps loaded.
  */
-void LauncherSetupByConfigFile() {
-	if (!launcher_config_file) {
-		printf("Config file buffer is zero \n");
-		return;
+int XlConfigLoad(const char* path) {
+	xlnch.apps = NULL;
+	xlnch.appCount = 0;
+	int fd = _KeOpenFile((char*)path, FILE_OPEN_READ_ONLY);
+	if (fd == -1) {
+		_KePrint("[XELnch]: failed to open %s \r\n", path);
+		return 0;
 	}
-	bool _last_entry_ = false;
-	AppGrid* grid = XELauncherGetAppGrid();
-	char* fbuf = (char*)launcher_config_file;
-	while (1) {
-		char* p = strchr(fbuf, '{'); //beginning of an entry
-		if (p)
-			p += 8; //skip '['
+	XEFileStatus st;
+	memset(&st, 0, sizeof(st));
+	_KeFileStat(fd, &st);
+	size_t sz = st.size;
+	if (sz == 0 || sz > (256u << 10)) {
+		_KeCloseFile(fd);
+		return 0;
+	}
+	char* buf = (char*)malloc(sz + 1);
+	if (!buf) {
+		_KeCloseFile(fd);
+		return 0;
+	}
+	_KeReadFile(fd, buf, sz);
+	_KeCloseFile(fd);
+	buf[sz] = '\0';
 
-		fbuf = p;
+	int blocks = 0;
+	for (size_t i = 0; i < sz; i++)
+		if (buf[i] == '{')
+			blocks++;
+	if (blocks > XL_MAX_APPS)
+		blocks = XL_MAX_APPS;
+	if (blocks == 0) {
+		free(buf);
+		return 0;
+	}
+	xlnch.apps = (XlApp*)malloc(sizeof(XlApp) * blocks);
+	if (!xlnch.apps) {
+		free(buf);
+		return 0;
+	}
 
-		/* get the title */
-		char title[42];
-		memset(title, 0, 42);
-		for (int i = 0; i < 42; i++) {
-			if (p[i] == '|') {
-				fbuf++;
-				break;
-			}
-			title[i] = p[i];
-			fbuf++;
-		}
-
-		p = strchr(fbuf, ']'); //end of a keyword line, skip to icon name
-		if (p)
-			p++;
-
-		fbuf = p;
-		char icon[42];
-		memset(icon, 0, 42);
-		for (int i = 0; i < 42; i++) {
-			if (p[i] == '|') {
-				fbuf++;
-				break;
-			}
-			icon[i] = p[i];
-			fbuf++;
-		}
-
-		p = strchr(fbuf, ']');
-		if (p)
-			p++;
-
-		fbuf = p;
-
-		char param[42];
-		memset(param, 0, 42);
-		for (int i = 0; i < 42; i++) {
-			if (p[i] == '|') {
-				fbuf++;
-				break;
-			}
-			param[i] = p[i];
-			fbuf++;
-		}
-
-		p = strchr(fbuf, ']');
-		if (p)
-			p++;
-
-		/* appname is the last keyword entry */
-		char app[42];
-		memset(app, 0, 42);
-		for (int i = 0; i < 42; i++) {
-			if (p[i] == '}') {
-				fbuf++;
-				break;
-			}
-			if (p[i] == '>') {
-				_last_entry_ = true;
-				break;
-			}
-			app[i] = p[i];
-			fbuf++;
-		}
-
-		LaunchButton* button =
-			CreateLaunchButton(0, 0, LAUNCH_BUTTON_W, LAUNCH_BUTTON_H, title, app);
-		button->param = (char*)malloc(strlen(param) + 1);
-		strcpy(button->param, param);
-		ButtonIcon* ico = CreateLaunchButtonIcon(icon, button);
-		AppGridAddButton(grid, button);
-
-		if (_last_entry_)
+	char* p = buf;
+	char* end = buf + sz;
+	while (p < end && xlnch.appCount < blocks) {
+		char* open = (char*)memchr(p, '{', end - p);
+		if (!open)
 			break;
+		char* close = open + 1;
+		while (close < end && *close != '}' && *close != '>' && *close != '{')
+			close++;
+		if (_parse_entry(open + 1, close, &xlnch.apps[xlnch.appCount], xlnch.appCount))
+			xlnch.appCount++;
+		p = close < end ? close + 1 : end;
 	}
+	free(buf);
+	_KePrint("[XELnch]: %d apps from %s \r\n", xlnch.appCount, path);
+	return xlnch.appCount;
 }

@@ -33,6 +33,7 @@
 #include <stdint.h>
 #include <widgets/window.h>
 #include <widgets/list.h>
+#include "nmgamusa.h"
 
 #define NAMDAPHA_TIME_BUTTON_COLOR 0xFF7B7878
 /* The date string is 10 chars (~71px at the date size); the old 65px-wide
@@ -81,6 +82,11 @@ typedef struct _buttoninfo_ {
 	uint8_t* imageData;
 	uint32_t fileSize;
 	int usageCount;
+	/* Gamusa bar: the icon shrunk once to fit above the marker (ARGB);
+	 * once it exists the mapped file is gone and imageData is NULL */
+	uint32_t* thumb;
+	int thumbW;
+	int thumbH;
 } ButtonInfo;
 
 /* Namdapha Button structure
@@ -140,6 +146,11 @@ extern void NmButtonInfoRead(ButtonInfo* btninfo);
 * @param y -- Y coordinate
 */
 extern void NmButtonInfoDrawIcon(ButtonInfo* info, ChCanvas* canv, int x, int y);
+
+/*
+* NmButtonInfoRelease -- drop one use of an icon, freeing it with the last
+*/
+extern void NmButtonInfoRelease(ButtonInfo* info);
 
 extern NamdaphaButton* NamdaphaInitialiseGoButton(ChWindow* win);
 

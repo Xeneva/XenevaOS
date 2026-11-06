@@ -80,7 +80,7 @@ XE_EXTERN {
 
 	XE_LIB int mkdir(const char*, mode_t);
 	XE_LIB int stat(const char*, struct stat*);
-
+    XE_LIB int chmod(const char* pathname, mode_t mode);
 #ifdef __cplusplus
 }
 #endif

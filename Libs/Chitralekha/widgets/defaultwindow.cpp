@@ -32,6 +32,7 @@
 #include "window.h"
 #include "../font.h"
 #include <math.h>
+#include "winstyle.h"
 
 #ifdef THEME_DEFAULT
 #define DEFAULT_TITLEBAR_DARK		 0xFF252525
@@ -122,6 +123,14 @@ void ChWindowPaintMinimButton(ChWindow* win, ChWinGlobalControl* button) {
 }
 
 void ChWindowPaintTitlebar(ChWindow* win) {
+	/* styled chrome (knot, ...) paints its own bar; the classic path
+	 * below is unchanged */
+	const ChWindowStyleOps* style = ChWindowStyleOf(win);
+	if (style) {
+		if (style->PaintTitlebar)
+			style->PaintTitlebar(win);
+		return;
+	}
 	uint32_t light_color = DEFAULT_TITLEBAR_LIGHT;
 	uint32_t dark_color = DEFAULT_TITLEBAR_DARK;
 	if (win->focused) {

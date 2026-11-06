@@ -66,8 +66,8 @@ set -e
 #   --clipboard             Force the clipboard port back on.
 #   --no-doom               Drop the Doom addon (doom.exe + doom2.wad) from
 #                           the image.
-#   --no-netsurf            Drop the NetSurf browser (netsurf.exe) from
-#                           the image.
+#   --no-netsurf            (Deprecated) Drop NetSurf browser from the image.
+#                           NetSurf is now automatically excluded when using --apps.
 #   --bt                    Attach Bluetooth on the second serial. The socket
 #                           is /tmp/bt-server-bredr (btproxy), or
 #                           /tmp/xeneva-bt-virt when XENEVA_BT_VIRT=1.
@@ -126,6 +126,7 @@ source "$SCRIPT_DIR/lib/functions.sh"
 TOOLCHAIN=llvm
 SKIP_BUILD=0
 BUILD_USER_APPS=0
+USER_APPS=""
 FORCE_LEGACY_BUILD=0
 INSTALL_DEPS=0
 HEADLESS=0
@@ -479,6 +480,15 @@ while [ $# -gt 0 ]; do
         --gcc) TOOLCHAIN=gcc ;;
         --skip-build) SKIP_BUILD=1 ;;
         --force-user-apps) BUILD_USER_APPS=1 ;;
+        --apps=*|--user-apps=*)
+            BUILD_USER_APPS=1
+            USER_APPS="${1#*=}"
+            ;;
+        --apps|--user-apps)
+            BUILD_USER_APPS=1
+            shift
+            USER_APPS="$1"
+            ;;
 		--bleed) BLEED=1 ;;
 		--debug-alloc) DEBUG_ALLOC=1 ;;
 		--soak) SOAK=1 ;;
@@ -546,7 +556,10 @@ while [ $# -gt 0 ]; do
         --tui) TUI=1 ;;
         --no-network) NO_NETWORK=1 ;;
         --no-doom) NO_DOOM=1 ;;
-        --no-netsurf) NO_NETSURF=1 ;;
+        --no-netsurf)
+            printf "${STY_YELLOW}[%s]: Warning: --no-netsurf is deprecated. Use --apps to select specific applications (e.g. --apps=Solitaire), which automatically excludes other apps.${STY_RST}\n" "$0"
+            NO_NETSURF=1
+            ;;
         --no-audio) NO_AUDIO=1 ;;
         --no-boot-menu) NO_BOOT_MENU=1 ;;
         --bt) NO_BT=0 ;;
@@ -977,7 +990,7 @@ fi
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
     echo "[+] Building bootloader + kernel (+ apps if requested) with $TOOLCHAIN..."
-	export STATIC_COMPONENTS BUILD_USER_APPS BLEED SOAK DEBUG_ALLOC DIRECT_SCANOUT UNIKERNEL OPENXR NO_NETWORK NO_AUDIO NO_DOOM NO_NETSURF
+	export STATIC_COMPONENTS BUILD_USER_APPS USER_APPS BLEED SOAK DEBUG_ALLOC DIRECT_SCANOUT UNIKERNEL OPENXR NO_NETWORK NO_AUDIO NO_DOOM NO_NETSURF
     pushd "$SCRIPT_DIR" >/dev/null
     if [ "$TOOLCHAIN" == llvm ]; then
         source ./lib/llvm.sh
@@ -1130,6 +1143,29 @@ if [ "$FORCE_LEGACY_BUILD" -eq 0 ]; then
         fi
         mcopy -o -s -i initrd2.img "$resource" ::/
     done
+
+    # Filter lncher.cnf so only apps with existing binaries appear in the launcher menu
+    if [ -f Resources/resources/lncher.cnf ]; then
+        tmp_cnf="$(mktemp)"
+        entry=""
+        while IFS= read -r line || [ -n "$line" ]; do
+            entry="${entry}${line}"$'\n'
+            if [[ "$line" =~ (\}|>)[[:space:]]*$ ]]; then
+                app="$(printf '%s' "$entry" | sed -n 's/.*\[App\]\/\([^|>\r\n}]*\).*/\1/p')"
+                if [ -z "$app" ] || { [ -f "Resources/resources/$app" ] && ! pack_excluded "$app"; }; then
+                    printf '%s\n' "$entry" >> "$tmp_cnf"
+                fi
+                entry=""
+            fi
+        done < Resources/resources/lncher.cnf
+        if [ -s "$tmp_cnf" ]; then
+            sed -i -e '/^[[:space:]]*$/d' "$tmp_cnf"
+            sed -i -e '$ { s/}[[:space:]]*$/>/ }' "$tmp_cnf"
+            mcopy -o -i initrd2.img "$tmp_cnf" ::/lncher.cnf
+        fi
+        rm -f "$tmp_cnf"
+    fi
+
     mcopy -o -i initrd2.img Process/Init/init.exe ::/init.exe
 else
     if [ ! -f initrd2.img ]; then
@@ -1272,8 +1308,36 @@ QEMU_ARGS=(
     -device ramfb,id=ramfb
     -device virtio-keyboard-pci
     -device virtio-tablet-pci
-    -device qemu-xhci
-    -device usb-kbd
+    -device qemu-xhci,id=xhci0
+    # External hub coverage.  QEMU's xHCI exposes four dual-speed root
+    # ports with bus paths 1..4 (PORTSC numbers 5..8 cover their USB2
+    # side); path 4 is the last USB2 root port.  The tablet below sits on
+    # hub port 1 so the gate exercises hub enumeration, the status-change
+    # endpoint and downstream hotplug.  The keyboard stays on a root port
+    # so keyboard input does not depend on the hub path.  The serial sits
+    # on hub port 2, which leaves a root port free for a SuperSpeed disk.
+    -device usb-hub,id=usb-hub0,port=4
+    # Bind the USB HID devices to the virtio-gpu console: QEMU only
+    # attaches a HID handler to a console when the qdev "display" property
+    # names a display device.  With the binding, QMP can address these
+    # handlers via input-send-event's device=gpu0, which selects them
+    # ahead of the unbound virtio input devices.
+    -device usb-kbd,id=usb-kbd0,display=gpu0
+    -device usb-tablet,id=usb-tablet0,display=gpu0,port=4.1
+    # A serial function on the same controller: exercises the CDC/FTDI bulk
+    # pair and the devfs tty node without needing a host-side client.
+    -chardev null,id=ser0
+    # usb-serial only attaches when its chardev reports open.  A null
+    # backend never opens, so ask the model to plug in at realize time.
+    -device usb-serial,chardev=ser0,id=usb-serial0,always-plugged=on,port=4.2
+    # A second hub below usb-hub0 exercises the multi-tier scan: the device
+    # below it has a two-nibble route string and its log path is 8.8.1.
+    # Hub ports 4.1-4.7 are already taken by the boot devices and the gate's
+    # storage batteries, so the nested hub uses the last free port.
+    # QEMU's PenPartner tablet is a HID pointer whose report descriptor uses
+    # report IDs, so this one device covers nested hubs and the ID path.
+    -device usb-hub,id=usb-hub1,port=4.8
+    -device usb-wacom-tablet,id=usb-wacom0,port=4.8.1
     -serial stdio
 )
 
@@ -1552,8 +1616,11 @@ fi
 # Extra QEMU options, for tests that need more than the defaults, e.g. a QMP socket to
 # inject absolute pointer events from the host (the human monitor can only do relative):
 #   XENEVA_QEMU_EXTRA_ARGS='-qmp unix:/tmp/xeneva-qmp.sock,server=on,wait=off'
+# Words are split the way a shell would, so an argument holding a path with spaces
+# can be single- or double-quoted, e.g. -drive 'file=/media/New Volume/x.img,...'.
+# xargs only honours the quoting; nothing in the string is expanded or executed.
 if [ -n "${XENEVA_QEMU_EXTRA_ARGS:-}" ]; then
-    read -r -a extra_qemu_args <<<"${XENEVA_QEMU_EXTRA_ARGS}"
+    mapfile -d '' -t extra_qemu_args < <(xargs -r printf '%s\0' <<<"${XENEVA_QEMU_EXTRA_ARGS}")
     QEMU_ARGS+=("${extra_qemu_args[@]}")
 fi
 

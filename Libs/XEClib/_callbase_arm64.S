@@ -487,6 +487,104 @@ listen:
 	mov x0, x6
 	ret
 
+.global getsockopt
+getsockopt:
+	mov x16, SYS_GETSOCKOPT
+	svc #0
+	mov x0, x6
+	ret
+
+.global accept4
+accept4:
+	mov x16, SYS_ACCEPT4
+	svc #0
+	mov x0, x6
+	ret
+
+.global socketpair
+socketpair:
+	mov x16, SYS_SOCKETPAIR
+	svc #0
+	mov x0, x6
+	ret
+
+.global shutdown
+shutdown:
+	mov x16, SYS_SHUTDOWN
+	svc #0
+	mov x0, x6
+	ret
+
+.global getsockname
+getsockname:
+	mov x16, SYS_GETSOCKNAME
+	svc #0
+	mov x0, x6
+	ret
+
+.global getpeername
+getpeername:
+	mov x16, SYS_GETPEERNAME
+	svc #0
+	mov x0, x6
+	ret
+
+.global sendto
+sendto:
+	mov x16, SYS_SENDTO
+	svc #0
+	mov x0, x6
+	ret
+
+.global recvfrom
+recvfrom:
+	mov x16, SYS_RECVFROM
+	svc #0
+	mov x0, x6
+	ret
+
+.global sendmmsg
+sendmmsg:
+	mov x16, SYS_SENDMMSG
+	svc #0
+	mov x0, x6
+	ret
+
+.global recvmmsg
+recvmmsg:
+	mov x16, SYS_RECVMMSG
+	svc #0
+	mov x0, x6
+	ret
+
+.global _KeIfNameToIndex
+_KeIfNameToIndex:
+	mov x16, SYS_IF_NAMETOINDEX
+	svc #0
+	mov x0, x6
+	ret
+
+.global _KeGetIfAddrs
+_KeGetIfAddrs:
+	mov x16, SYS_GETIFADDRS
+	svc #0
+	mov x0, x6
+	ret
+
+.global _KeMount
+_KeMount:
+	mov x16, SYS_VFS_MOUNT
+	svc #0
+	mov x0, x6
+	ret
+
+.global _KeUnmount
+_KeUnmount:
+	mov x16, SYS_VFS_UNMOUNT
+	svc #0
+	mov x0, x6
+	ret
+
 .global _KeCreatePipe
 _KeCreatePipe:
 	mov x16, SYS_CREATE_PIPE
@@ -703,6 +801,20 @@ uname:
 .global poll
 poll:
     mov x16, 83
+	svc #0
+	mov x0, x6
+	ret
+
+.global chmod
+chmod:
+    mov x16, 84
+	svc #0
+	mov x0, x6
+	ret
+	
+.global _KeOwnFsys
+_KeOwnFsys:
+    mov x16, 85
 	svc #0
 	mov x0, x6
 	ret

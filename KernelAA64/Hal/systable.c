@@ -58,6 +58,7 @@
 #include <timer.h>
 #include <bordoisila_ptr.h>
 #include <Sync/poll.h>
+#include <Fs/vfsmod.h>
 
 AA64Registers* svcCurrentRegs;
 
@@ -170,10 +171,24 @@ static void* syscalls[AURORA_MAX_SYSCALL] = {
 	[SYS_NET_CONNECT] = NetConnect,
 	[SYS_NET_SEND] = NetSend,
 	[SYS_NET_RECEIVE] = NetReceive,
-	[SYS_SOCKET_SET_OPT] = AuSocketSetOpt,
+	[SYS_SOCKET_SET_OPT] = NetSocketSetOpt,
 	[SYS_NET_BIND] = NetBind,
 	[SYS_NET_ACCEPT] = NetAccept,
 	[SYS_NET_LISTEN] = NetListen,
+	[SYS_SOCKETPAIR] = NetSocketPair,
+	[SYS_GETSOCKOPT] = NetGetSockOpt,
+	[SYS_GETSOCKNAME] = NetGetSockName,
+	[SYS_GETPEERNAME] = NetGetPeerName,
+	[SYS_SHUTDOWN] = NetShutdown,
+	[SYS_SENDMMSG] = NetSendMmsg,
+	[SYS_RECVMMSG] = NetRecvMmsg,
+	[SYS_ACCEPT4] = NetAccept4,
+	[SYS_SENDTO] = NetSendTo,
+	[SYS_RECVFROM] = NetRecvFrom,
+	[SYS_IF_NAMETOINDEX] = NetIfNameToIndex,
+	[SYS_GETIFADDRS] = NetGetIfAddrs,
+	[SYS_VFS_MOUNT] = VFSMount,
+	[SYS_VFS_UNMOUNT] = VFSUnmount,
 	[SYS_CREATE_PIPE] = AuCreatePipe,
 	[SYS_GET_VDISK_INFO] = AuGetVDiskInfo,
 	[SYS_GET_VDISK_PARTITION_INFO] = AuGetVDiskPartitionInfo,
@@ -204,6 +219,8 @@ static void* syscalls[AURORA_MAX_SYSCALL] = {
 	[SYS_THREAD_WAIT_FOR_TERMINATION] = AuThreadWaitForTermination,
 	[SYS_KERNEL_UNAME] = ExecUname,
 	[SYS_FILE_POLL] = AuPoll,
+	[SYS_FILE_CHMOD] = Chmod,
+	[SYS_FILE_FSYS_OWN] = AuVFSOwnFsys,
 };
 
 #ifdef __KERNEL_PROFILER_ON__
@@ -258,10 +275,24 @@ static char* syscall_name[AURORA_MAX_SYSCALL] = {
 	[SYS_NET_CONNECT] = "NetConnect",
 	[SYS_NET_SEND] = "NetSend",
 	[SYS_NET_RECEIVE] = "NetReceive",
-	[SYS_SOCKET_SET_OPT] = "AuSocketSetOpt",
+	[SYS_SOCKET_SET_OPT] = "NetSocketSetOpt",
 	[SYS_NET_BIND] = "NetBind",
 	[SYS_NET_ACCEPT] = "NetAccept",
 	[SYS_NET_LISTEN] = "NetListen",
+	[SYS_SOCKETPAIR] = "NetSocketPair",
+	[SYS_GETSOCKOPT] = "NetGetSockOpt",
+	[SYS_GETSOCKNAME] = "NetGetSockName",
+	[SYS_GETPEERNAME] = "NetGetPeerName",
+	[SYS_SHUTDOWN] = "NetShutdown",
+	[SYS_SENDMMSG] = "NetSendMmsg",
+	[SYS_RECVMMSG] = "NetRecvMmsg",
+	[SYS_ACCEPT4] = "NetAccept4",
+	[SYS_SENDTO] = "NetSendTo",
+	[SYS_RECVFROM] = "NetRecvFrom",
+	[SYS_IF_NAMETOINDEX] = "NetIfNameToIndex",
+	[SYS_GETIFADDRS] = "NetGetIfAddrs",
+	[SYS_VFS_MOUNT] = "VFSMount",
+	[SYS_VFS_UNMOUNT] = "VFSUnmount",
 	[SYS_CREATE_PIPE] = "AuCreatePipe",
 	[SYS_GET_VDISK_INFO] = "AuGetVDiskInfo",
 	[SYS_GET_VDISK_PARTITION_INFO] = "AuGetVDiskPartitionInfo",
@@ -343,7 +374,7 @@ void AuAA64SyscallHandler(AA64Registers* regs) {
 	PROFILE_START(syscall_name[vector]);
 skip_1:
 #endif
-	if ((vector > AURORA_MAX_SYSCALL) || (vector < 0)) {
+	if ((vector >= AURORA_MAX_SYSCALL) || (vector < 0)) {
 		regs->x0 = retcode;
 		return;
 	}
@@ -356,7 +387,7 @@ skip_1:
 	syscall_func func = (syscall_func)syscalls[vector];
 	if (!func) {
 		currThr->returnFromSyscall = 0;
-		regs->x0 = 0;
+		regs->x0 = (uint64_t)-AU_ERR_ENOSYS;
 
 #ifdef __KERNEL_PROFILER_ON__
 		if (syscall_name[vector] == 0)

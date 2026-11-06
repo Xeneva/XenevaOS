@@ -508,7 +508,8 @@ void DeodhaiWindowCheckDraggable(int x, int y, int button) {
 	for (Window* win = lastWin; win != NULL; win = win->prev) {
 		WinSharedInfo* info = (WinSharedInfo*)win->sharedInfo;
 		//_KePrint("INFO->x %d, mx -> %d \r\n", info->x, x);
-		if (!(x >= (info->x + 10) && x < (info->x + info->width - 74) && y >= info->y &&
+		if (!(x >= (info->x + DeodhaiDragZoneX0(win->flags)) &&
+			  x < (info->x + DeodhaiDragZoneX1(win->flags, info->width)) && y >= info->y &&
 			  y < (info->y + info->height)))
 			continue;
 

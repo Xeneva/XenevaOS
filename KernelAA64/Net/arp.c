@@ -121,7 +121,7 @@ void AuARPRequestMAC(AuVFSNode* nic, uint32_t addr) {
 		arp->arp_data.arp_eth_ipv4.arp_spa = ndev->ipv4addr;
 	}
 
-	UARTDebugOut("[aurora]: ARP Requesting MAC \r\n");
+	AU_NET_LOG("[aurora]: ARP Requesting MAC \r\n");
 	uint8_t broadcast_mac[6];
 	memset(broadcast_mac, 0xFF, 6);
 	AuEthernetSend(nic, arp, sizeof(NetARP), ETHERNET_TYPE_ARP, broadcast_mac);
@@ -140,7 +140,7 @@ void ARPHandlePacket(void* data, AuVFSNode* nic) {
 	if (ntohs(packet->hwAddressType) == 1 && ntohs(packet->hwProtocolType) == ETHERNET_TYPE_IPV4) {
 		if (packet->arp_data.arp_eth_ipv4.arp_spa) {
 			if (!AuARPGet(packet->arp_data.arp_eth_ipv4.arp_spa)) {
-				//UARTDebugOut("[aurora]: net ARP added \r\n");
+				//AU_NET_LOG("[aurora]: net ARP added \r\n");
 				ARPProtocolAdd(nic,
 							   packet->arp_data.arp_eth_ipv4.arp_spa,
 							   packet->arp_data.arp_eth_ipv4.arp_sha);

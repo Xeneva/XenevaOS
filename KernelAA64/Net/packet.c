@@ -11,7 +11,7 @@
 static uint8_t au_pkt_origin = AU_PKT_ORIGIN_WIRE;
 static int au_pkt_local_depth = 0;
 
-#define AU_PKT_LOCAL_DEPTH_CAP 2
+#define AU_PKT_LOCAL_DEPTH_CAP 8
 
 void AuPacketSetOrigin(uint8_t origin) {
 	au_pkt_origin = origin;

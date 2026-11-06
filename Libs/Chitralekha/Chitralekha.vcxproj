@@ -311,6 +311,10 @@
     <ClInclude Include="widgets\toolbar.h" />
     <ClInclude Include="widgets\view.h" />
     <ClInclude Include="widgets\window.h" />
+    <ClInclude Include="widgets\winstyle.h" />
+    <ClInclude Include="widgets\gmstyle.h" />
+    <ClInclude Include="calevt.h" />
+    <ClInclude Include="livetile.h" />
     <ClInclude Include="_fastcpy.h" />
   </ItemGroup>
   <ItemGroup>
@@ -352,6 +356,11 @@
     <ClCompile Include="widgets\toolbar.cpp" />
     <ClCompile Include="widgets\view.cpp" />
     <ClCompile Include="widgets\window.cpp" />
+    <ClCompile Include="widgets\winstyle.cpp" />
+    <ClCompile Include="widgets\knotwindow.cpp" />
+    <ClCompile Include="widgets\gmstyle.cpp" />
+    <ClCompile Include="widgets\flatbutton.cpp" />
+    <ClCompile Include="widgets\flatsidebar.cpp" />
   </ItemGroup>
   <ItemGroup>
     <NASM Include="_fastcpy.asm">

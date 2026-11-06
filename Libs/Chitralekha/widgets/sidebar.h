@@ -81,7 +81,14 @@ XE_EXTERN {
 
 		int hoverSectionIdx;
 		int hoverItemIdx;
+		/* style flags (ChSidebarSetStyle), kept last for layout compat */
+		uint16_t styleFlags;
 	} ChSidebar;
+
+	/* sidebar style flags; 0 keeps the classic painter */
+#define CH_SIDEBAR_STYLE_DEFAULT 0
+#define CH_SIDEBAR_FLAT			 (1 << 0) /* flat Gamusa rows (flatsidebar.cpp) */
+#define CH_SIDEBAR_FLAT_NO_EDGE	 (1 << 1) /* no hairline on the right edge     */
 
 	/**
  * @brief ChSidebarCreate -- create a new sidebar
@@ -93,6 +100,12 @@ XE_EXTERN {
 	XE_EXPORT ChSidebar* ChSidebarCreate(int x, int y, int w, int h);
 
 	XE_EXPORT ChSidebarSection* ChSidebarAddSection(ChSidebar * sb, const char* title);
+
+	/**
+	 * @brief ChSidebarSetStyle -- pick the sidebar painter module
+	 * @param flags -- CH_SIDEBAR_* flags, 0 for the classic look
+	 */
+	XE_EXPORT void ChSidebarSetStyle(ChSidebar * sb, uint16_t flags);
 
 	XE_EXPORT ChSidebarItem* ChSidebarAddItem(
 		ChSidebarSection * sec, const char* label, ChIcon* icon, int iconW, int iconH, void* udata);

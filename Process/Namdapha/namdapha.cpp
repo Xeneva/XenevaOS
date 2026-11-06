@@ -40,6 +40,7 @@
 #include "nmdapha.h"
 #include "section.h"
 #include <widgets/window.h>
+#include <livetile.h>
 #ifdef __XENEVA_UNIKERNEL__
 int NamdaphaMain(int argc, char* arv[]);
 extern "C" void NamdaphaThread() {
@@ -118,6 +119,10 @@ void NamdaphaHideWindow(NamdaphaButton* button) {
  * fill let bright wallpaper wash out the small white glyphs through the
  * glass bar until '-' and '7' were unreadable. --axiss */
 void NamdaphaTimeButtonPaint(NamdaphaButton* button, ChWindow* win) {
+	if (NmGamusa()) {
+		NmGmClockPaint(button, win, _time.hour, _time.minute, _time.day, _time.month, _time.year);
+		return;
+	}
 	ChDrawRect(win->canv, button->x, button->y, button->w, button->h, NAMDAPHA_TIME_BUTTON_COLOR);
 	ChFontSetSize(app->baseFont, 13);
 	int font_w = ChFontGetWidth(app->baseFont, button->title);
@@ -172,11 +177,29 @@ void NamdaphaMouseHandler(ChWindow* win, int x, int y, int button, int scroll) {
 	}
 }
 
+/* NamdaphaToggleLauncher -- ask XELnch to show/hide itself so it can run
+ * its Metro tile animation; fall back to the plain Deodhai toggle when no
+ * launcher has registered its live-tile token (older XELnch builds). */
+static void NamdaphaToggleLauncher() {
+	if (XelnchToggleLauncher(app->postboxfd) != 0)
+		NamdaphaHideWindow(gobutton);
+}
+
 void NamdaphaGoButtonAction(NamdaphaButton* button, ChWindow* win) {
-	NamdaphaHideWindow(gobutton);
+	NamdaphaToggleLauncher();
 }
 
 void NamdaphaPaint(ChWindow* win) {
+	if (NmGamusa()) {
+		NmGmPaintBar(win);
+		for (int i = 0; i < button_list->pointer; i++) {
+			NamdaphaButton* button = (NamdaphaButton*)list_get_at(button_list, i);
+			if (button->drawNamdaphaButton)
+				button->drawNamdaphaButton(button, win);
+		}
+		ChWindowUpdate(win, 0, 0, win->info->width, win->info->height, 1, 0);
+		return;
+	}
 	ChColorDrawHorizontalGradient(
 		win->canv, 0, 0, win->info->width, win->info->height, NAMDAPHA_COLOR, NAMDAPHA_COLOR_DARK);
 	ChDrawVerticalLine(win->canv, win->info->width - 1, 0, win->info->height, NAMDAPHA_COLOR_LIGHT);
@@ -196,7 +219,9 @@ void NamdaphaPaint(ChWindow* win) {
  * for NUL terminators and overflowed the 8-byte currenttime heap buffer.
  * Shared by startup and the minute timer so both show the same format. */
 static void NamdaphaFormatTime(char* out, int hour24, int minute) {
-	int hour12 = hour24 > 12 ? hour24 - 12 : hour24;
+	int hour12 = hour24 % 12;
+	if (hour12 == 0)
+		hour12 = 12; /* midnight read "00:xx AM" */
 	out[0] = (char)('0' + hour12 / 10);
 	out[1] = (char)('0' + hour12 % 10);
 	out[2] = ':';
@@ -217,9 +242,19 @@ void NamdaphaHandleMessage(PostEvent* e) {
 	switch (e->type) {
 		/*handle timer message code */
 	case TIMER_MESSAGE_CODE: {
-		XETime time;
-		_KeGetCurrentTime(&time);
-		NamdaphaFormatTime(currenttime, time.hour, time.minute);
+		/* the same clock start-up used (wall time + zone), and the date
+		 * follows it past midnight */
+		int hour, min, sec;
+		NamdaphaGetWallTime(&hour, &min, &sec, TZ_SEC_IST_INDIA);
+		uint32_t year, month, day;
+		NamdaphaGetYMD(&year, &month, &day, TZ_SEC_IST_INDIA);
+		_time.hour = hour;
+		_time.minute = min;
+		_time.second = sec;
+		_time.day = day;
+		_time.month = month;
+		_time.year = year;
+		NamdaphaFormatTime(currenttime, hour, min);
 		timebutton->drawNamdaphaButton(timebutton, win);
 		ChWindowUpdate(win, timebutton->x, timebutton->y, timebutton->w, timebutton->h, 0, 1);
 		memset(e, 0, sizeof(PostEvent));
@@ -251,7 +286,7 @@ void NamdaphaHandleMessage(PostEvent* e) {
 		int code = e->dword;
 		if (code == DEODHAI_FORCE_OPEN_LAUNCHER) {
 			_KePrint("Namdapha: force launcher open received \r\n");
-			NamdaphaHideWindow(gobutton);
+			NamdaphaToggleLauncher();
 		}
 		memset(e, 0, sizeof(PostEvent));
 		break;
@@ -270,25 +305,32 @@ void NamdaphaHandleMessage(PostEvent* e) {
 
 		if (nbutton) {
 			nbutton->winHandle = e->dword;
-			bool _already_icon_was_there_ = false;
+			/* an icon is loaded once and shared by every button showing it */
+			ButtonInfo* old = nbutton->nmbuttoninfo;
+			ButtonInfo* found = NULL;
 			for (int i = 0; i < button_list->pointer; i++) {
 				NamdaphaButton* nb = (NamdaphaButton*)list_get_at(button_list, i);
 				ButtonInfo* info = (ButtonInfo*)nb->nmbuttoninfo;
-				if (info) {
-					if (strcmp(info->filename, e->charValue3) == 0) {
-						nbutton->nmbuttoninfo = info;
-						info->usageCount += 1;
-						_already_icon_was_there_ = true;
-						break;
-					}
+				if (info && info->filename && strcmp(info->filename, e->charValue3) == 0) {
+					found = info;
+					break;
 				}
 			}
-			if (!_already_icon_was_there_) {
-				ButtonInfo* info = NmCreateButtonInfo(e->charValue3);
-				if (info) {
-					NmButtonInfoRead(info);
-					nbutton->nmbuttoninfo = info;
-					info->usageCount += 1;
+			if (found != old) {
+				if (!found) {
+					found = NmCreateButtonInfo(e->charValue3);
+					NmButtonInfoRead(found);
+					if (found && !found->imageData) {
+						NmButtonInfoRelease(found); /* unreadable: keep the default */
+						found = NULL;
+					}
+				}
+				if (found) {
+					found->usageCount += 1;
+					nbutton->nmbuttoninfo = found;
+					/* a re-broadcast must not leak the icon it replaces */
+					if (old && old != defaultappico)
+						NmButtonInfoRelease(old);
 				}
 			}
 			NamdaphaPaint(win);
@@ -386,17 +428,11 @@ void NamdaphaHandleMessage(PostEvent* e) {
 				pos_x = nbutton_x_loc;
 #endif
 			}
-			if (destroyable->nmbuttoninfo->usageCount > 1) {
-				destroyable->nmbuttoninfo->usageCount -= 1;
-			} else {
-				if (destroyable->nmbuttoninfo != defaultappico) {
-					_KeMemUnmap(destroyable->nmbuttoninfo->fileBuffer,
-								destroyable->nmbuttoninfo->fileSize);
-					free(destroyable->nmbuttoninfo->filename);
-					free(destroyable->nmbuttoninfo);
-					destroyable->nmbuttoninfo = NULL;
-				}
-			}
+			/* the default icon lives as long as the bar; others go with
+			 * their last button */
+			if (destroyable->nmbuttoninfo && destroyable->nmbuttoninfo != defaultappico)
+				NmButtonInfoRelease(destroyable->nmbuttoninfo);
+			destroyable->nmbuttoninfo = NULL;
 			free(destroyable->title);
 			free(destroyable);
 		}
@@ -434,6 +470,8 @@ void NamdaphaPlayStartupSound() {
 
 	int song = _KeOpenFile("/snd.wav", FILE_OPEN_READ_ONLY);
 	void* songbuf = malloc(4096);
+	if (!songbuf)
+		return;
 	memset(songbuf, 0, 4096);
 	_KeReadFile(song, songbuf, 4096);
 
@@ -455,6 +493,7 @@ void NamdaphaPlayStartupSound() {
 			_KeReadFile(song, songbuf, 4096);
 		}
 	}
+	free(songbuf);
 }
 
 extern void NamdaphaGetOnlineTime();
@@ -465,6 +504,10 @@ extern void NamdaphaGetOnlineTime();
 */
 int main(int argc, char* arv[]) {
 	app = ChitralekhaStartApp(argc, arv);
+	/* Gamusa: the bar's few characters are rasterised once here, so the
+	 * minute tick never re-sizes (and re-bakes) a font */
+	if (NmGamusa())
+		NmGmInit(app->baseFont);
 	ChFontSetSize(app->baseFont, 13);
 	/* create a demo canvas just for getting the graphics
 	* file descriptor
@@ -503,9 +546,11 @@ int main(int argc, char* arv[]) {
 		nmx = 0;
 		nmw = screen_w;
 	}
+	/* the Gamusa bar is opaque paper: no glass, so the compositor keeps
+	 * no blur buffers for it */
 	win = ChCreateWindow(app,
 						 WINDOW_FLAG_STATIC | WINDOW_FLAG_ALWAYS_ON_TOP |
-							 WINDOW_FLAG_BROADCAST_LISTENER | WINDOW_FLAG_GLASS,
+							 WINDOW_FLAG_BROADCAST_LISTENER | (NmGamusa() ? 0 : WINDOW_FLAG_GLASS),
 						 "switcher",
 						 nmx,
 						 screen_h - NAMDAPHA_WIDTH,
@@ -563,8 +608,11 @@ int main(int argc, char* arv[]) {
 	NamdaphaFormatTime(currenttime, _time.hour, _time.minute);
 
 	/* now initialise the time button */
-	timebutton = NmCreateButton(
-		win->info->width - NAMDAPHA_TIME_BUTTON_W, 10, NAMDAPHA_TIME_BUTTON_W, 50, "06:51 PM");
+	timebutton = NmCreateButton(win->info->width - NAMDAPHA_TIME_BUTTON_W,
+								NmGamusa() ? NM_GM_CLOCK_Y : 10,
+								NAMDAPHA_TIME_BUTTON_W,
+								NmGamusa() ? NM_GM_CLOCK_H : 50,
+								"06:51 PM");
 	timebutton->mouseEvent = 0;
 	timebutton->drawNamdaphaButton = NamdaphaTimeButtonPaint;
 	timebutton->nmbuttoninfo = 0;

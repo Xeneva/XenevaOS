@@ -272,12 +272,14 @@ int Ext2ReadDir(AuVFSNode* fsys, AuVFSNode* dir_node, AuDirectoryEntry* entry) {
 			entry->flags = FS_FLAG_GENERAL;
 		}
 
+		entry->index += 1;
 		AuPmmngrReleasePage((void*)V2P((uint64_t)block_buf));
-		return 1;
+		return 0;
 	}
 
+	entry->index = -1;
 	AuPmmngrReleasePage((void*)V2P((uint64_t)block_buf));
-	return 0;
+	return -1;
 }
 
 int Ext2Stat(AuVFSNode* file, Ext2Inode* out_stat) {

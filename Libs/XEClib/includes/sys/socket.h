@@ -38,18 +38,30 @@
 XE_EXTERN {
 #endif
 
+struct timespec;
+
 #define AF_UNSPEC 0
 #define AF_INET	  1
 #define AF_RAW	  2
 #define AF_INET6  3
+#define AF_UNIX   4
 
 #define SOCK_STREAM 1
 #define SOCK_DGRAM	2
 #define SOCK_RAW	3
 
+#define SOCK_TYPE_MASK 0x0000000F
+#define SOCK_NONBLOCK  0x00000800
+#define SOCK_CLOEXEC   0x00080000
+
 #define IPPROTOCOL_ICMP 1
 #define IPPROTOCOL_TCP	6
 #define IPPROTOCOL_UDP	17
+
+#ifndef IPPROTO_TCP
+#define IPPROTO_TCP	IPPROTOCOL_TCP
+#define IPPROTO_UDP	IPPROTOCOL_UDP
+#endif
 #define IPPROTOCOL_ICMPV6 58
 
 #define SOL_SOCKET 0
@@ -59,6 +71,29 @@ XE_EXTERN {
 #define SO_BINDTODEVICE 3
 /* connect() returns -119 until the handshake finishes. */
 #define SO_NONBLOCK	4
+#define SO_ERROR	5
+#define SO_TYPE		6
+#define SO_RCVBUF	7
+#define SO_SNDBUF	8
+#define SO_ACCEPTCONN	9
+
+#define TCP_NODELAY	10
+
+#define SOMAXCONN	128
+
+#define SHUT_RD		0
+#define SHUT_WR		1
+#define SHUT_RDWR	2
+
+#define MSG_OOB       0x0001
+#define MSG_PEEK      0x0002
+#define MSG_DONTROUTE 0x0004
+#define MSG_TRUNC     0x0020
+#define MSG_DONTWAIT  0x0040
+#define MSG_EOR       0x0080
+#define MSG_WAITALL   0x0100
+#define MSG_NOSIGNAL  0x4000
+#define MSG_WAITFORONE 0x10000
 
 	typedef size_t socklen_t;
 
@@ -99,6 +134,12 @@ XE_EXTERN {
 		size_t msg_controllen;
 		int msg_flags;
 	} msghdr;
+
+	/* sendmmsg(2)/recvmmsg(2) entry. Keep in sync with the kernel. */
+	typedef struct _mmsghdr_ {
+		msghdr msg_hdr;
+		unsigned int msg_len;
+	} mmsghdr;
 
 	/* Route flags (match BaseHdr/Net/route.h) */
 #define RTF_UP        0x01
@@ -177,6 +218,11 @@ XE_EXTERN {
 		uint32_t sin6_scope_id;
 	} sockaddr_in6;
 
+	typedef struct _sockaddr_un_ {
+		unsigned short sun_family;
+		char sun_path[108];
+	} sockaddr_un;
+
 	XE_LIB int socket(int domain, int type, int protocol);
 	XE_LIB int connect(int sockfd, sockaddr_* addr, socklen_t addrlen);
 	XE_LIB int send(int sockfd, msghdr* msg, int flags);
@@ -185,7 +231,22 @@ XE_EXTERN {
 		int sockfd, int level, int optname, const void* optval, socklen_t optlen);
 	XE_LIB int bind(int sockfd, struct sockaddr* addr, socklen_t addrlen);
 	XE_LIB int accept(int sockfd, sockaddr* addr, socklen_t* addrlen);
+	XE_LIB int accept4(int sockfd, sockaddr* addr, socklen_t* addrlen, int flags);
 	XE_LIB int listen(int sockfd, int backlog);
+	XE_LIB int getsockopt(
+		int sockfd, int level, int optname, void* optval, socklen_t* optlen);
+	XE_LIB int getsockname(int sockfd, sockaddr_* addr, socklen_t* addrlen);
+	XE_LIB int getpeername(int sockfd, sockaddr_* addr, socklen_t* addrlen);
+	XE_LIB int socketpair(int domain, int type, int protocol, int sv[2]);
+	XE_LIB int shutdown(int sockfd, int how);
+	XE_LIB ssize_t sendmmsg(int sockfd, mmsghdr* msgvec, unsigned int vlen,
+							int flags);
+	XE_LIB ssize_t recvmmsg(int sockfd, mmsghdr* msgvec, unsigned int vlen,
+							int flags, const struct timespec* timeout);
+	XE_LIB int setsockopt(
+		int sockfd, int level, int optname, const void* optval, socklen_t optlen);
+	XE_LIB ssize_t sendmsg(int sockfd, const msghdr* msg, int flags);
+	XE_LIB ssize_t recvmsg(int sockfd, msghdr* msg, int flags);
 	XE_LIB ssize_t recvfrom(int sockfd,
 							void* buf,
 							size_t len,

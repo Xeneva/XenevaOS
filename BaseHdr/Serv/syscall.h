@@ -85,8 +85,27 @@
 #define SYS_THREAD_WAIT_FOR_TERMINATION 81
 #define SYS_KERNEL_UNAME				82
 #define SYS_FILE_POLL					83
+#define SYS_FILE_CHMOD					84
+#define SYS_FILE_FSYS_OWN				85
 
-#define SYS_MAX_SYSCALL 84
+/* Extended native socket ABI. 84..178 stay reserved so older binaries
+ * keep their numbers stable. */
+#define SYS_SOCKETPAIR	   179
+#define SYS_GETSOCKOPT	   180
+#define SYS_GETSOCKNAME	   181
+#define SYS_GETPEERNAME	   182
+#define SYS_SHUTDOWN	   183
+#define SYS_SENDMMSG	   186
+#define SYS_RECVMMSG	   187
+#define SYS_ACCEPT4		   188
+#define SYS_SENDTO		   190
+#define SYS_RECVFROM	   191
+#define SYS_IF_NAMETOINDEX 192
+#define SYS_GETIFADDRS	   193
+#define SYS_VFS_MOUNT	   194
+#define SYS_VFS_UNMOUNT	   195
+
+#define SYS_MAX_SYSCALL 196
 
 /* Backward-compat alias */
 #define AURORA_MAX_SYSCALL SYS_MAX_SYSCALL

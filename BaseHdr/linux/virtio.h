@@ -431,14 +431,33 @@ int virtio_input_detect(void);
  * virtio_cread_bytes() -- mainline's arbitrary-length config read.  The
  * virtio-input driver uses it for the device name/serial and for the raw
  * capability bitmaps, which are byte streams rather than fields of a known
- * type.  DCL's config window is the device BAR already mapped by
- * virtio_shim.c, so the read is the same copy virtio_cread() makes.
+ * type.
+ *
+ * The window is Device memory. memcpy() of 32 bytes or more compiles to
+ * `ldp q0, q1` (one 32-byte SIMD load). The bitmap/string union starts at
+ * offset 8, so that address is only 8-byte aligned, and Device memory
+ * raises an alignment fault on the load. QEMU's virtio-tablet key bitmap
+ * is 43 bytes, which is why the keyboard probe (every copy shorter than
+ * 32 bytes, so plain 8-byte loads) finished and the tablet probe died in
+ * virtinput_cfg_bits. One volatile byte load per byte is the access width
+ * this window accepts, and it cannot be widened back into that pair.
+ *
+ * The base is this device's own BAR. device_config_base lives on the one
+ * shared virtio_config_ops, and virtio_device_register() overwrites it for
+ * every new function; reading it here would return the last device's window.
  */
 static inline void virtio_cread_bytes(struct virtio_device* vdev,
 				      unsigned int offset, void* buf,
 				      size_t len)
 {
-	memcpy(buf, (char*)vdev->config->device_config_base + offset, len);
+	void* base = (vdev->au_dev && vdev->au_dev->deviceCfg)
+			     ? vdev->au_dev->deviceCfg
+			     : vdev->config->device_config_base;
+	volatile const uint8_t* src = (volatile const uint8_t*)base + offset;
+	uint8_t* dst = buf;
+
+	for (size_t i = 0; i < len; i++)
+		dst[i] = src[i];
 }
 
 /*

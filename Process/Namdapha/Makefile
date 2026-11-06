@@ -21,7 +21,7 @@ CROSS_COMPILE ?= aarch64-linux-gnu-
 
 INCLUDES = -I../../Libs/XEClib/includes -I../../Libs/XEClib/includes/c++ -I../../BaseHdr -I../../Libs/Chitralekha -I../../Ports/freetype2/include
 
-CPP_SRCS = NamdaphaButton.cpp _gettime.cpp gomenu.cpp namdapha.cpp nmGoButton.cpp section.cpp
+CPP_SRCS = NamdaphaButton.cpp _gettime.cpp gomenu.cpp namdapha.cpp nmGoButton.cpp nmgamusa.cpp section.cpp
 S_SRCS = crt_arm64.s
 
 OBJDIR = obj

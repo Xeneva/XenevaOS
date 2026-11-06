@@ -31,6 +31,8 @@
 
 #include <fixup.h>
 #include <Drivers/uart.h>
+#include <Mm/vmmngr.h>
+#include <bordoisila_ptr.h>
 
 __attribute__((section(".rdata$exA"))) struct _fixup_entry __fixup_start_anchor = {0, 0};
 __attribute__((section(".rdata$exZ"))) struct _fixup_entry __fixup_end_anchor = {0, 0};
@@ -99,7 +101,7 @@ cfu_fail:
 }
 
 long __bordoisila_copy_to_user(void* udst, const void* src, size_t n) {
-	if (!_validate_upointer_range(src, n))
+	if (!_validate_upointer_range(udst, n))
 		return -1;
 
 	uint8_t* d = udst;
@@ -130,4 +132,83 @@ void __bordoisila_fixup_table_check() {
 		UARTDebugOut(
 			"__fixup_entry: pc=%x and fault_alt=%x \r\n", e->instruction, e->fixup_address);
 	}
+}
+
+bool __bordoisila_mm_user_range_mapped(uint64_t addr, size_t len, bool write) {
+	if (len == 0)
+		return true;
+	if (!__BORDOISILA_UBUF_VALIDATE(addr, len))
+		return false;
+
+	uint64_t cur = addr;
+	uint64_t end = addr + len;
+
+	while (cur < end) {
+		uint64_t span = 0;
+
+		if (!AuVmmngrUserWalk(cur, write, &span))
+			return false;
+		cur += span;
+	}
+	return true;
+}
+
+long _bordoisila_strncpy_from_user(char* dst, const char* usrc, size_t max) {
+	if (max == 0 || !__BORDOISILA_KE_PTR_VALIDATE(dst))
+		return -1;
+
+	uint64_t addr = (uint64_t)(uintptr_t)usrc;
+	size_t i = 0;
+
+	while (i < max) {
+		uint64_t cur = addr + i;
+
+		size_t chunk = PAGE_SIZE - (cur & (PAGE_SIZE - 1));
+		if (chunk > max - i)
+			chunk = max - i;
+
+		if (!__BORDOISILA_UBUF_VALIDATE(cur, chunk))
+			goto efault;
+		if (!__bordoisila_mm_user_range_mapped(cur, chunk, false))
+			goto efault;
+
+		const volatile char* s = (const volatile char*)(uintptr_t)cur;
+		for (size_t j = 0; j < chunk; j++) {
+			char c = s[j];
+			dst[i + j] = c;
+			if (c == '\0')
+				return (long)(i + j);
+		}
+		i += chunk;
+	}
+	dst[0] = '\0';
+	return -1;
+efault:
+	dst[0] = '\0';
+	return -1;
+}
+
+long _bordoisila_strncpy_to_user(char* udst, const char* ksrc, size_t max) {
+	if (!__BORDOISILA_KE_PTR_VALIDATE(ksrc))
+		return -1;
+
+	size_t len = 0;
+	while (len < max && ksrc[len])
+		len++;
+	if (len == max)
+		return -2;
+
+	size_t total = len + 1;
+	uint64_t addr = (uint64_t)(uintptr_t)udst;
+
+	if (!__BORDOISILA_UBUF_VALIDATE(addr, total))
+		return -1;
+	if (!__bordoisila_mm_user_range_mapped(addr, total, true))
+		return -1;
+
+	volatile char* d = (volatile char*)(uintptr_t)addr;
+	for (size_t i = 0; i < total; i++)
+		d[i] = ksrc[i];
+
+	return (long)len;
 }

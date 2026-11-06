@@ -119,11 +119,13 @@ static void dcl_input_emit_pointer(struct dcl_input_state* st)
 	AuInputMessage msg;
 	/* The native tablet driver's AuInputMessage button bits. */
 	unsigned char buttons =
-		(st->left ? 0x01 : 0) |
-		(st->right ? 0x02 : 0) |
-		(st->middle ? 0x04 : 0) |
-		(st->scroll_up ? 0x10 : 0) |
-		(st->scroll_down ? 0x20 : 0);
+		(st->left ? LEFT_CLICK : 0) |
+		(st->right ? RIGHT_CLICK : 0) |
+		(st->middle ? MIDDLE_CLICK : 0);
+	if (st->scroll_up)
+		buttons = MOUSE_SCROLL_UP;
+	else if (st->scroll_down)
+		buttons = MOUSE_SCROLL_DOWN;
 
 	memset(&msg, 0, sizeof(msg));
 	msg.type = AU_INPUT_MOUSE;

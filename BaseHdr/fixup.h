@@ -71,4 +71,10 @@ extern long __bordoisila_copy_to_user(void* udst, const void* src, size_t n);
  */
 extern void __bordoisila_fixup_table_check();
 
+extern bool __bordoisila_mm_user_range_mapped(uint64_t addr, size_t len, bool write);
+
+extern long _bordoisila_strncpy_to_user(char* udst, const char* ksrc, size_t max);
+
+extern long _bordoisila_strncpy_from_user(char* dst, const char* usrc, size_t max);
+
 #endif

@@ -113,6 +113,7 @@ int AuDevFSCreateFile(AuVFSNode* fs, char* path, uint8_t mode) {
 			next++;
 	}
 	strcpy(file->filename, pathname);
+	file->mode = 0660;
 	list_add(first_list->childs, file);
 	//aa64_data_cache_clean_range(first_list, sizeof(list_t));
 	return 1;

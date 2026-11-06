@@ -245,6 +245,12 @@ extern void AuUSBSubsystemInit();
  */
 extern void AuXhciInitialize(void);
 
+/*
+ * AuXhciStartPolling -- start the xHCI HID/Bluetooth service threads
+ * Called after the scheduler's thread list is initialized.
+ */
+extern void AuXhciStartPolling(void);
+
 
 /*
  * AuUSBGetDeviceStruc -- returns USB device struc by looking

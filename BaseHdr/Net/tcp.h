@@ -48,11 +48,28 @@
 #define TCP_DATA_OFFSET_5 (0x5 << 12)
 
 #define TCP_DEFAULT_WIN_SZ 65535
-#define TCP_MSS 1460
+#define TCP_MSS_IPV4 1460
+#define TCP_MSS_IPV6 1440       /* 1500-byte MTU - 40-byte IPv6 - 20-byte TCP */
+#define TCP_MSS_LOOPBACK 32768  /* one test chunk; fits the rx buffer */
+#define TCP_MSS_MIN 536         /* RFC 1122 default when no MSS option */
+#define TCP_MSS TCP_MSS_IPV4
 /* One TLS record is at most 16384 bytes plus a 5-byte header (RFC 8446).
  * The buffer has to hold that while the reader is still pulling the
- * previous record. The advertised window itself stays 16 bits (RFC 9293). */
-#define TCP_RX_BUF_SZ 65536
+ * previous record. A 256 KiB window covers the bandwidth-delay product
+ * of the emulated NIC path; the 16-bit window field is extended with the
+ * RFC 7323 shift below. */
+#define TCP_RX_BUF_SZ 262144
+/* 256 KiB >> 3 = 32768, so the scaled 16-bit field can advertise the
+ * whole buffer without truncating to zero. */
+#define TCP_RCV_WSCALE 3
+
+/* TCP option kinds used by the SYN/SYN-ACK path. */
+#define TCP_OPTION_END 0
+#define TCP_OPTION_NOP 1
+#define TCP_OPTION_MSS 2
+#define TCP_OPTION_MSS_LEN 4
+#define TCP_OPTION_WS 3
+#define TCP_OPTION_WS_LEN 3
 
 #define TCP_STATE_CLOSED       0
 #define TCP_STATE_LISTEN       1
@@ -95,12 +112,21 @@ typedef struct _tcp_pcb_ {
 	uint32_t remote_ip;
 	ip6_addr remote_ip6;
 	uint16_t remote_port;
-	uint16_t snd_wnd;
+	uint32_t snd_wnd;  /* peer's window, already shifted by snd_wscale */
 	uint16_t rcv_wnd;
-	uint16_t mss;
+	uint16_t mss;      /* send MSS: peer's advertised value, clamped to path */
+	uint16_t rcv_mss;  /* receive MSS: value advertised in our SYN */
+	uint8_t snd_wscale; /* peer's RFC 7323 window shift */
+	uint8_t rcv_wscale; /* our RFC 7323 window shift */
+	uint8_t ws_offer;   /* this side offered the WS option */
+	uint8_t ws_enabled; /* both sides exchanged the WS option */
+	uint16_t ack_pending; /* full segments received since the last ACK */
+	uint8_t ack_deferred; /* ACK queued until the current RX drain ends */
 	int backlog;
 	AuVFSNode* nic;
 	struct _socket_* parent;
+	struct _socket_* owner;
+	struct _tcp_pcb_* ack_next;
 	void* rxbuf;
 	uint8_t* rxmem;
 	list_t* acceptq;
@@ -134,6 +160,13 @@ extern int AuTCPAcknowledge(AuVFSNode* nic, AuSocket* sock, IPv4Header* ippack, 
  * TCPHandlePacket -- dispatch an incoming TCP segment
  */
 extern void TCPHandlePacket(IPv4Header* pack, AuVFSNode* nic);
+
+/*
+ * AuTCPFlushDeferredAcks -- transmit one ACK per socket that received data
+ * during the RX drain that just finished. Batching ACKs this way mirrors a
+ * NAPI receive batch and avoids one TX frame per two segments.
+ */
+extern void AuTCPFlushDeferredAcks(void);
 
 /*
  * TCPHandlePacket6 -- dispatch an incoming TCP segment over IPv6

@@ -140,6 +140,10 @@ void* memcpy(void* dest, void* src, size_t len) {
 	if (len == 0 || dest == src)
 		return 0;
 
+	/* Keep the defensive backward copy for overlapping ranges, but move
+	 * 32 bytes per iteration in both directions. Clang turns the four
+	 * 64-bit pairs into ldp/stp q pairs, which is what the kernel's copy
+	 * already does; the old 8-byte loop halved the receive throughput. */
 	if ((t > s) && (t < (s + len))) {
 		t += len;
 		s += len;
@@ -149,17 +153,27 @@ void* memcpy(void* dest, void* src, size_t len) {
 			*(--t) = *(--s);
 		}
 
-		if (len >= 8) {
-			uint32_t blocks = len / 8;
-			uint64_t* t64 = (uint64_t*)t;
-			const uint64_t* s64 = (const uint64_t*)s;
+		while (len >= 32) {
+			uint64_t a, b, c, e;
 
-			while (blocks--)
-				*(--t64) = *(--s64);
+			t -= 32;
+			s -= 32;
+			a = ((const uint64_t*)s)[0];
+			b = ((const uint64_t*)s)[1];
+			c = ((const uint64_t*)s)[2];
+			e = ((const uint64_t*)s)[3];
+			((uint64_t*)t)[0] = a;
+			((uint64_t*)t)[1] = b;
+			((uint64_t*)t)[2] = c;
+			((uint64_t*)t)[3] = e;
+			len -= 32;
+		}
 
-			t = (uint8_t*)t64;
-			s = (uint8_t*)s64;
-			len %= 8;
+		while (len >= 8) {
+			t -= 8;
+			s -= 8;
+			*(uint64_t*)t = *(const uint64_t*)s;
+			len -= 8;
 		}
 
 		while (len--)
@@ -172,17 +186,26 @@ void* memcpy(void* dest, void* src, size_t len) {
 			len--;
 		}
 
-		if (len >= 8) {
-			uint32_t blocks = len / 8;
-			uint64_t* t64 = (uint64_t*)t;
-			const uint64_t* s64 = (const uint64_t*)s;
+		while (len >= 32) {
+			uint64_t a = ((const uint64_t*)s)[0];
+			uint64_t b = ((const uint64_t*)s)[1];
+			uint64_t c = ((const uint64_t*)s)[2];
+			uint64_t e = ((const uint64_t*)s)[3];
 
-			while (blocks--)
-				*t64++ = *s64++;
+			((uint64_t*)t)[0] = a;
+			((uint64_t*)t)[1] = b;
+			((uint64_t*)t)[2] = c;
+			((uint64_t*)t)[3] = e;
+			t += 32;
+			s += 32;
+			len -= 32;
+		}
 
-			t = (uint8_t*)t64;
-			s = (uint8_t*)s64;
-			len %= 8;
+		while (len >= 8) {
+			*(uint64_t*)t = *(const uint64_t*)s;
+			t += 8;
+			s += 8;
+			len -= 8;
 		}
 
 		while (len--)

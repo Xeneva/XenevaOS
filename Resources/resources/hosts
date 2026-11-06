@@ -1,0 +1,7 @@
+# XenevaOS /hosts -- static names for the XEClib resolver tests.
+# Format: address canonical-name [aliases...]
+127.0.0.1       localhost
+127.0.0.53      netlib-test.xeneva netlib-alias
+192.0.2.55      docs.xeneva.test
+198.51.100.7    v4only.xeneva.test
+2001:db8::53    netlib6.xeneva.test

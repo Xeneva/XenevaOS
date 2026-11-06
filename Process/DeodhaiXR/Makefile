@@ -29,7 +29,8 @@ CROSS_COMPILE ?= aarch64-linux-gnu-
 INCLUDES = -I../../Libs/XEClib/includes -I../../Libs/XEClib/includes/c++ -I../../BaseHdr -I../../Libs/Chitralekha -I../../Ports/freetype2/include -I../../Libs/OpenXR
 
 CPP_SRCS = alpha.cpp animation.cpp backdirty.cpp clip.cpp compose.cpp cursor.cpp \
-           dirty.cpp main.cpp rect.cpp resize.cpp surface.cpp window.cpp keybind.cpp compose3d.cpp
+           dirty.cpp main.cpp rect.cpp resize.cpp surface.cpp window.cpp keybind.cpp compose3d.cpp paperfly.cpp \
+           paperash.cpp
 ifeq ($(OPENXR),1)
 CPP_SRCS += xr_qemu.cpp xr_present.cpp
 endif
@@ -41,8 +42,8 @@ S_OBJS = $(patsubst %.s,$(OBJDIR)/%.o,$(S_SRCS))
 OBJS = $(CPP_OBJS) $(S_OBJS)
 
 ifeq ($(UNIKERNEL),1)
-UK_XE_SRCS = AppGrid.cpp button.cpp lconfig.cpp main.cpp pagebutton.cpp pwbutton.cpp \
-             rrect.cpp search.cpp searchbar.cpp
+UK_XE_SRCS = anim.cpp applist.cpp bento.cpp cards.cpp gamusa.cpp lconfig.cpp livetile.cpp \
+             luitflow.cpp main.cpp text.cpp xlicon.cpp xlui.cpp
 UK_NM_SRCS = NamdaphaButton.cpp _gettime.cpp gomenu.cpp namdapha.cpp nmGoButton.cpp section.cpp
 UK_XE_OBJS = $(patsubst %.cpp,$(OBJDIR)/uk_xe_%.o,$(UK_XE_SRCS))
 UK_NM_OBJS = $(patsubst %.cpp,$(OBJDIR)/uk_nm_%.o,$(UK_NM_SRCS))

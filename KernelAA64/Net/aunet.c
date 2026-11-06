@@ -49,14 +49,22 @@
 
 static hashmap_t* netadapters;
 static void (*_net_rx_poll)(void);
+static int _net_rx_depth;
 
 void AuNetRegisterRxPoll(void (*fn)(void)) {
 	_net_rx_poll = fn;
 }
 
 void AuNetRxPoll(void) {
-	if (_net_rx_poll)
+	if (_net_rx_poll) {
+		_net_rx_depth++;
 		_net_rx_poll();
+		/* Only the outermost drain flushes: nested calls would send the
+		 * ACK before the ring has been emptied. */
+		_net_rx_depth--;
+	}
+	if (_net_rx_depth == 0)
+		AuTCPFlushDeferredAcks();
 }
 
 /* Global DNS nameserver table (independent of SO_BINDTODEVICE). */
@@ -129,7 +137,7 @@ static size_t AuLoopbackWrite(AuVFSNode* node, AuVFSNode* file, uint64_t* buffer
 	(void)buffer;
 	(void)length;
 	/* IP local delivery must never reach L2 write on lo. */
-	UARTDebugOut("[aurora]: lo write ignored (local path should skip L2)\r\n");
+	AU_NET_LOG("[aurora]: lo write ignored (local path should skip L2)\r\n");
 	return 0;
 }
 
@@ -259,7 +267,7 @@ static void AuNetCreateLoopback(void) {
 	lo->iocontrol = AuLoopbackIOCtl;
 	lo->device = ndev;
 	AuAddNetAdapter(lo, "lo");
-	AuTextOut("[aurora]: loopback lo 127.0.0.1/8 ::1/128\r\n");
+	AU_NET_LOG("[aurora]: loopback lo 127.0.0.1/8 ::1/128\r\n");
 }
 
 /**
@@ -283,7 +291,7 @@ void AuInitialiseNet() {
 	TCPProtocolInstall();
 	AuNetCreateLoopback();
 	AuNetSeedLoopbackRoutes();
-	AuTextOut("[aurora]: net system initialised \r\n");
+	AU_NET_LOG("[aurora]: net system initialised \r\n");
 }
 
 /**
@@ -302,11 +310,11 @@ AuVFSNode* AuAddNetAdapter(AuVFSNode* netfs, char* name) {
 		old->write = netfs->write;
 		old->iocontrol = netfs->iocontrol;
 		old->device = netfs->device;
-		UARTDebugOut("NetAdapter taking over : %x \r\n", name);
+		AU_NET_LOG("NetAdapter taking over : %x \r\n", name);
 		return old;
 	}
 	AuHashmapSet(netadapters, name, netfs);
-	UARTDebugOut("NetAdapter adding : %x \r\n", name);
+	AU_NET_LOG("NetAdapter adding : %x \r\n", name);
 	AuVFSNode* fs = AuVFSFind("/dev");
 	AuDevFSAddFile(fs, "/dev/net", netfs);
 	return netfs;
@@ -347,6 +355,94 @@ int AuRemoveNetAdapter(char* name) {
 AuVFSNode* AuGetNetworkAdapter(char* name) {
 	AuVFSNode* node = (AuVFSNode*)AuHashmapGet(netadapters, name);
 	return node;
+}
+
+static uint16_t AuNetAdapterFlags(AuNetworkDevice* ndev) {
+	uint16_t flags = 0;
+
+	if (!ndev)
+		return 0;
+	if (ndev->linkStatus)
+		flags |= AU_IFF_UP | AU_IFF_RUNNING;
+	if (ndev->type == NETDEV_TYPE_LOOPBACK)
+		flags |= AU_IFF_LOOPBACK;
+	if (ndev->type == NETDEV_TYPE_ETHERNET ||
+		ndev->type == NETDEV_TYPE_802_11)
+		flags |= AU_IFF_BROADCAST | AU_IFF_MULTICAST;
+	return flags;
+}
+
+/**
+ * @brief AuNetSnapshotIfAddrs -- copy the adapter table into fixed records
+ * @param out -- destination array, may be NULL when only the count is needed
+ * @param max -- number of records the caller can hold
+ * @return number of records written, or a negative AU_ERR_* value
+ */
+int AuNetSnapshotIfAddrs(AuIfAddrInfo* out, int max) {
+	unsigned int bucket;
+	int index = 0;
+	int written = 0;
+
+	if (max < 0)
+		return -AU_ERR_EINVAL;
+	if (!netadapters)
+		return 0;
+	for (bucket = 0; bucket < netadapters->size; bucket++) {
+		hashmap_entry_t* entry;
+		for (entry = netadapters->entries[bucket]; entry; entry = entry->next) {
+			AuVFSNode* node = (AuVFSNode*)entry->value;
+			AuNetworkDevice* ndev;
+			AuIfAddrInfo info;
+
+			index++;
+			if (written >= max)
+				continue;
+			ndev = node ? (AuNetworkDevice*)node->device : NULL;
+			memset(&info, 0, sizeof(info));
+			strncpy(info.ifa_name, entry->key, sizeof(info.ifa_name) - 1);
+			info.ifa_index = (uint32_t)index;
+			info.ifa_flags = AuNetAdapterFlags(ndev);
+			if (ndev) {
+				info.ifa_addr4 = ndev->ipv4addr;
+				info.ifa_netmask4 = ndev->ipv4subnet;
+				info.ifa_broadcast4 = ndev->ipv4subnet ?
+					(ndev->ipv4addr | ~ndev->ipv4subnet) : 0;
+				memcpy(info.ifa_mac, ndev->mac, sizeof(info.ifa_mac));
+				info.ifa_link = ndev->linkStatus ? 1 : 0;
+				info.ifa_prefix6 = ndev->ipv6prefixLen;
+				memcpy(info.ifa_ipv6, ndev->ipv6addr.s6_addr,
+					sizeof(info.ifa_ipv6));
+				if (ndev->ipv4addr)
+					info.ifa_family = AF_INET;
+				else if (ndev->ipv6prefixLen)
+					info.ifa_family = AF_INET6;
+			}
+			if (out)
+				out[written] = info;
+			written++;
+		}
+	}
+	return written;
+}
+
+/**
+ * @brief AuNetIfNameToIndex -- map an interface name to its 1-based index
+ */
+int AuNetIfNameToIndex(const char* name) {
+	unsigned int bucket;
+	int index = 0;
+
+	if (!netadapters || !name || !name[0])
+		return 0;
+	for (bucket = 0; bucket < netadapters->size; bucket++) {
+		hashmap_entry_t* entry;
+		for (entry = netadapters->entries[bucket]; entry; entry = entry->next) {
+			index++;
+			if (!strcmp(entry->key, name))
+				return index;
+		}
+	}
+	return 0;
 }
 
 static int AuNicAddrEquals4(uint32_t address, uint32_t nicaddr) {
@@ -593,7 +689,7 @@ AuVFSNode* AuNetworkRoute(uint32_t address) {
 	AuNetAddDefaultRoute4(nic, nic->filename);
 	if (AuRouteLookup4(address, &rr) == 0 && rr.nic)
 		return rr.nic;
-	UARTDebugOut("[aurora]: IPv4 FIB miss, using radio %s\r\n", nic->filename);
+	AU_NET_LOG("[aurora]: IPv4 FIB miss, using radio %s\r\n", nic->filename);
 	return nic;
 }
 
@@ -617,6 +713,6 @@ AuVFSNode* AuNetworkRoute6(const ip6_addr* address) {
 	AuNetAddDefaultRoute6(nic, nic->filename);
 	if (AuRouteLookup6(address, &rr) == 0 && rr.nic)
 		return rr.nic;
-	UARTDebugOut("[aurora]: IPv6 FIB miss, using radio %s\r\n", nic->filename);
+	AU_NET_LOG("[aurora]: IPv6 FIB miss, using radio %s\r\n", nic->filename);
 	return nic;
 }

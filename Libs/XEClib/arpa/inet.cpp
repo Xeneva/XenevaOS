@@ -32,6 +32,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <errno.h>
+
+static int inet_pton4(const char* src, void* dst);
 
 uint32_t htonl(uint32_t hostlong) {
 	return ((((hostlong) & 0xFF) << 24) | (((hostlong) & 0xFF00) << 8) |
@@ -51,31 +54,14 @@ uint16_t ntohs(uint16_t netshort) {
 }
 
 in_addr_t inet_addr(const char* in) {
-	char ip[16];
-	char* c = ip;
-	uint32_t out[4];
-	char* i;
-	memcpy(ip, (void*)in, strlen(in) < 15 ? strlen(in) + 1 : 15);
-	ip[15] = '\0';
+	struct in_addr a;
 
-	i = (char*)strchr(c, '.');
-	*i = '\0';
-	out[0] = atoi(c);
-	c += strlen(c) + 1;
-
-	i = (char*)strchr(c, '.');
-	*i = '\0';
-	out[1] = atoi(c);
-	c += strlen(c) + 1;
-
-	i = (char*)strchr(c, '.');
-	*i = '\0';
-	out[2] = atoi(c);
-	c += strlen(c) + 1;
-
-	out[3] = atoi(c);
-
-	return htonl((out[0] << 24) | (out[1] << 16) | (out[2] << 8) | (out[3]));
+	/* inet_addr(3) returns INADDR_NONE for every malformed form.  The
+	 * old parser called strchr() on each dot and dereferenced NULL for
+	 * "1.2.3" and similar input, taking the whole process down. */
+	if (!in || inet_pton4(in, &a) != 1)
+		return INADDR_NONE;
+	return a.s_addr;
 }
 extern char* inet_ntoa(struct in_addr in) {
 	static char buf[17];
@@ -135,104 +121,144 @@ static int inet_pton4(const char* src, void* dst) {
 
 /*
  * Parse IPv6 text form into 16 network-order bytes.
- * Supports :: compression. Does not support IPv4-mapped dotted suffix.
+ * Supports :: compression and RFC 4291 dotted-quad suffixes
+ * (::ffff:192.0.2.1 and 1:2:3:4:5:6:192.0.2.1).
  */
 static int inet_pton6(const char* src, void* dst) {
 	uint8_t tmp[16];
-	uint16_t hextets[8];
-	int hi = 0;
+	uint8_t* out = tmp;
+	uint8_t* end = tmp + sizeof(tmp);
 	int compress = -1;
-	const char* p = src;
-	int saw_digit = 0;
-	unsigned int cur = 0;
+	const char* p;
+	char mapped[128];
 
-	memset(tmp, 0, 16);
-	memset(hextets, 0, sizeof(hextets));
+	memset(tmp, 0, sizeof(tmp));
+	if (!src || !dst)
+		return 0;
 
-	if (*p == ':') {
-		if (*(p + 1) != ':')
+	/*
+	 * Convert a dotted-quad suffix into two hexadecimal groups so the
+	 * normal parser below only ever sees hex groups.  Keep the second
+	 * colon of a "::" run when it is the separator (::1.2.3.4).
+	 */
+	if (strchr(src, '.')) {
+		const char* last = strrchr(src, ':');
+		char prefix[96];
+		size_t plen;
+		uint8_t a4[4];
+
+		if (!last)
 			return 0;
+		plen = (size_t)(last - src);
+		if (plen > 0 && src[plen - 1] == ':')
+			plen++;
+		if (plen == 0 || plen >= sizeof(prefix))
+			return 0;
+		memcpy(prefix, (void*)src, plen);
+		prefix[plen] = '\0';
+		if (inet_pton4(last + 1, a4) != 1)
+			return 0;
+		if (plen + 12 > sizeof(mapped))
+			return 0;
+		memcpy(mapped, prefix, plen);
+		if (mapped[plen - 1] != ':')
+			mapped[plen++] = ':';
+		sprintf(mapped + plen, "%x:%x",
+				(unsigned)((a4[0] << 8) | a4[1]),
+				(unsigned)((a4[2] << 8) | a4[3]));
+		src = mapped;
+	}
+
+	p = src;
+	if (*p == ':') {
+		if (p[1] != ':')
+			return 0;
+		p += 2;
+		compress = 0;
 	}
 
 	while (*p) {
-		if (*p == ':') {
-			if (!saw_digit) {
-				if (compress >= 0)
-					return 0;
-				compress = hi;
-				p++;
-				if (*p == '\0')
-					break;
-				continue;
-			}
-			if (hi >= 8)
+		unsigned int cur = 0;
+		int digits = 0;
+
+		while (hexval(*p) >= 0) {
+			cur = (cur << 4) | (unsigned)hexval(*p);
+			if (cur > 0xFFFF)
 				return 0;
-			hextets[hi++] = (uint16_t)cur;
-			cur = 0;
-			saw_digit = 0;
+			p++;
+			digits++;
+		}
+		if (!digits)
+			return 0;
+		if (out + 2 > end)
+			return 0;
+		*out++ = (uint8_t)((cur >> 8) & 0xFF);
+		*out++ = (uint8_t)(cur & 0xFF);
+
+		if (*p == ':') {
 			p++;
 			if (*p == '\0')
 				return 0;
-			continue;
-		}
-		{
-			int hv = hexval(*p);
-			if (hv < 0)
-				return 0;
-			cur = (cur << 4) | (unsigned)hv;
-			if (cur > 0xFFFF)
-				return 0;
-			saw_digit = 1;
-			p++;
-		}
-	}
-	if (saw_digit) {
-		if (hi >= 8)
+			if (*p == ':') {
+				if (compress >= 0)
+					return 0;
+				compress = (int)(out - tmp);
+				p++;
+				if (*p == '\0')
+					break;
+			}
+		} else if (*p != '\0') {
 			return 0;
-		hextets[hi++] = (uint16_t)cur;
+		}
 	}
 
 	if (compress >= 0) {
-		int zeros = 8 - hi;
-		int i;
-		uint16_t out[8];
+		int used = (int)(out - tmp);
+		int zeros = (int)sizeof(tmp) - used;
+
 		if (zeros <= 0)
 			return 0;
-		memset(out, 0, sizeof(out));
-		for (i = 0; i < compress; i++)
-			out[i] = hextets[i];
-		for (i = compress; i < hi; i++)
-			out[i + zeros] = hextets[i];
-		memcpy(hextets, out, sizeof(hextets));
-		hi = 8;
+		memmove(tmp + compress + zeros, tmp + compress,
+			(size_t)used - (size_t)compress);
+		memset(tmp + compress, 0, (size_t)zeros);
+		out = end;
 	}
-
-	if (hi != 8)
+	if (out != end)
 		return 0;
 
-	for (int i = 0; i < 8; i++) {
-		tmp[i * 2] = (uint8_t)((hextets[i] >> 8) & 0xFF);
-		tmp[i * 2 + 1] = (uint8_t)(hextets[i] & 0xFF);
-	}
-	memcpy(dst, tmp, 16);
+	memcpy(dst, tmp, sizeof(tmp));
 	return 1;
 }
 
 int inet_pton(int af, const char* src, void* dst) {
-	if (!src || !dst)
+	if (af != AF_INET && af != AF_INET6) {
+		errno = EAFNOSUPPORT;
 		return -1;
+	}
+	if (!src || !dst) {
+		errno = EINVAL;
+		return -1;
+	}
 	if (af == AF_INET)
 		return inet_pton4(src, dst);
-	if (af == AF_INET6)
-		return inet_pton6(src, dst);
-	return -1;
+	return inet_pton6(src, dst);
 }
 
 static const char* inet_ntop4(const void* src, char* dst, size_t size) {
 	const uint8_t* a = (const uint8_t*)src;
-	int n = snprintf(dst, size, "%u.%u.%u.%u", a[0], a[1], a[2], a[3]);
-	if (n < 0 || (size_t)n >= size)
+	char buf[16];
+	int n = snprintf(buf, sizeof(buf), "%u.%u.%u.%u", a[0], a[1], a[2], a[3]);
+
+	/*
+	 * XEClib snprintf() returns the number of bytes actually stored, not
+	 * the length the full conversion needs, so size the result with
+	 * strlen() instead of trusting n.
+	 */
+	if (n < 0 || strlen(buf) >= size) {
+		errno = ENOSPC;
 		return NULL;
+	}
+	strcpy(dst, buf);
 	return dst;
 }
 
@@ -249,6 +275,19 @@ static const char* inet_ntop6(const void* src, char* dst, size_t size) {
 
 	for (i = 0; i < 8; i++)
 		words[i] = (uint16_t)((a[i * 2] << 8) | a[i * 2 + 1]);
+
+	/* RFC 5952 §5: IPv4-mapped addresses keep the dotted-quad suffix. */
+	if (words[0] == 0 && words[1] == 0 && words[2] == 0 && words[3] == 0 &&
+		words[4] == 0 && words[5] == 0xFFFF) {
+		int n = snprintf(buf, sizeof(buf), "::ffff:%u.%u.%u.%u",
+						 a[12], a[13], a[14], a[15]);
+		if (n < 0 || strlen(buf) >= size) {
+			errno = ENOSPC;
+			return NULL;
+		}
+		strcpy(dst, buf);
+		return dst;
+	}
 
 	for (i = 0; i < 8; i++) {
 		if (words[i] == 0) {
@@ -292,18 +331,24 @@ static const char* inet_ntop6(const void* src, char* dst, size_t size) {
 	}
 	*out = '\0';
 
-	if (strlen(buf) >= size)
+	if (strlen(buf) >= size) {
+		errno = ENOSPC;
 		return NULL;
+	}
 	strcpy(dst, buf);
 	return dst;
 }
 
 const char* inet_ntop(int af, const void* src, char* dst, size_t size) {
-	if (!src || !dst || size == 0)
+	if (af != AF_INET && af != AF_INET6) {
+		errno = EAFNOSUPPORT;
 		return NULL;
+	}
+	if (!src || !dst || size == 0) {
+		errno = EINVAL;
+		return NULL;
+	}
 	if (af == AF_INET)
 		return inet_ntop4(src, dst, size);
-	if (af == AF_INET6)
-		return inet_ntop6(src, dst, size);
-	return NULL;
+	return inet_ntop6(src, dst, size);
 }

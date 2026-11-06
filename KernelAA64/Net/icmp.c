@@ -39,6 +39,7 @@
 #include <_null.h>
 #include <Drivers/uart.h>
 #include <Net/icmp.h>
+#include <Sync/poll.h>
 
 AuSocket* current_icmp_sock;
 
@@ -62,7 +63,7 @@ void AuICMPHandle(IPv4Header* ipv4, AuVFSNode* nic) {
 
 	AuNetworkDevice* netdev = (AuNetworkDevice*)nic->device;
 	if (!netdev) {
-		UARTDebugOut("[AuNet]: ICMP Handle no network device found \r\n");
+		AU_NET_LOG("[AuNet]: ICMP Handle no network device found \r\n");
 		return;
 	}
 
@@ -95,8 +96,10 @@ void AuICMPHandle(IPv4Header* ipv4, AuVFSNode* nic) {
 		IPV4SendPacket(resp, nic);
 		kfree(resp);
 	} else if (header->type == 0 && header->code == 0) {
-		if (current_icmp_sock)
+		if (current_icmp_sock) {
 			AuSocketAdd(current_icmp_sock, ipv4, ntohs(ipv4->totalLength));
+			AuSocketWakeRx(current_icmp_sock);
+		}
 	}
 }
 
@@ -156,35 +159,85 @@ void AuICMPSendDestUnreachable(IPv4Header* orig, AuVFSNode* nic, uint8_t code) {
 * @param msghdr -- Message header containing every information
 * @param flags -- extra flags
 */
-int AuICMPReceive(AuSocket* sock, msghdr* msg, int flags) {
-	(void)flags;
-	if (msg->msg_iovlen > 1)
-		return -1;
+static size_t ICMPIovCopyIn(const msghdr* msg, uint8_t* dst, size_t max) {
+	size_t done = 0;
+	size_t i;
 
-	if (msg->msg_iovlen == 0)
-		return 0;
-	AuNetRxPoll();
-	char* packet = (char*)AuSocketGet(sock);
-	if (!packet)
-		return 0;
-	size_t packet_sz = *(size_t*)packet - sizeof(IPv4Header);
-	IPv4Header* src = (IPv4Header*)(packet + sizeof(size_t));
-	if (packet_sz > msg->msg_iov[0].iov_len)
-		packet_sz = msg->msg_iov[0].iov_len;
-
-	if (msg->msg_namelen == sizeof(sockaddr_in)) {
-		if (msg->msg_name) {
-			((sockaddr_in*)msg->msg_name)->sin_family = AF_INET;
-			((sockaddr_in*)msg->msg_name)->sin_port = 0;
-			/* Network/wire form — inet_ntoa expects this (not host-order). */
-			((sockaddr_in*)msg->msg_name)->sin_addr.s_addr = src->srcAddress;
-			((sockaddr_in*)msg->msg_name)->sin_zero[0] = src->timeToLive;
+	for (i = 0; i < msg->msg_iovlen && done < max; i++) {
+		size_t chunk = msg->msg_iov[i].iov_len;
+		if (chunk > max - done)
+			chunk = max - done;
+		if (chunk && msg->msg_iov[i].iov_base) {
+			memcpy(dst + done, msg->msg_iov[i].iov_base, chunk);
+			done += chunk;
 		}
 	}
+	return done;
+}
 
-	memcpy(msg->msg_iov[0].iov_base, src->payload, packet_sz);
-	kfree(packet);
-	return (int)packet_sz;
+static size_t ICMPIovCopyOut(const msghdr* msg, const uint8_t* src, size_t len) {
+	size_t done = 0;
+	size_t i;
+
+	for (i = 0; i < msg->msg_iovlen && done < len; i++) {
+		size_t chunk = msg->msg_iov[i].iov_len;
+		if (chunk > len - done)
+			chunk = len - done;
+		if (chunk && msg->msg_iov[i].iov_base) {
+			memcpy(msg->msg_iov[i].iov_base, src + done, chunk);
+			done += chunk;
+		}
+	}
+	return done;
+}
+
+int AuICMPReceive(AuSocket* sock, msghdr* msg, int flags) {
+	uint64_t deadline;
+
+	if (!sock)
+		return -AU_ERR_ENOTSOCK;
+	if (!msg || msg->msg_iovlen == 0)
+		return 0;
+
+	deadline = AuGetCurrentUS() + (uint64_t)30000 * 1000ULL;
+	for (;;) {
+		char* packet;
+
+		AuNetRxPoll();
+		packet = (char*)AuSocketGet(sock);
+		if (packet) {
+			size_t stored = *(size_t*)packet;
+			IPv4Header* src = (IPv4Header*)(packet + sizeof(size_t));
+			size_t hdr = (size_t)(src->versionHeaderLen & 0x0F) * 4;
+			size_t plen = 0;
+			size_t copied;
+
+			if (stored > hdr && hdr >= sizeof(IPv4Header))
+				plen = stored - hdr;
+			copied = ICMPIovCopyOut(msg, src->payload, plen);
+			if (copied < plen)
+				msg->msg_flags |= MSG_TRUNC;
+
+			if (msg->msg_name && msg->msg_namelen >= sizeof(sockaddr_in)) {
+				sockaddr_in* name = (sockaddr_in*)msg->msg_name;
+				name->sin_family = AF_INET;
+				name->sin_port = 0;
+				/* Network/wire form -- inet_ntoa expects this. */
+				name->sin_addr.s_addr = src->srcAddress;
+				memset(name->sin_zero, 0, sizeof(name->sin_zero));
+				name->sin_zero[0] = src->timeToLive;
+				msg->msg_namelen = sizeof(sockaddr_in);
+			}
+			kfree(packet);
+			return (int)copied;
+		}
+
+		if (sock->nonblock || (flags & MSG_DONTWAIT))
+			return -AU_ERR_EAGAIN;
+		if (AuGetCurrentUS() >= deadline)
+			return -AU_ERR_ETIMEDOUT;
+		AuSocketWaitSlice(&sock->rx_wait, AU_SOCKET_WAIT_SLICE_MS);
+	}
 }
 
 /*
@@ -194,27 +247,44 @@ int AuICMPReceive(AuSocket* sock, msghdr* msg, int flags) {
 * @param flags -- extra flags
 */
 int AuICMPSend(AuSocket* sock, msghdr* msg, int flags) {
-	if (msg->msg_iovlen > 1)
-		return -1;
-	if (msg->msg_iovlen == 0)
+	sockaddr_in* name;
+	AuVFSNode* nic;
+	AuNetworkDevice* netdev;
+	size_t payload;
+	size_t totalLen;
+	IPv4Header* resp;
+
+	(void)sock;
+	(void)flags;
+	if (!msg || msg->msg_iovlen == 0)
 		return 0;
-	if (msg->msg_namelen != sizeof(sockaddr_in))
-		return -1;
+	if (!msg->msg_name || msg->msg_namelen < sizeof(sockaddr_in))
+		return -AU_ERR_EDESTADDRREQ;
 
-	sockaddr_in* name = (sockaddr_in*)msg->msg_name;
-	AuVFSNode* nic = AuNetworkRoute(name->sin_addr.s_addr);
+	name = (sockaddr_in*)msg->msg_name;
+	if (name->sin_family != AF_INET)
+		return -AU_ERR_EAFNOSUPPORT;
+
+	payload = 0;
+	for (size_t i = 0; i < msg->msg_iovlen; i++)
+		payload += msg->msg_iov[i].iov_len;
+	if (payload > 65507)
+		return -AU_ERR_EMSGSIZE;
+
+	nic = AuNetworkRoute(name->sin_addr.s_addr);
 	if (!nic)
-		return -114; /* ENETUNREACH */
-	AuNetworkDevice* netdev = (AuNetworkDevice*)nic->device;
+		return -AU_ERR_ENETUNREACH;
+	netdev = (AuNetworkDevice*)nic->device;
 	if (!netdev)
-		return -1;
+		return -AU_ERR_ENETUNREACH;
 
-	size_t totalLen = sizeof(IPv4Header) + msg->msg_iov[0].iov_len;
-
-	IPv4Header* resp = (IPv4Header*)kmalloc(totalLen);
+	totalLen = sizeof(IPv4Header) + payload;
+	resp = (IPv4Header*)kmalloc(totalLen);
+	if (!resp)
+		return -AU_ERR_EMFILE;
 	memset(resp, 0, totalLen);
-	resp->totalLength = htons(totalLen);
-	/* sockaddr_in holds network/wire order already — do not htonl again. */
+	resp->totalLength = htons((uint16_t)totalLen);
+	/* sockaddr_in holds network/wire order already -- do not htonl again. */
 	resp->destAddress = name->sin_addr.s_addr;
 	resp->srcAddress = netdev->ipv4addr;
 	resp->timeToLive = 64;
@@ -226,10 +296,23 @@ int AuICMPSend(AuSocket* sock, msghdr* msg, int flags) {
 	resp->headerChecksum = 0;
 	resp->headerChecksum = htons(IPv4CalculateChecksum(resp));
 
-	memcpy(resp->payload, msg->msg_iov[0].iov_base, msg->msg_iov[0].iov_len);
+	ICMPIovCopyIn(msg, resp->payload, payload);
 	IPV4SendPacket(resp, nic);
 	kfree(resp);
-	return 0;
+	return (int)payload;
+}
+
+static int AuICMPPoll(AuSocket* sock, int events) {
+	int mask = POLLOUT;
+
+	(void)events;
+	if (!sock)
+		return POLLNVAL;
+	if (sock->rxstack && sock->rxstack->itemCount)
+		mask |= POLLIN;
+	if (sock->so_error)
+		mask |= POLLERR;
+	return mask;
 }
 
 /*
@@ -271,7 +354,7 @@ int AuICMPFileClose(AuVFSNode* fsys, AuVFSNode* file) {
 
 	kfree(file);
 	current_icmp_sock = NULL;
-	UARTDebugOut("ICMP: Socket Closed \r\n");
+	AU_NET_LOG("ICMP: Socket Closed \r\n");
 	return 0;
 }
 
@@ -287,35 +370,33 @@ void ICMPInitialise() {
  * Control Message Protocol (ICMP) protocol
  */
 int CreateICMPSocket() {
+	AuSocket* sock;
+	int fd;
+
 	if (current_icmp_sock) {
-		UARTDebugOut("ICMP: Already there is a socket listening to ICMP, close that \r\n");
-		return -1;
+		AU_NET_LOG("ICMP: Already there is a socket listening to ICMP, close that \r\n");
+		return -AU_ERR_EADDRINUSE;
 	}
-	int fd = -1;
-	AA64Thread* thread = AuGetCurrentThread();
-	if (!thread)
-		return -1;
-	AuProcess* proc = AuProcessFindThread(thread);
-	if (!proc)
-		proc = AuProcessFindSubThread(thread);
-	if (!proc)
-		return -1;
-	fd = AuProcessGetFileDesc(proc);
-	AuSocket* sock = AuNetCreateSocket();
+	sock = AuNetCreateSocket();
+	if (!sock)
+		return -AU_ERR_EMFILE;
 	sock->bind = AuICMPBind;
 	sock->close = AuICMPClose;
 	sock->connect = 0;
 	sock->receive = AuICMPReceive;
 	sock->send = AuICMPSend;
-	AuVFSNode* node = (AuVFSNode*)kmalloc(sizeof(AuVFSNode));
-	memset(node, 0, sizeof(AuVFSNode));
-	strcpy(node->filename, "icmp");
-	node->flags |= FS_FLAG_SOCKET;
-	node->device = sock;
-	node->close = AuICMPFileClose;
-	node->iocontrol = SocketIOControl;
-	proc->fds[fd] = node;
+	sock->poll = AuICMPPoll;
+	sock->so_type = SOCK_DGRAM;
+	sock->family = AF_INET;
+
+	fd = AuSocketInstallFd(sock, "icmp", AuICMPFileClose);
+	if (fd < 0) {
+		if (sock->rxstack)
+			kfree(sock->rxstack);
+		kfree(sock);
+		return fd;
+	}
 	current_icmp_sock = sock;
-	UARTDebugOut("ICMP Socket created \r\n");
+	AU_NET_LOG("ICMP Socket created \r\n");
 	return fd;
 }

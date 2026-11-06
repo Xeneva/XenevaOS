@@ -1353,35 +1353,33 @@ static void TerminalClipboardCopy(Terminal* t) {
  * several shell commands at once would run all of them, which is a surprise
  * rather than a convenience. */
 static void TerminalClipboardPaste(Terminal* t) {
-    int fd = _KeOpenFile((char*)"/dev/clipboard", FILE_OPEN_READ_ONLY | FILE_OPEN_WRITE);
-    if (fd < 0) {
-        _KePrint("[term]: /dev/clipboard unavailable\r\n");
-        return;
-    }
-    char buf[256];
-    int got = _KeReadFile(fd, buf, sizeof(buf) - 1);
-    if (got <= 0) {
-        _KePrint("[term]: clipboard empty\r\n");
-        _KeCloseFile(fd);
-        return;
-    }
-    _KeWriteFile(fd, (void*)"\0", 1);
-    _KeCloseFile(fd);
-    int pasted = 0;
-    for (int i = 0; i < got; i++) {
-        char ch = buf[i];
-        if (ch == '\n' || ch == '\r')
-            break;
-        if (ch < 32 || ch > 126)
-            continue;
-        if (t->intputLen >= 255)
-            break;
-        t->inputBuffer[t->intputLen++] = ch;
-        t->inputBuffer[t->intputLen] = '\0';
-        _KeWriteFile(master_fd, &ch, 1);
-        pasted++;
-    }
-    _KePrint("[term]: pasted %d bytes\r\n", pasted);
+	int fd = _KeOpenFile((char*)"/dev/clipboard", FILE_OPEN_READ_ONLY);
+	if (fd < 0) {
+		_KePrint("[term]: /dev/clipboard unavailable\r\n");
+		return;
+	}
+	char buf[256];
+	int got = _KeReadFile(fd, buf, sizeof(buf) - 1);
+	_KeCloseFile(fd);
+	if (got <= 0) {
+		_KePrint("[term]: clipboard empty\r\n");
+		return;
+	}
+	int pasted = 0;
+	for (int i = 0; i < got; i++) {
+		char ch = buf[i];
+		if (ch == '\n' || ch == '\r')
+			break;
+		if (ch < 32 || ch > 126)
+			continue;
+		if (t->intputLen >= 255)
+			break;
+		t->inputBuffer[t->intputLen++] = ch;
+		t->inputBuffer[t->intputLen] = '\0';
+		_KeWriteFile(master_fd, &ch, 1);
+		pasted++;
+	}
+	_KePrint("[term]: pasted %d bytes\r\n", pasted);
 }
 
 /* Special keys must match on scancode: ChitralekhaGetKeyPress returns ASCII
@@ -1645,7 +1643,8 @@ int main(int argc, char* arv[]) {
 	app = ChitralekhaStartApp(argc, arv);
 	/* The fixed cell grid and reader thread do not handle buffer replacement. */
 	win = ChCreateWindow(app,
-						 WINDOW_FLAG_MOVABLE | WINDOW_FLAG_GLASS | WINDOW_FLAG_NON_RESIZABLE,
+						 WINDOW_FLAG_MOVABLE | WINDOW_FLAG_GLASS | WINDOW_FLAG_STYLE_KNOT |
+							 WINDOW_FLAG_NON_RESIZABLE,
 						 "Xeneva Terminal",
 						 300,
 						 100,

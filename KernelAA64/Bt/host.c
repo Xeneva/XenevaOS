@@ -312,6 +312,29 @@ static int l2cap_send(uint16_t cid, const uint8_t* data, uint16_t len);
 static void poll_usb(void);
 static int perform(int code, BtInfo* info);
 
+/* Pure kernel threads have no exception frame to resume from: their live
+ * ELR_EL1/SPSR_EL1 still hold whichever user thread the CPU last left.
+ * AuScheduleNext() snapshots those stale registers, and the first eret
+ * after the next resume lands at that old user PC (EC 22, ELR=0x60000345
+ * for a bttest-era user address). Waiting for the timer tick instead
+ * makes the tick handler capture a real frame. User threads entered
+ * through a syscall do have a valid frame, so they keep the ordinary
+ * cooperative yield. */
+static void bt_sleep(uint32_t ms) {
+	AA64Thread* thr = AuGetCurrentThread();
+	if (!_scheduler_initialized || !thr || thr == AuGetIdleThread())
+		return;
+	if (ms == 0)
+		ms = 1;
+	AuSleepThread(thr, ms);
+	if (!(thr->threadType & THREAD_LEVEL_USER)) {
+		while (thr->state == THREAD_STATE_SLEEP)
+			__asm__ volatile("wfi");
+		return;
+	}
+	AuScheduleNext();
+}
+
 /* The scheduler is cooperative. A busy wait on bthost freezes the
  * compositor for the whole scan, page, or A2DP handshake. After
  * AuSchedulerStart, sleep and yield; the caller polls on either side.
@@ -333,8 +356,7 @@ static void spin_ms(uint32_t ms) {
 			;
 		return;
 	}
-	AuSleepThread(AuGetCurrentThread(), ms);
-	AuScheduleNext();
+	bt_sleep(ms);
 }
 
 static void put16(uint8_t* p, uint16_t v) {
@@ -625,8 +647,7 @@ static void bt_uart_tx_bytes(const uint8_t* d, uint16_t n) {
 				bt_uart_hold_rx();
 				if (_scheduler_initialized && ++spins >= 256) {
 					spins = 0;
-					AuSleepThread(AuGetCurrentThread(), 1);
-					AuScheduleNext();
+					bt_sleep(1);
 				}
 			}
 			bt_uart[UART_DR / 4] = d[i];
@@ -1991,8 +2012,7 @@ static int do_scan(BtInfo* info) {
 	}
 	while (spins++ < 150) {
 		poll_usb();
-		AuSleepThread(AuGetCurrentThread(), 10);
-		AuScheduleNext();
+		bt_sleep(10);
 	}
 	en[0] = 0;
 	hci(LE_SET_SCAN_EN, en, 2, NULL, NULL);
@@ -2922,6 +2942,17 @@ static int perform(int code, BtInfo* info) {
 		put16(p, handle);
 		p[2] = 0x13;
 		st = hci(HCI_DISCONNECT, p, 3, NULL, NULL) ? BT_ERR : BT_OK;
+		/* The command complete only means the controller accepted the
+		 * request; HCI confirms teardown with Disconnection Complete.
+		 * Wait for it so a caller that checks `connected` right after
+		 * the ioctl does not see the link still up. */
+		if (st == BT_OK) {
+			int dspins = 0;
+			while (connected && dspins++ < 100) {
+				poll_usb();
+				spin_ms(2);
+			}
+		}
 		copy_info(info);
 		break;
 	}
@@ -3036,8 +3067,6 @@ static void bt_thread(uint64_t arg) {
 	(void)arg;
 	for (;;) {
 		if (job && !job_done) {
-			/* TEMP-BT-TEST (revert before commit) */
-			UARTDebugOut("[bt-test]: pickup job=%d\r\n", job);
 			job_status = perform(job, job_info);
 			job = 0;
 			/* perform() writes job_buf. The waiter runs on another thread
@@ -3050,8 +3079,9 @@ static void bt_thread(uint64_t arg) {
 		} else {
 			poll_usb();
 		}
-		AuSleepThread(AuGetCurrentThread(), 10);
-		AuScheduleNext();
+		/* bt_sleep waits for the tick here, which also keeps the loop
+		 * from re-linking an already-sleeping thread before it runs. */
+		bt_sleep(10);
 	}
 }
 
@@ -3060,8 +3090,6 @@ static int submit(int code, BtInfo* info) {
 	int st;
 	if (!info)
 		return BT_ERR;
-	/* TEMP-BT-TEST (revert before commit) */
-	UARTDebugOut("[bt-test]: submit code=%d started=%d\r\n", code, bt_started);
 	/* bthost runs on the root page table. Its low half is empty, so a
 	 * user BtInfo pointer faults there. Copy through kernel memory and
 	 * write the result back on this thread, which still has the caller. */
@@ -3076,10 +3104,8 @@ static int submit(int code, BtInfo* info) {
 	/* A2DP can spend several seconds in SDP plus the AVDTP handshake.
 	 * 800 * 20 ms (16 s) expired before that finished and btctl exited
 	 * while the headset was still coming up. */
-	while (!job_done && spins++ < 3000) {
-		AuSleepThread(AuGetCurrentThread(), 20);
-		AuScheduleNext();
-	}
+	while (!job_done && spins++ < 3000)
+		bt_sleep(20);
 	st = job_done ? job_status : BT_ERR;
 	__asm__ volatile("dmb ish" ::: "memory");
 	memcpy(info, &job_buf, sizeof job_buf);
@@ -3136,6 +3162,7 @@ static void publish_dev(void) {
 	node->read = bt_read;
 	node->iocontrol = bt_ioctl;
 	AuDevFSAddFile(dev, "/bt0", node);
+	UARTDebugOut("[bt]: /dev/bt0 ready\r\n");
 }
 
 static void identity(void) {
@@ -3284,9 +3311,21 @@ void AuBtUsbReady(const AuBtUsbOps* ops) {
 	usb = *ops;
 	have_usb = 1;
 	identity();
+	/* A replacement adapter after AuBtUsbDetach() reuses the parked
+	 * bthost thread: it polls have_usb, so updating the ops table and
+	 * setting the flag is enough.  Creating a second thread would give
+	 * two consumers the same HCI event stream. */
+	if (bt_started)
+		return;
 	thr = AuCreateKthread(bt_thread, AuGetRootPageTable(), "bthost");
 	(void)thr;
 	bt_started = 1;
+}
+
+/* The host controller no longer has a live Bluetooth device: stop routing
+ * HCI through the old ops table. The thread stays parked on have_usb. */
+void AuBtUsbDetach(void) {
+	have_usb = 0;
 }
 
 void AuBtInitialize(void) {

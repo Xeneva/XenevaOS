@@ -54,6 +54,16 @@ char* currentDirectory;
 char* lastDirectory;
 int g_console_fd = -1;
 
+/* True when name already carries suffix.  Keeps "netsock.exe" from
+ * turning into "/netsock.exe.exe" while still expanding bare "netsock". */
+static bool xe_name_has_suffix(const char* name, const char* suffix) {
+	size_t name_len = strlen(name);
+	size_t suffix_len = strlen(suffix);
+
+	return name_len >= suffix_len &&
+		   strcmp(name + name_len - suffix_len, suffix) == 0;
+}
+
 void XEShellSigInterrupt(int signo) {
 	g_interrupted = 1;
 	/* Handle SIGINT (CTRL+C) properly */
@@ -175,8 +185,10 @@ void XEShellSpawn(char* string) {
 			strcat(filename, "/");
 
 		strcat(filename, execname);
-		/* A musl guest is named *.elf. Everything else is still a PE .exe. */
-		if (strlen(execname) < 4 || strcmp(execname + strlen(execname) - 4, ".elf") != 0)
+		/* A musl guest is named *.elf. Everything else is still a PE .exe,
+		 * unless the caller already typed the suffix. */
+		if (!xe_name_has_suffix(execname, ".exe") &&
+			!xe_name_has_suffix(execname, ".elf"))
 			strcat(filename, ".exe");
 
 		/* before spawning the process, make an entry to
@@ -342,10 +354,8 @@ void XEShellReadLine() {
 }
 
 /*
- * XEShellCD -- Change working Directory command
- * @param path -- path to change (supported only 
- * relative path)
- * absolute path changing not implemented
+ * XEShellCD -- change the working directory
+ * @param path -- absolute path, or a path relative to the current directory
  */
 void XEShellCD(char* path) {
 	if (!currentDirectory || !path) {
@@ -468,7 +478,14 @@ void XEShellCD(char* path) {
 
 	// Check if the path exists
 	char testPath[256];
-	if (currentDirectory[prevPathLen - 1] == '/' && prevPathLen > 1) {
+	/* An absolute path is used as-is.  A relative one is joined to the
+	 * current directory, with exactly one slash at the boundary: from
+	 * root "b" is "/b", never "//b", and from /b/Demo "/" is root. */
+	if (path[0] == '/') {
+		snprintf(testPath, sizeof(testPath), "%s", path);
+	} else if (strlen(currentDirectory) == 1 && currentDirectory[0] == '/') {
+		snprintf(testPath, sizeof(testPath), "/%s", path);
+	} else if (currentDirectory[prevPathLen - 1] == '/' && prevPathLen > 1) {
 		snprintf(testPath, sizeof(testPath), "%s%s", currentDirectory, path);
 	} else {
 		snprintf(testPath, sizeof(testPath), "%s/%s", currentDirectory, path);
@@ -481,46 +498,63 @@ void XEShellCD(char* path) {
 	}
 	_KeCloseFile(testDirfd);
 
-	// Construct new path
-	if (currentDirectory[prevPathLen - 1] == '/' && prevPathLen > 1) {
-		newPath = (char*)malloc(prevPathLen + strlen(path) + 1);
-		strcpy(newPath, currentDirectory);
-		strcat(newPath, path);
-	} else {
-		newPath = (char*)malloc(prevPathLen + strlen(path) + 2);
-		strcpy(newPath, currentDirectory);
-		// check if the currentDirectory is only "/" which means root
-		if (strlen(currentDirectory) != 1 && currentDirectory[0] != '/')
-			strcat(newPath, "/");
-
-		while (*path == '/')
-			path++;
-
-		size_t len = strlen(path);
-		while (len > 0 && path[len - 1] == '/') {
-			len--;
-		}
-		path[len] = '\0';
-
-		if (currentDirectory[strlen(currentDirectory) - 1] != '/')
-			strcat(newPath, "/");
-
-		strcat(newPath, path);
-	}
+	size_t newLen = strlen(testPath);
+	while (newLen > 1 && testPath[newLen - 1] == '/')
+		newLen--;
+	newPath = (char*)malloc(newLen + 1);
+	if (!newPath)
+		return;
+	memcpy(newPath, testPath, newLen);
+	newPath[newLen] = '\0';
 
 	free(currentDirectory);
 	currentDirectory = newPath;
-
-	// Remove trailing slash if not root
-	if (strlen(currentDirectory) > 1 && currentDirectory[strlen(currentDirectory) - 1] == '/') {
-		currentDirectory[strlen(currentDirectory) - 1] = '\0';
-	}
 
 	printf("\n[xeshell]: Changed directory to: %s\r\n", currentDirectory);
 
 	// Update environment variable
 	_XESetEnvironmentVariable("PWD", currentDirectory, 1);
 	printf("[xeshell]: PWD environment variable updated to: %s\r\n", currentDirectory);
+}
+
+/*
+ * XEShellMount -- attach a registered volume by its reserved letter
+ */
+void XEShellMount(char* name) {
+	if (!name || !*name) {
+		printf("\n[xeshell]: usage: mount <letter>\r\n");
+		return;
+	}
+	if (_KeMount(name) == 0) {
+		const char* letter = (name[0] == '/') ? name + 1 : name;
+		printf("\n[xeshell]: mounted %s at /%s\r\n", letter, letter);
+	} else {
+		printf("\n[xeshell]: mount: no online volume at %s\r\n", name);
+	}
+}
+
+/*
+ * XEShellUmount -- flush and detach a mounted volume by its letter
+ */
+void XEShellUmount(char* name) {
+	if (!name || !*name) {
+		printf("\n[xeshell]: usage: umount <letter>\r\n");
+		return;
+	}
+	if (_KeUnmount(name) != 0) {
+		printf("\n[xeshell]: umount: %s is not mounted\r\n", name);
+		return;
+	}
+	const char* letter = (name[0] == '/') ? name + 1 : name;
+	printf("\n[xeshell]: unmounted %s\r\n", letter);
+	/* A shell sitting inside the detached volume would otherwise keep
+	 * building paths that can no longer resolve. */
+	if (currentDirectory && currentDirectory[0] == '/' &&
+		currentDirectory[1] == letter[0] &&
+		(currentDirectory[2] == '\0' || currentDirectory[2] == '/')) {
+		strcpy(currentDirectory, "/");
+		_XESetEnvironmentVariable("PWD", currentDirectory, 1);
+	}
 }
 
 /*
@@ -609,6 +643,8 @@ void XEShellPrintHelp() {
 	printf(" ls          List files and folders in current directory    \n");
 	printf(" echo [text]  Display text or write to file (echo text>file)\n");
 	printf(" pwd         Display current working directory             \n");
+	printf(" mount [x]   Mount volume x at its reserved drive letter   \n");
+	printf(" umount [x]  Flush and unmount volume x                     \n");
 	printf(" clrscr      Clear entire terminal screen                   \n");
 	printf(" help        Show this help message                        \n");
 	printf(" systeminfo  Display system information                    \n");
@@ -1023,6 +1059,14 @@ static int XEShellRunInternal(int argc, char** argv) {
 			XEShellCD(argv[1]);
 		return 1;
 	}
+	if (!strcmp(c, "mount")) {
+		XEShellMount(argc > 1 ? argv[1] : NULL);
+		return 1;
+	}
+	if (!strcmp(c, "umount") || !strcmp(c, "unmount")) {
+		XEShellUmount(argc > 1 ? argv[1] : NULL);
+		return 1;
+	}
 	if (!strcmp(c, "systeminfo")) {
 		printf("Xeneva Shell v1.1\r\n");
 		return 1;
@@ -1069,7 +1113,7 @@ int XsHostRun(int argc, char** argv, int fdIn, int fdOut, int fdErr) {
 		return 126;
 	}
 	strcat(filename, exec);
-	if (el < 4 || strcmp(exec + el - 4, ".elf") != 0)
+	if (!xe_name_has_suffix(exec, ".exe") && !xe_name_has_suffix(exec, ".elf"))
 		strcat(filename, ".exe");
 
 	int probe = _KeOpenFile(filename, FILE_OPEN_READ_ONLY);
@@ -1125,9 +1169,26 @@ int XsHostRun(int argc, char** argv, int fdIn, int fdOut, int fdErr) {
  * NOTE : GENERATED USING CLAUDE Sonnet 5.5 (Medium)
  * */
 int XEShellTryScript(char* line) {
+	/* Do not write NULs into the line until we know it is a script.
+	 * XEShellSpawn still needs the original text ("ping 1.1.1.1"). */
+	char first[128];
+	char* p = line;
+	int n = 0;
+	while (*p == ' ')
+		p++;
+	while (*p && *p != ' ' && n < (int)sizeof(first) - 1)
+		first[n++] = *p++;
+	first[n] = '\0';
+	if (n == 0)
+		return 0;
+
+	bool bat = false;
+	if (!XsScriptKind(first, &bat))
+		return 0;
+
 	char* argv[32];
 	int argc = 0;
-	char* p = line;
+	p = line;
 	while (*p && argc < 31) {
 		while (*p == ' ')
 			p++;
@@ -1141,10 +1202,6 @@ int XEShellTryScript(char* line) {
 	}
 	argv[argc] = NULL;
 	if (argc == 0)
-		return 0;
-
-	bool bat = false;
-	if (!XsScriptKind(argv[0], &bat))
 		return 0;
 
 	g_interrupted = 0;
@@ -1233,6 +1290,22 @@ void XEShellProcessLine() {
 			_spawnable_process = false;
 		} else if (strcmp(cmdBuf, "pwd") == 0) {
 			XEShellPrintWorkingDirectory();
+			_spawnable_process = false;
+		} else if (strncmp(cmdBuf, "mount", 5) == 0 &&
+				   (cmdBuf[5] == '\0' || cmdBuf[5] == ' ')) {
+			char* path = cmdBuf + 5;
+			while (*path == ' ')
+				path++;
+			XEShellMount(*path ? path : NULL);
+			_spawnable_process = false;
+		} else if ((strncmp(cmdBuf, "umount", 6) == 0 &&
+					(cmdBuf[6] == '\0' || cmdBuf[6] == ' ')) ||
+				   (strncmp(cmdBuf, "unmount", 7) == 0 &&
+					(cmdBuf[7] == '\0' || cmdBuf[7] == ' '))) {
+			char* path = cmdBuf + (cmdBuf[1] == 'm' ? 6 : 7);
+			while (*path == ' ')
+				path++;
+			XEShellUmount(*path ? path : NULL);
 			_spawnable_process = false;
 		} else if (strncmp(cmdBuf, "echo ", 5) == 0 || strcmp(cmdBuf, "echo") == 0) {
 			char* msg = cmdBuf + 4;
