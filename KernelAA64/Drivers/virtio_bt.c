@@ -348,6 +348,10 @@ static void mockProcessCmd(const uint8_t* d, uint16_t len) {
 		break;
 
 	case LE_CREATE_CONN:
+		/* Echo the address the host asked for (param 6..11) so connect
+		 * reports the same peer the scan found, like a real controller. */
+		if (len >= 15)
+			memcpy(mockPeer, d + 9, 6);
 		evtCmdStatus(op, 0);
 		evtConnComplete();
 		break;

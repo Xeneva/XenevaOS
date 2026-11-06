@@ -1,0 +1,165 @@
+--- a/include/hw/usb/usb.h
++++ b/include/hw/usb/usb.h
+@@ -246,7 +246,7 @@
+ 
+     int32_t state;
+     uint8_t setup_buf[8];
+-    uint8_t data_buf[4096];
++    uint8_t data_buf[8192];
+     int32_t remote_wakeup;
+     int32_t setup_state;
+     int32_t setup_len;
+--- a/hw/usb/dev-storage-classic.c
++++ b/hw/usb/dev-storage-classic.c
+@@ -83,6 +83,134 @@
+     device_class_set_props(dc, msd_properties);
+ }
+ 
++/*
++ * Test device: a vendor interface carries enough class-specific padding to
++ * put the mass-storage interface past 4096 bytes.  A host that only reads
++ * one page of the configuration descriptor cannot find the disk.
++ */
++#define BIGCFG_PAD_COUNT 20
++#define BIGCFG_PAD_LEN   250
++
++static const uint8_t bigcfg_pad_data[BIGCFG_PAD_LEN] = {
++    BIGCFG_PAD_LEN, 0xff,
++    'X', 'E', 'N', 'E', 'V', 'A', ' ', 'B', 'I', 'G', ' ',
++    'C', 'O', 'N', 'F', 'I', 'G', ' ', 'P', 'A', 'D', 'D', 'I', 'N', 'G',
++};
++
++static USBDescOther bigcfg_pad_descs[] = {
++    [0 ... BIGCFG_PAD_COUNT - 1] = {
++        .length = BIGCFG_PAD_LEN,
++        .data = bigcfg_pad_data,
++    },
++};
++
++#define BIGCFG_PAD_IFACE { \
++    .bInterfaceNumber = 0, \
++    .bNumEndpoints = 0, \
++    .bInterfaceClass = 0xff, \
++    .ndesc = BIGCFG_PAD_COUNT, \
++    .descs = bigcfg_pad_descs, \
++}
++
++#define BIGCFG_MSC_IFACE(_mps, _burst) { \
++    .bInterfaceNumber = 1, \
++    .bNumEndpoints = 2, \
++    .bInterfaceClass = USB_CLASS_MASS_STORAGE, \
++    .bInterfaceSubClass = 0x06, \
++    .bInterfaceProtocol = 0x50, \
++    .eps = (USBDescEndpoint[]) { \
++        { \
++            .bEndpointAddress = USB_DIR_IN | 0x01, \
++            .bmAttributes = USB_ENDPOINT_XFER_BULK, \
++            .wMaxPacketSize = (_mps), \
++            .bMaxBurst = (_burst), \
++        }, { \
++            .bEndpointAddress = USB_DIR_OUT | 0x02, \
++            .bmAttributes = USB_ENDPOINT_XFER_BULK, \
++            .wMaxPacketSize = (_mps), \
++            .bMaxBurst = (_burst), \
++        }, \
++    }, \
++}
++
++static const USBDescIface bigcfg_iface_full[] = {
++    BIGCFG_PAD_IFACE,
++    BIGCFG_MSC_IFACE(64, 0),
++};
++
++static const USBDescIface bigcfg_iface_high[] = {
++    BIGCFG_PAD_IFACE,
++    BIGCFG_MSC_IFACE(512, 0),
++};
++
++static const USBDescIface bigcfg_iface_super[] = {
++    BIGCFG_PAD_IFACE,
++    BIGCFG_MSC_IFACE(1024, 15),
++};
++
++#define BIGCFG_CONF(_ifs) { \
++    .bNumInterfaces = 2, \
++    .bConfigurationValue = 1, \
++    .bmAttributes = USB_CFG_ATT_ONE | USB_CFG_ATT_SELFPOWER, \
++    .nif = 2, \
++    .ifs = (_ifs), \
++}
++
++static const USBDescDevice bigcfg_device_full = {
++    .bcdUSB = 0x0200,
++    .bMaxPacketSize0 = 8,
++    .bNumConfigurations = 1,
++    .confs = (USBDescConfig[]) { BIGCFG_CONF(bigcfg_iface_full) },
++};
++
++static const USBDescDevice bigcfg_device_high = {
++    .bcdUSB = 0x0200,
++    .bMaxPacketSize0 = 64,
++    .bNumConfigurations = 1,
++    .confs = (USBDescConfig[]) { BIGCFG_CONF(bigcfg_iface_high) },
++};
++
++static const USBDescDevice bigcfg_device_super = {
++    .bcdUSB = 0x0300,
++    .bMaxPacketSize0 = 9,
++    .bNumConfigurations = 1,
++    .confs = (USBDescConfig[]) { BIGCFG_CONF(bigcfg_iface_super) },
++};
++
++enum {
++    BIGCFG_STR_MANUFACTURER = 1,
++    BIGCFG_STR_PRODUCT,
++    BIGCFG_STR_SERIAL,
++};
++
++static const USBDescStrings bigcfg_strings = {
++    [BIGCFG_STR_MANUFACTURER] = "QEMU",
++    [BIGCFG_STR_PRODUCT] = "QEMU USB BIGCFG DISK",
++    [BIGCFG_STR_SERIAL] = "BIGCFG",
++};
++
++static const USBDesc bigcfg_desc = {
++    .id = {
++        .idVendor = 0x46f4,
++        .idProduct = 0x0002,
++        .iManufacturer = BIGCFG_STR_MANUFACTURER,
++        .iProduct = BIGCFG_STR_PRODUCT,
++        .iSerialNumber = BIGCFG_STR_SERIAL,
++    },
++    .full = &bigcfg_device_full,
++    .high = &bigcfg_device_high,
++    .super = &bigcfg_device_super,
++    .str = bigcfg_strings,
++};
++
++static void usb_msd_bigcfg_class_initfn(ObjectClass *klass, const void *data)
++{
++    USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
++
++    uc->usb_desc = &bigcfg_desc;
++    uc->product_desc = "QEMU USB BIGCFG DISK";
++}
++
+ static void usb_msd_get_bootindex(Object *obj, Visitor *v, const char *name,
+                                   void *opaque, Error **errp)
+ {
+@@ -135,9 +263,16 @@
+     .instance_init = usb_msd_instance_init,
+ };
+ 
++static const TypeInfo bigcfg_msd_info = {
++    .name          = "usb-storage-bigcfg",
++    .parent        = "usb-storage",
++    .class_init    = usb_msd_bigcfg_class_initfn,
++};
++
+ static void register_types(void)
+ {
+     type_register_static(&msd_info);
++    type_register_static(&bigcfg_msd_info);
+ }
+ 
+ type_init(register_types)

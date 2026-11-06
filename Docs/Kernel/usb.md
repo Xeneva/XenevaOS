@@ -2,6 +2,8 @@
 
 The USB subsystem in XenevaOS is designed with modularity and flexibility in mind, allowing communication between higher-level applications and USB devices, as well as between the kernel and USB devices. The system is composed of three different layers running separately from each other: the __Host Controller Driver__, the __Core USB Driver__, and the __USB Class Drivers__. Each component is loaded separately by the kernel as a module to ensure clean separation and ease of development.
 
+For a current breakdown of what is implemented and gate-tested, see [xHCI/USB readiness](../Development/xhci-progress.html).
+
 ## Architecture Overview
 
 - **Host Controller Driver**: The Host Controller Driver is responsible for directly interacting with the hardware. It handles tasks such as initializing the controller, managing port attach and detach events, managing endpoint descriptors, and transferring data between USB devices and USB class drivers. This driver is separate from the USB core driver to maintain a clean abstraction layer.

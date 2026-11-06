@@ -740,6 +740,8 @@ AuVFSNode* FatInitialise(AuVDisk* vdisk, char* mountname) {
 	vdisk->fsys = fsys;
 	AuVFSAddFileSystem(fsys);
 	AuVFSRegisterRoot(fsys);
+	UARTDebugOut("[fat]: %s mounted at %s oem %s\r\n", vdisk->diskname,
+				 mountname, fs->oemid);
 
 	AuPmmngrReleasePage((uint64_t)V2P((uint64_t)buffer));
 

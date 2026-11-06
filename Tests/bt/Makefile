@@ -7,11 +7,15 @@ SRCS = main.c \
 	../../KernelAA64/Bt/parse.c \
 	../../KernelAA64/Bt/lc3.c
 
-.PHONY: all clean
-all: bt_test
+# OUT keeps a caller such as Tests/dcl_test_all.sh from rebuilding over the
+# tracked bt_test binary in the working tree.
+OUT ?= bt_test
 
-bt_test: $(SRCS)
+.PHONY: all clean
+all: $(OUT)
+
+$(OUT): $(SRCS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS)
 
 clean:
-	rm -f bt_test
+	rm -f $(OUT) bt_test

@@ -360,32 +360,38 @@ int AuCredCheckPermissions(AuVFSNode* node, AuProcCredentials* cred) {
  */
 int AuSetUID(int proc_id, UID_NUM uid) {
 	AA64Thread* current_thr = AuGetCurrentThread();
-	AuProcess* proc = AuProcessFindThread(current_thr);
+	AuProcess* caller = AuProcessFindThread(current_thr);
+	AuProcess* proc;
 
-	if (!proc)
-		proc = AuProcessFindSubThread(current_thr);
+	if (!caller)
+		caller = AuProcessFindSubThread(current_thr);
 
-	if (!proc)
+	if (!caller)
 		return 1;
 
-	if (!CRED_IS_CAPABLE(proc->creds.caps, CRED_CAP_SETUID))
+	if (!CRED_IS_CAPABLE(caller->creds.caps, CRED_CAP_SETUID))
 		return 1;
 
 	/** 
 	   *don't allow root process to change it's uid/gid, 
 	    in Xeneva the root process get process id of one 
 		*/
-	if ((proc_id == 0 && proc->proc_id == 1)) {
+	if ((proc_id == 0 && caller->proc_id == 1)) {
 		UARTDebugOut("[aurora]: root process is not allowed to change its uid \r\n");
 		return 1;
 	}
 
+	proc = caller;
 	if (proc_id != 0)
 		proc = AuProcessFindPID(proc_id);
 	if (!proc)
 		return 1;
 
-	if (proc_id != 0 && proc->proc_id == proc_id) {
+	/* A process changing its own id keeps uid and moves euid; a parent
+	 * such as init targeting a child sets the real id. Comparing
+	 * proc_id with the looked-up process was always true, so every
+	 * init-spawned child stayed uid 0. */
+	if (proc_id != 0 && proc_id == caller->proc_id) {
 		proc->creds.euid = uid;
 		return 0;
 	}
@@ -401,15 +407,16 @@ int AuSetUID(int proc_id, UID_NUM uid) {
  */
 int AuSetGID(int proc_id, GID_NUM gid) {
 	AA64Thread* current_thr = AuGetCurrentThread();
-	AuProcess* proc = AuProcessFindThread(current_thr);
+	AuProcess* caller = AuProcessFindThread(current_thr);
+	AuProcess* proc;
 
-	if (!proc)
-		proc = AuProcessFindSubThread(current_thr);
+	if (!caller)
+		caller = AuProcessFindSubThread(current_thr);
 
-	if (!proc)
+	if (!caller)
 		return 1;
 
-	if (!CRED_IS_CAPABLE(proc->creds.caps, CRED_CAP_SETGID)) {
+	if (!CRED_IS_CAPABLE(caller->creds.caps, CRED_CAP_SETGID)) {
 		return 1;
 	}
 
@@ -417,11 +424,12 @@ int AuSetGID(int proc_id, GID_NUM gid) {
 	   *don't allow root process to change it's uid/gid,
 		in Xeneva the root process get process id of one
 		*/
-	if ((proc_id == 0 && proc->proc_id == 1)) {
+	if ((proc_id == 0 && caller->proc_id == 1)) {
 		UARTDebugOut("[aurora]: root process is not allowed to change its uid \r\n");
 		return 1;
 	}
 
+	proc = caller;
 	if (proc_id != 0)
 		proc = AuProcessFindPID(proc_id);
 	if (!proc)
@@ -430,7 +438,7 @@ int AuSetGID(int proc_id, GID_NUM gid) {
 	/** suppose a normal user process call setgid, then only
 	  its effective gid should change
 	   */
-	if (proc_id != 0 && proc_id == proc->proc_id) {
+	if (proc_id != 0 && proc_id == caller->proc_id) {
 		proc->creds.egid = gid;
 		return 0;
 	}
