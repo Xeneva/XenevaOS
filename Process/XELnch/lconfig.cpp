@@ -36,9 +36,12 @@
  *   [Icon]/icons/medial.bmp|
  *   [Param]Null|
  *   [App]/audplr.exe|
- *   [Size]M|          optional: S 1x1, M 2x2 (default), W 2x1, L 4x2
+ *   [Size]M|          optional: S small, M tall (default), W wide, L hero
  *   [Pin]1|           optional: 1 pinned (default), 0 only in "all apps"
- *   [Color]red}       optional: red, deep, muga, mugadeep, ink, ivory
+ *   [Color]red|       optional: red, deep, muga, mugadeep, ink, ivory
+ *   [Name]accent|     optional: the lower-case name on the card
+ *   [Kicker]LISTEN|   optional: the small label at the top of the card
+ *   [Deck]music...}   optional: one line under the name
  *
  * The old files (no Size/Pin/Color, last entry closed with '>') parse
  * unchanged. Single pass, O(file size); the file buffer is freed after
@@ -151,14 +154,30 @@ static bool _parse_entry(const char* s, const char* e, XlApp* a, int ordinal) {
 		} else if (_key_is(key, kl, "color")) {
 			_copy_trim(tmp, sizeof(tmp), val, vl);
 			a->color = (uint8_t)_parse_color(tmp, a->color);
+		} else if (_key_is(key, kl, "name")) {
+			_copy_trim(a->name, XL_TITLE_MAX, val, vl);
+		} else if (_key_is(key, kl, "kicker")) {
+			_copy_trim(a->kicker, XL_KICK_MAX, val, vl);
+		} else if (_key_is(key, kl, "deck")) {
+			_copy_trim(a->deck, XL_DECK_MAX, val, vl);
 		}
 		p = end + 1;
 	}
 	if (!a->title[0] || !a->path[0])
 		return false;
+	/* cards speak lower case, kickers upper case */
+	if (!a->name[0])
+		strcpy(a->name, a->title);
+	for (char* q = a->name; *q; q++)
+		if (*q >= 'A' && *q <= 'Z')
+			*q = (char)(*q + 32);
+	for (char* q = a->kicker; *q; q++)
+		if (*q >= 'a' && *q <= 'z')
+			*q = (char)(*q - 32);
+	a->card = XL_NONE;
+	a->tick = 255;
 	a->titleHash = XelnchHash(a->title);
 	a->pathHash = XelnchHash(a->path);
-	a->col = a->row = -1;
 	a->live.progress = XELNCH_NO_PROGRESS;
 	return true;
 }

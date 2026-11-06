@@ -760,7 +760,8 @@ void DeodhaiWindowCheckDraggable(int x, int y, int button) {
 		if (info->zoomed)
 			continue; // zoomed windows fill the screen; not draggable
 		//_KePrint("INFO->x %d, mx -> %d \r\n", info->x, x);
-		if (!(x >= (info->x + 10) && x < (info->x + info->width - 74) && y >= info->y &&
+		if (!(x >= (info->x + DeodhaiDragZoneX0(win->flags)) &&
+			  x < (info->x + DeodhaiDragZoneX1(win->flags, info->width)) && y >= info->y &&
 			  y < (info->y + info->height)))
 			continue;
 
@@ -1907,6 +1908,25 @@ int main(int argc, char* argv[]) {
 
 			if (hideable_win)
 				DeodhaiWindowHide(hideable_win);
+			memset(&event, 0, sizeof(PostEvent));
+		}
+
+		/* the app switched its chrome style (ChWindowSetStyle): keep the
+		 * compositor's copy of the style bits in step, the drag zone reads it */
+		if (event.type == DEODHAI_MESSAGE_SET_FLAGS) {
+			uint32_t handle = event.dword;
+			uint16_t ownerId = event.from_id;
+			for (int list = 0; list < 2; list++) {
+				for (Window* win = list ? alwaysOnTop : rootWin; win != NULL; win = win->next) {
+					if (win->handle == handle && win->ownerId == ownerId) {
+						/* only the chrome style bits: the compositor's own
+						 * flags (blocked, glass, ...) stay as they are */
+						win->flags = (uint16_t)((win->flags & ~(3u << 13)) | (event.dword2 & (3u << 13)));
+						list = 2;
+						break;
+					}
+				}
+			}
 			memset(&event, 0, sizeof(PostEvent));
 		}
 

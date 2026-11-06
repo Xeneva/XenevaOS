@@ -28,15 +28,21 @@
 **/
 
 /*
- * main.cpp -- XELnch, the Xeneva start screen (Gamusa x Kinetic).
+ * main.cpp -- XELnch, the Xeneva start panel (Gamusa: AHEntryList bento
+ * spread + LuitFlow day ribbon).
  *
  * Owns the window, the event loop, input and app launching. Painting is
- * in xlui.cpp, the grid in layout.cpp, the animation in anim.cpp.
+ * in xlui.cpp / cards.cpp / luitflow.cpp, the layout in bento.cpp, motion
+ * in anim.cpp.
  *
  * Show / hide: Namdapha's Go button sends XELNCH_MSG_TOGGLE to this
  * thread (see livetile.h) instead of toggling the window in Deodhai, so
- * the tiles can turnstile out *before* the window disappears and
- * turnstile in *after* it appears.
+ * the cards can fold up *before* the window disappears and unroll
+ * *after* it appears.
+ *
+ * The loop sleeps in _KePauseThread whenever nothing moves; while a hover,
+ * ticker or ribbon animation runs it polls the postbox between 16 ms
+ * frames, so input is never blocked by a hover.
  */
 
 #include <stdint.h>
@@ -73,7 +79,7 @@ int graphicsFd;
 
 XlLauncher xlnch;
 static int _initpipe = -1;
-static bool _shown; /* tiles are on screen (enter animation finished) */
+static bool _shown; /* cards are on screen (enter animation finished) */
 
 ChWindow* XELauncherGetMainWin() {
 	return win;
@@ -83,9 +89,13 @@ int xelaunch_get_pipe() {
 	return _initpipe;
 }
 
+uint64_t XlNowMs() {
+	return _KeGetCurrentMS();
+}
+
 /* XlPresent -- push a canvas rect to Deodhai (clipped to the window) */
 void XlPresent(int x, int y, int w, int h) {
-	if (!win)
+	if (!win || xlnch.presentHold)
 		return;
 	int W = (int)win->info->width, H = (int)win->info->height;
 	if (x < 0) {
@@ -109,13 +119,17 @@ static bool _hidden() {
 	return __atomic_load_n(&win->info->hide, __ATOMIC_ACQUIRE);
 }
 
+bool XlVisible() {
+	return win && !_hidden() && _shown;
+}
+
 /* Deodhai flips the shared hide flag asynchronously; wait <= ~100 ms */
 static void _wait_hidden(bool want) {
 	for (int i = 0; i < 50 && _hidden() != want; i++)
 		_KeProcessSleep(2);
 }
 
-static const XlHit _nohit = { XL_HIT_NONE, 0 };
+static const XlHit _nohit = {XL_HIT_NONE, 0};
 
 static bool _same(XlHit a, XlHit b) {
 	return a.kind == b.kind && a.index == b.index;
@@ -126,18 +140,26 @@ static void _reset_input() {
 	xlnch.press = _nohit;
 	xlnch.mouseDown = false;
 	xlnch.dragging = false;
+	xlnch.scrubbing = false;
+	xlnch.pointerX = -1;
+	xlnch.springStart = 0;
+	if (xlnch.hoverApp != XL_NONE)
+		xlnch.apps[xlnch.hoverApp].hov = 0;
+	if (xlnch.hoverPrevApp != XL_NONE)
+		xlnch.apps[xlnch.hoverPrevApp].hov = 0;
+	xlnch.hoverApp = xlnch.hoverPrevApp = XL_NONE;
 }
 
 /* ---------------------------------------------------------------- show/hide */
 
-/* back to the resting state: tiles view, no search, top of the grid */
+/* back to the resting state: cards, no search, top of the spread */
 static void _reset_view() {
 	_reset_input();
 	xlnch.query[0] = '\0';
 	xlnch.queryLen = 0;
 	xlnch.resultCount = 0;
-	xlnch.view = XL_VIEW_TILES;
-	xlnch.scrollTiles = 0;
+	xlnch.view = XL_VIEW_CARDS;
+	xlnch.scrollCards = 0;
 	xlnch.scrollList = 0;
 }
 
@@ -145,24 +167,30 @@ static void XlShow() {
 	if (!_hidden())
 		return;
 	_reset_view();
-	/* XlHide left the canvas as "chrome + empty grid" (and so did the
-	 * startup paint), so the window is mapped first and the tiles swing in
-	 * on top of it -- nothing is painted while the window is hidden */
+	/* the ribbon reads the calendar once per show */
+	XlFlowRefresh();
+	/* XlHide left the canvas as chrome with an empty spread; refresh the
+	 * parts that may have changed while hidden, then map the window and
+	 * unroll the cards on top of it */
+	XlPaintClock();
+	XlFlowPaintToggle(true);
+	XlFlowPaint(true);
 	ChWindowHide(win); /* Deodhai toggles: hidden -> shown */
 	_wait_hidden(false);
-	XlAnimTiles(XL_ANIM_ENTER, -1);
+	XlAnimCards(XL_ANIM_ENTER);
 	_shown = true;
 }
 
 static void XlHide(int launchApp) {
 	if (_hidden())
 		return;
-	if (xlnch.dragging)
-		xlnch.dragging = false;
+	xlnch.dragging = false;
 	XlLayoutSave();
 	_reset_input();
-	if (_shown && xlnch.view == XL_VIEW_TILES)
-		XlAnimTiles(XL_ANIM_EXIT, launchApp);
+	if (launchApp >= 0)
+		XlAnimLaunch(launchApp);
+	else if (_shown && xlnch.view == XL_VIEW_CARDS)
+		XlAnimCards(XL_ANIM_EXIT);
 	/* leave the canvas in the state the next show starts from */
 	_reset_view();
 	XlPaintAll(false);
@@ -175,7 +203,7 @@ static void XlHide(int launchApp) {
 
 static void XlLaunch(uint8_t ai) {
 	XlApp* a = &xlnch.apps[ai];
-	XlHide(xlnch.view == XL_VIEW_TILES ? ai : -1);
+	XlHide(ai);
 	int id = _KeCreateProcess(0, a->title);
 	if (id == -1) {
 		_KePrint("[XELnch]: failed to create process for %s \r\n", a->title);
@@ -207,53 +235,52 @@ static bool _is_row(XlHit h) {
 	return h.kind == XL_HIT_ROW || h.kind == XL_HIT_ROW_PIN;
 }
 
-static bool _is_tile(XlHit h) {
-	return h.kind == XL_HIT_TILE || h.kind == XL_HIT_TILE_PIN;
+static bool _is_card(XlHit h) {
+	return h.kind == XL_HIT_CARD || h.kind == XL_HIT_CARD_UNPIN;
 }
 
+/* repaint exactly the element a hit names */
 static void _repaint_hit(XlHit h) {
-	if (_is_tile(h))
-		XlPaintTileAt(h.index);
-	else if (_is_row(h))
-		XlPaintView();
+	if (_is_row(h))
+		XlListPaintRow(xlnch.canv, h.index, true);
 	else if (h.kind == XL_HIT_POWER || h.kind == XL_HIT_RESTART)
-		XlPaintHeader();
+		XlPaintClock();
+	else if (h.kind == XL_HIT_LINK)
+		XlPaintLink(h.index);
 	else if (h.kind == XL_HIT_TOGGLE)
-		XlPaintSection();
+		XlFlowPaintToggle(true);
 }
 
+/*
+ * _set_hover -- the only place hover changes. Only the previous and the
+ * new element repaint; cards fade through the stepped hover animation
+ * (which also repaints just those two cards).
+ */
 static void _set_hover(XlHit h) {
 	if (_same(h, xlnch.hover))
 		return;
 	XlHit old = xlnch.hover;
 	xlnch.hover = h;
-	if (_is_row(old) || _is_row(h)) {
-		XlPaintView(); /* one list repaint covers both rows */
-		if (!_is_row(old))
-			_repaint_hit(old);
-		if (!_is_row(h))
-			_repaint_hit(h);
-		return;
-	}
-	if (_is_tile(old) && _is_tile(h) && old.index == h.index) {
-		XlPaintTileAt(h.index);
-		return;
-	}
-	_repaint_hit(old);
-	_repaint_hit(h);
+	uint8_t oldCard = _is_card(old) ? old.index : XL_NONE;
+	uint8_t newCard = _is_card(h) ? h.index : XL_NONE;
+	if (oldCard != newCard)
+		XlHoverSet(newCard);
+	if (!_is_card(old))
+		_repaint_hit(old);
+	if (!_is_card(h))
+		_repaint_hit(h);
 }
 
 static void _scroll(int dir) {
 	const XlMetrics* m = &xlnch.m;
-	int* s;
-	int content, step;
-	if (xlnch.view == XL_VIEW_TILES) {
-		s = &xlnch.scrollTiles;
-		content = XlLayoutContentHeight();
-		step = m->pitch;
+	int *s, content, step;
+	if (xlnch.view == XL_VIEW_CARDS) {
+		s = &xlnch.scrollCards;
+		content = xlnch.contentH;
+		step = m->rowShort;
 	} else {
 		s = &xlnch.scrollList;
-		content = XlListCount() * m->listRowH;
+		content = ((XlListCount() + m->listCols - 1) / m->listCols) * m->listRowH;
 		step = m->listRowH * 2;
 	}
 	int max = content - m->view.h;
@@ -270,45 +297,38 @@ static void _scroll(int dir) {
 	}
 }
 
-static void _toggle_view() {
-	if (xlnch.view == XL_VIEW_TILES) {
-		xlnch.view = XL_VIEW_LIST;
-		xlnch.scrollList = 0;
-	} else {
-		xlnch.view = XL_VIEW_TILES;
+static void _set_view(int view) {
+	if (view == xlnch.view)
+		return;
+	xlnch.view = view;
+	xlnch.scrollList = 0;
+	if (view == XL_VIEW_CARDS && xlnch.queryLen) {
 		xlnch.queryLen = 0;
 		xlnch.query[0] = '\0';
 		xlnch.resultCount = 0;
 		XlPaintSearch();
 	}
-	xlnch.hover = _nohit;
-	XlPaintSection();
+	_set_hover(_nohit);
+	XlPaintMast();
 	XlPaintView();
 }
 
 static void _drag_update(int lx, int ly) {
-	XlApp* d = &xlnch.apps[xlnch.press.index];
 	const XlRect* v = &xlnch.m.view;
+	XlApp* d = &xlnch.apps[xlnch.press.index];
+	if (d->card == XL_NONE)
+		return;
+	const XlCard* k = &xlnch.cards[d->card];
 	xlnch.dragX = lx - xlnch.dragOffX;
 	xlnch.dragY = ly - xlnch.dragOffY;
-	/* auto scroll when the tile is pushed past the viewport edge */
 	if (ly < v->y + 6)
 		_scroll(-1);
 	else if (ly > v->y + v->h - 6)
 		_scroll(1);
-	int cx = xlnch.dragX + d->cacheW / 2;
-	int cy = xlnch.dragY + d->cacheH / 2;
-	if (cx < v->x)
-		cx = v->x;
-	if (cx >= v->x + v->w)
-		cx = v->x + v->w - 1;
-	if (cy < v->y)
-		cy = v->y;
-	if (cy >= v->y + v->h)
-		cy = v->y + v->h - 1;
-	int slot = XlLayoutSlotAt(cx, cy);
-	if (slot >= 0)
-		XlLayoutMove(xlnch.press.index, slot);
+	int cx = xlnch.dragX + k->w / 2, cy = xlnch.dragY + k->h / 2;
+	int target = XlCardAt(cx, cy);
+	if (target >= 0)
+		XlCardMove(xlnch.press.index, target);
 	XlPaintView();
 }
 
@@ -322,42 +342,75 @@ static void _release(int lx, int ly) {
 		XlPaintView();
 		return;
 	}
+	if (xlnch.scrubbing) {
+		XlHit p = xlnch.press;
+		xlnch.press = _nohit;
+		XlFlowRelease();
+		XlHit h = XlHitTest(lx, ly);
+		/* a click (no drag) on a ribbon item opens its app */
+		int dx = lx - xlnch.pressX, dy = ly - xlnch.pressY;
+		if (p.kind == XL_HIT_FLOW_ITEM && _same(h, p) && dx * dx + dy * dy < 36) {
+			int ai = XlFlowItemApp(p.index);
+			if (ai >= 0)
+				XlLaunch((uint8_t)ai);
+		}
+		return;
+	}
 	XlHit p = xlnch.press;
 	XlHit h = XlHitTest(lx, ly);
 	xlnch.press = _nohit;
 	if (!_same(h, p)) {
-		if (_is_tile(p))
-			XlPaintTileAt(p.index);
+		if (_is_card(p))
+			XlPaintCard(p.index);
+		_repaint_hit(p);
 		_set_hover(h);
 		return;
 	}
 	switch (p.kind) {
-	case XL_HIT_TILE:
-	case XL_HIT_ROW:
+	case XL_HIT_CARD:
 		XlLaunch(p.index);
 		break;
-	case XL_HIT_TILE_PIN:
+	case XL_HIT_ROW: {
+		int ai = XlListAt(p.index);
+		if (ai >= 0)
+			XlLaunch((uint8_t)ai);
+		break;
+	}
+	case XL_HIT_CARD_UNPIN:
 		XlUnpin(p.index);
 		XlLayoutSave();
-		xlnch.hover = XlHitTest(lx, ly);
+		xlnch.hover = _nohit;
+		xlnch.hoverApp = xlnch.hoverPrevApp = XL_NONE;
 		XlPaintView();
 		break;
-	case XL_HIT_ROW_PIN:
-		if (xlnch.apps[p.index].pinned)
-			XlUnpin(p.index);
+	case XL_HIT_ROW_PIN: {
+		int ai = XlListAt(p.index);
+		if (ai < 0)
+			break;
+		if (xlnch.apps[ai].pinned)
+			XlUnpin((uint8_t)ai);
 		else
-			XlPin(p.index);
+			XlPin((uint8_t)ai);
 		XlLayoutSave();
-		XlPaintView();
+		XlListPaintRow(xlnch.canv, p.index, true);
 		break;
+	}
 	case XL_HIT_POWER:
 		XlPowerRequest(INIT_REQUEST_PW_DOWN);
 		break;
 	case XL_HIT_RESTART:
 		XlPowerRequest(INIT_REQUEST_PW_REBOOT);
 		break;
+	case XL_HIT_LINK: {
+		uint8_t ai = xlnch.linkApp[p.index];
+		if (ai == XL_NONE)
+			_set_view(xlnch.view == XL_VIEW_CARDS ? XL_VIEW_LIST : XL_VIEW_CARDS);
+		else
+			XlLaunch(ai);
+		break;
+	}
 	case XL_HIT_TOGGLE:
-		_toggle_view();
+		XlFlowSetOpen(!xlnch.flowOpen, true);
 		break;
 	default:
 		break;
@@ -374,12 +427,8 @@ static void XlMouse(int sx, int sy, int button) {
 	}
 	int lx = sx - win->info->x;
 	int ly = sy - win->info->y;
-	if (button == DEODHAI_MOUSE_MSG_SCROLL_UP) {
-		_scroll(-1);
-		return;
-	}
-	if (button == DEODHAI_MOUSE_MSG_SCROLL_DOWN) {
-		_scroll(1);
+	if (button == DEODHAI_MOUSE_MSG_SCROLL_UP || button == DEODHAI_MOUSE_MSG_SCROLL_DOWN) {
+		_scroll(button == DEODHAI_MOUSE_MSG_SCROLL_UP ? -1 : 1);
 		return;
 	}
 	bool left = (button & 1) || button == DEODHAI_MESSAGE_MOUSE_DBLCLK;
@@ -389,20 +438,36 @@ static void XlMouse(int sx, int sy, int button) {
 		xlnch.press = XlHitTest(lx, ly);
 		xlnch.pressX = lx;
 		xlnch.pressY = ly;
-		if (xlnch.press.kind == XL_HIT_TILE)
-			XlPaintTileAt(xlnch.press.index); /* pressed look */
+		if (xlnch.press.kind == XL_HIT_CARD)
+			XlPaintCard(xlnch.press.index); /* pressed look */
+		else if (xlnch.press.kind == XL_HIT_TOGGLE)
+			XlFlowPaintToggle(true);
+		else if (xlnch.press.kind == XL_HIT_FLOW || xlnch.press.kind == XL_HIT_FLOW_ITEM) {
+			xlnch.scrubbing = true;
+			if (xlnch.press.kind == XL_HIT_FLOW)
+				XlFlowScrub(lx);
+		}
 		return;
 	}
 	if (left && xlnch.mouseDown) {
-		if (xlnch.press.kind != XL_HIT_TILE || xlnch.view != XL_VIEW_TILES)
+		if (xlnch.scrubbing) {
+			XlFlowScrub(lx);
+			return;
+		}
+		if (xlnch.press.kind != XL_HIT_CARD || xlnch.view != XL_VIEW_CARDS)
 			return;
 		if (!xlnch.dragging) {
 			int dx = lx - xlnch.pressX, dy = ly - xlnch.pressY;
 			if (dx * dx + dy * dy < 64)
 				return;
+			XlApp* a = &xlnch.apps[xlnch.press.index];
+			if (a->card == XL_NONE)
+				return;
 			XlRect t;
-			XlLayoutTileRect(&xlnch.apps[xlnch.press.index], &t);
+			XlCardRect(&xlnch.cards[a->card], &t);
 			xlnch.dragging = true;
+			XlHoverSet(XL_NONE);
+			a->hov = 0;
 			xlnch.dragOffX = xlnch.pressX - t.x;
 			xlnch.dragOffY = xlnch.pressY - t.y;
 		}
@@ -424,6 +489,8 @@ static void XlMouseLeave() {
 		xlnch.mouseDown = false;
 		xlnch.dragging = false;
 		xlnch.press = _nohit;
+		if (xlnch.scrubbing)
+			XlFlowRelease();
 		if (wasDragging) {
 			XlLayoutSave();
 			XlPaintView();
@@ -443,6 +510,18 @@ static bool _control_key(int key) {
 static void XlKey(int code) {
 	if (_hidden() || xlnch.animating || _control_key(code) || (code & 0x80))
 		return;
+	if (code == 0x01) { /* esc: clear the search, else close */
+		if (xlnch.queryLen) {
+			xlnch.queryLen = 0;
+			xlnch.query[0] = 0;
+			XlSearchUpdate();
+			XlPaintSearch();
+			_set_view(XL_VIEW_CARDS);
+		} else {
+			XlHide(-1);
+		}
+		return;
+	}
 	char c = ChitralekhaGetKeyPress(code);
 	if (c == 0x08) {
 		if (xlnch.queryLen == 0)
@@ -463,11 +542,14 @@ static void XlKey(int code) {
 		return;
 	}
 	XlSearchUpdate();
-	xlnch.view = xlnch.queryLen ? XL_VIEW_LIST : XL_VIEW_TILES;
+	bool wasList = xlnch.view == XL_VIEW_LIST;
+	xlnch.view = xlnch.queryLen ? XL_VIEW_LIST : XL_VIEW_CARDS;
 	xlnch.scrollList = 0;
 	xlnch.hover = _nohit;
+	XlHoverSet(XL_NONE);
 	XlPaintSearch();
-	XlPaintSection();
+	if (wasList != (xlnch.view == XL_VIEW_LIST) || xlnch.view == XL_VIEW_LIST)
+		XlPaintMast();
 	XlPaintView();
 }
 
@@ -489,6 +571,10 @@ static void XlHandleMessage(PostEvent* e) {
 	case DEODHAI_REPLY_KEY_EVENT:
 		XlKey((int)e->dword);
 		break;
+	case TIMER_MESSAGE_CODE: /* minute tick */
+		if (XlVisible())
+			XlPaintClock();
+		break;
 	case XELNCH_MSG_TOGGLE:
 		if (_hidden())
 			XlShow();
@@ -502,10 +588,24 @@ static void XlHandleMessage(PostEvent* e) {
 	case XELNCH_MSG_LIVE_CLEAR:
 		XlLiveHandle(e);
 		break;
-	default: /* TIMER_MESSAGE_CODE, DEODHAI_REPLY_FOCUS_CHANGED, ... */
+	default: /* DEODHAI_REPLY_FOCUS_CHANGED, ... */
 		break;
 	}
 	memset(e, 0, sizeof(PostEvent));
+}
+
+static bool _stepping() {
+	return XlVisible() && (XlHoverAnimating() || XlTickAnimating() || XlFlowAnimating());
+}
+
+static void _step() {
+	uint64_t now = XlNowMs();
+	if (XlHoverAnimating())
+		XlHoverStep(now);
+	if (XlTickAnimating())
+		XlTickStep(now);
+	if (XlFlowAnimating())
+		XlFlowStep(now);
 }
 
 static void XlWinPaint(ChWindow* w) {
@@ -513,9 +613,20 @@ static void XlWinPaint(ChWindow* w) {
 	XlPaintAll(_shown);
 }
 
+/* the masthead links: Controls, Xeneva (when present) and all apps */
+static void _links_init() {
+	//const char* titles[2] = { "Controls", "Xeneva" };
+	xlnch.linkCount = 0;
+	/**for (int i = 0; i < 2; i++) {
+		int ai = XlFindByTitleHash(XelnchHash(titles[i]), titles[i]);
+		if (ai >= 0)
+			xlnch.linkApp[xlnch.linkCount++] = (uint8_t)ai;
+	}**/
+	xlnch.linkApp[xlnch.linkCount++] = XL_NONE;
+}
+
 int main(int argc, char* arv[]) {
 	app = ChitralekhaStartApp(argc, arv);
-	ChFontSetSize(app->baseFont, 12);
 
 	_initpipe = _KeOpenFile((char*)"/pipe/init", FILE_OPEN_READ_ONLY | FILE_OPEN_WRITE);
 	if (_initpipe == -1)
@@ -530,22 +641,26 @@ int main(int argc, char* arv[]) {
 	free(canv);
 
 	memset(&xlnch, 0, sizeof(XlLauncher));
-	xlnch.font = app->baseFont;
+	xlnch.hoverApp = xlnch.hoverPrevApp = XL_NONE;
 	XlMetricsInit(screen_w, screen_h);
+	XlTextInit(app->baseFont);
 
 	XlConfigLoad(XL_CONFIG_FILE);
 	XlIndexBuild();
 	XlListBuild();
 	for (int i = 0; i < xlnch.appCount; i++)
-		XlIconLoad(xlnch.apps[i].icon, xlnch.m.listIcon, xlnch.m.listIcon, &xlnch.apps[i].listIcon);
+		XlIconLoad(xlnch.apps[i].icon, 24, 24, &xlnch.apps[i].small);
 	XlLayoutLoad();
-	for (int i = 0; i < xlnch.pinCount; i++)
-		XlTileEnsure(&xlnch.apps[xlnch.pinOrder[i]]);
-	int b = xlnch.m.power.w / 2;
-	XlIconLoad("/icons/pwoff.bmp", b, b, &xlnch.powerIcon);
-	XlIconLoad("/icons/reboot.bmp", b, b, &xlnch.restartIcon);
-	XlIconTint(&xlnch.powerIcon, XL_WHITE);
-	XlIconTint(&xlnch.restartIcon, XL_WHITE);
+	for (int i = 0; i < xlnch.pinCount; i++) {
+		XlApp* a = &xlnch.apps[xlnch.pinOrder[i]];
+		if (!a->big.px)
+			XlIconLoad(a->icon, 36, 36, &a->big);
+	}
+	_links_init();
+	//XlIconLoad("/icons/pwoff.bmp", 14, 14, &xlnch.powerIcon);
+	//XlIconLoad("/icons/reboot.bmp", 14, 14, &xlnch.restartIcon);
+	//XlIconTint(&xlnch.powerIcon, XL_WHITE);
+	//XlIconTint(&xlnch.restartIcon, XL_WHITE);
 
 	/* "Xeneva Launcher" is how Namdapha finds this window, keep the title */
 	win = ChCreateWindow(app,
@@ -559,18 +674,44 @@ int main(int argc, char* arv[]) {
 	win->ChWinPaint = XlWinPaint;
 	win->info->hide = true;
 	win->info->alpha = false;
+	/* draw straight into the compositor's buffer: the panel is never
+	 * scrolled or composed off screen, so a private full-size copy would
+	 * only double the memory (ChWindowUpdate skips the copy itself) */
+	if (win->canv->buffer != win->buffer) {
+		ChDeAllocateBuffer(win->canv);
+		win->canv->buffer = win->buffer;
+		win->canv->bufferSz = 0;
+	}
 	xlnch.canv = win->canv;
+	XlBufferInit(); /* 32 rows of the panel width for flicker-free repaints */
 
+	XlFlowInit();
 	XlLiveInit();
+#ifndef __XENEVA_UNIKERNEL__
+	/* minute tick for the clock (only painted while visible) */
+	int tid = _KeGetThreadID();
+	_KeCreateTimer(tid, _KE_TIMER_UNDIFINED_MAXCOUNT, _KE_TIMER_UPDATE_ORDER_MINUTE);
+	_KeStartTimer(tid);
+#endif
 	_shown = false;
-	XlPaintAll(false); /* chrome only; the first show swings the tiles in */
+	XlFlowRefresh();
+	XlPaintAll(false); /* chrome only; the first show unrolls the cards */
+
+	_KeProcessTokenAddSelf(PROCESS_TOKEN_LAUNCHER);
 
 	PostEvent e;
 	memset(&e, 0, sizeof(PostEvent));
 	while (1) {
 		int err = _KeFileIoControl(app->postboxfd, POSTBOX_GET_EVENT, &e);
-		XlHandleMessage(&e);
-		if (err == POSTBOX_NO_EVENT)
+		if (e.type)
+			XlHandleMessage(&e);
+		if (err != POSTBOX_NO_EVENT)
+			continue;
+		if (_stepping()) {
+			_step();
+			_KeProcessSleep(16);
+		} else {
 			_KePauseThread();
+		}
 	}
 }

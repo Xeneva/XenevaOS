@@ -63,7 +63,7 @@
 
 /* kernel token slot the launcher registers in. Kernel slots are
  * 0..AURORA_MAX_PROC_TOKEN-1 (50); 0..4 are used by system daemons. */
-#define XELNCH_PROCESS_TOKEN 10
+#define XELNCH_PROCESS_TOKEN PROCESS_TOKEN_LAUNCHER
 
 /* PostEvent.type values handled by XELnch (type is uint8_t; these do not
  * collide with TIMER_MESSAGE_CODE (8) or DEODHAI_* (50..61, 150..174)). */
@@ -106,7 +106,7 @@ static inline int XelnchPost(int postboxfd, PostEvent* e) {
 }
 
 /*
- * XelnchLiveTileUpdate -- push live content to this app's tile
+ * @brief XelnchLiveTileUpdate -- push live content to this app's tile
  * @param postboxfd -- ChitralekhaApp::postboxfd of the caller
  * @param appPath -- path exactly as in /lncher.cnf, e.g. "/audplr.exe"
  * @param layout -- XELNCH_TILE_*

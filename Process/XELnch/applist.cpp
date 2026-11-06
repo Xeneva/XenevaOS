@@ -32,8 +32,8 @@
  *
  * The alphabetical order is built once (O(n log n)). Search re-scores
  * every app per keystroke, O(n * len), and sorts the hits O(k log k).
- * Rows are drawn straight to the canvas: only the rows inside the
- * viewport are touched.
+ * Two columns, reading order left to right. Row lookup is O(1)
+ * arithmetic; a hover change repaints only the previous and the new row.
  */
 
 #include "launcher.h"
@@ -138,81 +138,115 @@ int XlListAt(int i) {
 	return xlnch.queryLen ? xlnch.results[i] : xlnch.listOrder[i];
 }
 
-static int _pin_zone_x() {
-	return xlnch.m.view.x + xlnch.m.view.w - (xlnch.m.cell >= 80 ? 112 : 92);
+static void _row_rect(int i, XlRect* r) {
+	const XlMetrics* m = &xlnch.m;
+	int col = i % m->listCols, line = i / m->listCols;
+	r->x = m->view.x + col * (m->listColW + m->gap);
+	r->y = m->view.y + line * m->listRowH - xlnch.scrollList;
+	r->w = m->listColW;
+	r->h = m->listRowH;
+}
+
+static int _pin_zone(const XlRect* r) {
+	return r->x + r->w - 74;
+}
+
+static void _row_impl(void* arg);
+
+void XlListPaintRow(ChCanvas* c, int i, bool present) {
+	if (present) {
+		XlRect r;
+		_row_rect(i, &r);
+		XlRect clip = r;
+		if (!XlClipRect(c, &clip, &xlnch.m.view))
+			return;
+		XlBuffered(clip.x, clip.y, clip.w, clip.h, _row_impl, &i);
+		return;
+	}
+	_row_impl(&i);
+}
+
+static void _row_impl(void* arg) {
+	int i = *(int*)arg;
+	ChCanvas* c = xlnch.canv;
+	bool present = false;
+	const XlRect* v = &xlnch.m.view;
+	int ai = XlListAt(i);
+	if (ai < 0)
+		return;
+	XlRect r;
+	_row_rect(i, &r);
+	XlRect clip = r;
+	if (!XlClipRect(c, &clip, v))
+		return;
+	XlApp* a = &xlnch.apps[ai];
+	/* row hits carry the list position, so this is O(1) */
+	bool hov = (xlnch.hover.kind == XL_HIT_ROW || xlnch.hover.kind == XL_HIT_ROW_PIN) && xlnch.hover.index == i;
+	XlFill(c, r.x, r.y, r.w, r.h, hov ? XL_HOVER : XL_BG, &clip);
+	int chip = 32;
+	int cy = r.y + (r.h - chip) / 2;
+	XlFill(c, r.x + 6, cy, chip, chip, XlTileColor(a->color), &clip);
+	if (a->color == XL_COL_IVORY)
+		XlFrame(c, r.x + 6, cy, chip, chip, 1, XL_EDGE, &clip);
+	XlIconDraw(c, &a->small, r.x + 6 + (chip - a->small.w) / 2, cy + (chip - a->small.h) / 2, 255, &clip);
+	char buf[XL_TITLE_MAX + 4];
+	int tx = r.x + 6 + chip + 14;
+	XlTextFit(XL_GS_MID, a->title, _pin_zone(&r) - tx - 6, buf, sizeof(buf));
+	XlText(c, XL_GS_MID, buf, tx, r.y + r.h / 2 + 6, XL_INK, 255, &clip);
+	if (hov) {
+		const char* act = a->pinned ? "unpin" : "pin";
+		int aw = XlTextWidth(XL_GS_BODY, act);
+		uint32_t ac = xlnch.hover.kind == XL_HIT_ROW_PIN ? XL_RED_DEEP : XL_RED;
+		int ax = r.x + r.w - 12 - aw;
+		XlText(c, XL_GS_BODY, act, ax, r.y + r.h / 2 + 5, ac, 255, &clip);
+		if (xlnch.hover.kind == XL_HIT_ROW_PIN)
+			XlFill(c, ax, r.y + r.h / 2 + 8, aw, 1, ac, &clip);
+	} else if (a->pinned) {
+		XlLozenge(c, r.x + r.w - 16, r.y + r.h / 2, 3, XL_WEAVE_LINE, &clip);
+	}
+	XlFill(c, tx, r.y + r.h - 1, r.w - (tx - r.x), 1, 0xFFF0E8DC, &clip);
+	if (present)
+		XlPresent(clip.x, clip.y, clip.w, clip.h);
 }
 
 void XlListPaint(ChCanvas* c) {
 	const XlMetrics* m = &xlnch.m;
 	const XlRect* v = &m->view;
-	ChFont* f = xlnch.font;
 	XlFill(c, v->x, v->y, v->w, v->h, XL_BG, NULL);
 	int count = XlListCount();
 	if (count == 0) {
-		if (f) {
-			ChFontSetSize(f, m->textSize);
-			ChFontDrawText(c, f, (char*)"no apps match", v->x + 8, v->y + 30, m->textSize, XL_INK_SOFT);
-		}
+		XlText(c, XL_GS_MID, "nothing matches", v->x + 6, v->y + 30, XL_INK_SOFT, 255, v);
 		return;
 	}
-	int first = xlnch.scrollList / m->listRowH;
+	/* only the rows inside the viewport */
+	int first = (xlnch.scrollList / m->listRowH) * m->listCols;
 	for (int i = first; i < count; i++) {
-		int y = v->y + i * m->listRowH - xlnch.scrollList;
-		if (y >= v->y + v->h)
+		XlRect r;
+		_row_rect(i, &r);
+		if (r.y >= v->y + v->h)
 			break;
-		int ai = XlListAt(i);
-		XlApp* a = &xlnch.apps[ai];
-		bool hov = (xlnch.hover.kind == XL_HIT_ROW || xlnch.hover.kind == XL_HIT_ROW_PIN) &&
-				   xlnch.hover.index == ai;
-		if (hov)
-			XlFill(c, v->x, y, v->w, m->listRowH, XL_IVORY, v);
-		/* colour chip in the app's tile colour, then its icon */
-		int chip = m->listIcon + 8;
-		int cy = y + (m->listRowH - chip) / 2;
-		XlFill(c, v->x + 4, cy, chip, chip, XlTileColor(a->color), v);
-		if (a->listIcon.px) {
-			XlRect clip = *v;
-			XlIconDraw(c->buffer,
-					   (int)c->canvasWidth,
-					   (int)c->canvasHeight,
-					   &a->listIcon,
-					   v->x + 4 + (chip - a->listIcon.w) / 2,
-					   cy + (chip - a->listIcon.h) / 2,
-					   &clip);
-		}
-		if (f) {
-			char buf[XL_TITLE_MAX + 4];
-			ChFontSetSize(f, m->textSize);
-			int tx = v->x + 4 + chip + 14;
-			XlFitText(f, a->title, _pin_zone_x() - tx - 8, buf, sizeof(buf));
-			int base = y + m->listRowH / 2 + m->textSize / 2 - 2;
-			if (base < v->y + v->h && base - m->textSize > v->y - 4)
-				ChFontDrawText(c, f, buf, tx, base, m->textSize, XL_INK);
-			if (hov) {
-				const char* act = a->pinned ? "unpin" : "pin to start";
-				ChFontSetSize(f, m->smallSize + 1);
-				int aw = (int)ChFontGetWidth(f, (char*)act);
-				uint32_t ac = xlnch.hover.kind == XL_HIT_ROW_PIN ? XL_RED_DEEP : XL_RED;
-				if (base < v->y + v->h)
-					ChFontDrawText(c, f, (char*)act, v->x + v->w - 10 - aw, base, m->smallSize + 1, ac);
-			} else if (a->pinned) {
-				XlFill(c, v->x + v->w - 16, y + m->listRowH / 2 - 3, 6, 6, XL_WEAVE_LINE, v);
-			}
-		}
+		XlListPaintRow(c, i, false);
 	}
 }
 
-XlHit XlListHit(int vx, int vy) {
+/* O(1): the row is pure arithmetic */
+XlHit XlListHit(int lx, int ly) {
 	XlHit h = { XL_HIT_NONE, 0 };
 	const XlMetrics* m = &xlnch.m;
 	const XlRect* v = &m->view;
-	if (vx < v->x || vy < v->y || vx >= v->x + v->w || vy >= v->y + v->h)
+	if (lx < v->x || ly < v->y || lx >= v->x + v->w || ly >= v->y + v->h)
 		return h;
-	int i = (vy - v->y + xlnch.scrollList) / m->listRowH;
+	int col = (lx - v->x) / (m->listColW + m->gap);
+	if (col >= m->listCols || (lx - v->x) - col * (m->listColW + m->gap) >= m->listColW)
+		return h;
+	int line = (ly - v->y + xlnch.scrollList) / m->listRowH;
+	int i = line * m->listCols + col;
 	int ai = XlListAt(i);
 	if (ai < 0)
 		return h;
-	h.kind = vx >= _pin_zone_x() ? XL_HIT_ROW_PIN : XL_HIT_ROW;
-	h.index = (uint8_t)ai;
+	XlRect r;
+	_row_rect(i, &r);
+	h.kind = lx >= _pin_zone(&r) ? XL_HIT_ROW_PIN : XL_HIT_ROW;
+	h.index = (uint8_t)i; /* list position; XlListAt gives the app */
 	return h;
 }

@@ -3161,7 +3161,7 @@ int main(int argc, char* argv[]) {
 
 	g.app = ChitralekhaStartApp(argc, argv);
 	g.win = ChCreateWindow(g.app,
-						   WINDOW_FLAG_MOVABLE,
+						   WINDOW_FLAG_MOVABLE | WINDOW_FLAG_STYLE_KNOT,
 						   (char*)"Files",
 						   FILES_WIN_X,
 						   FILES_WIN_Y,

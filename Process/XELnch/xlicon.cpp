@@ -284,11 +284,13 @@ void XlIconTint(XlIcon* ico, uint32_t rgb) {
  * @param dst, dstW, dstH -- target surface
  * @param clip -- optional clip in target coordinates
  */
-void XlIconDraw(uint32_t* dst, int dstW, int dstH, const XlIcon* ico, int x, int y, const XlRect* clip) {
-	if (!dst || !ico || !ico->px)
+void XlIconDraw(ChCanvas* c, const XlIcon* ico, int x, int y, uint32_t alpha, const XlRect* clip) {
+	if (!c || !c->buffer || !ico || !ico->px || !alpha)
 		return;
+	uint32_t* dst = c->buffer;
+	int dstW = (int)c->canvasWidth, dstH = (int)c->canvasHeight;
 	int x0 = x, y0 = y, x1 = x + ico->w, y1 = y + ico->h;
-	int cx0 = 0, cy0 = 0, cx1 = dstW, cy1 = dstH;
+	int cx0 = 0, cy0 = xlOriginY, cx1 = dstW, cy1 = xlOriginY + dstH;
 	if (clip) {
 		if (clip->x > cx0)
 			cx0 = clip->x;
@@ -309,9 +311,11 @@ void XlIconDraw(uint32_t* dst, int dstW, int dstH, const XlIcon* ico, int x, int
 		y1 = cy1;
 	for (int j = y0; j < y1; j++) {
 		const uint32_t* s = ico->px + (size_t)(j - y) * ico->w + (x0 - x);
-		uint32_t* d = dst + (size_t)j * dstW + x0;
+		uint32_t* d = dst + (size_t)(j - xlOriginY) * dstW + x0;
 		for (int i = x0; i < x1; i++, s++, d++) {
 			uint32_t a = *s >> 24;
+			if (alpha < 255)
+				a = (a * alpha + 128) >> 8;
 			if (a)
 				*d = XlBlend(*d, *s, a);
 		}

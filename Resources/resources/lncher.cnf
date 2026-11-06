@@ -2,92 +2,133 @@
 [Icon]/icons/medial.bmp|
 [Param]Null|
 [App]/audplr.exe|
-[Size]M|
-[Color]red}
+[Size]L|
+[Color]red|
+[Name]accent|
+[Kicker]LISTEN|
+[Deck]music, played your way}
 
 {[Title]Files|
 [Icon]/icons/filel.bmp|
 [Param]Null|
 [App]/file.exe|
-[Size]W|
-[Color]muga}
+[Size]M|
+[Color]muga|
+[Name]files|
+[Kicker]KEEP|
+[Deck]everything you keep}
 
 {[Title]NetSurf|
 [Icon]/icons/netsrfl.bmp|
 [Param]Null|
 [App]/netsurf.exe|
 [Size]S|
-[Color]ivory}
+[Color]ivory|
+[Name]netsurf|
+[Kicker]BROWSE|
+[Deck]the open web}
 
 {[Title]Calendar|
 [Icon]/icons/calndrl.bmp|
 [Param]Null|
 [App]/calendr.exe|
-[Size]S|
-[Color]deep}
+[Size]M|
+[Color]red|
+[Name]calendar|
+[Kicker]PLAN|
+[Deck]days, dates, plans}
 
 {[Title]XENotes|
 [Icon]/icons/notel.bmp|
 [Param]Null|
 [App]/xenotes.exe|
 [Size]W|
-[Color]ink}
+[Color]ink|
+[Name]notes|
+[Kicker]WRITE|
+[Deck]quick notes}
 
 {[Title]Xeneva Terminal|
 [Icon]/icons/terml.bmp|
 [Param]Null|
 [App]/term.exe|
 [Size]S|
-[Color]ink}
+[Color]ink|
+[Name]terminal|
+[Kicker]SHELL|
+[Deck]the shell}
 
 {[Title]Calculator|
 [Icon]/icons/calcl.bmp|
 [Param]Null|
 [App]/calc.exe|
 [Size]S|
-[Color]ivory}
+[Color]ivory|
+[Name]calculator|
+[Kicker]COUNT|
+[Deck]numbers}
 
 {[Title]Glimpse|
 [Icon]/icons/gliml.bmp|
 [Param]Null|
 [App]/glimpse.exe|
 [Size]M|
-[Color]mugadeep}
+[Color]mugadeep|
+[Name]glimpse|
+[Kicker]SEE|
+[Deck]photos and pictures}
 
 {[Title]PlayVerse|
 [Icon]/icons/knplayl.bmp|
 [Param]Null|
 [App]/knplay.exe|
 [Size]W|
-[Color]deep}
+[Color]deep|
+[Name]playverse|
+[Kicker]PLAY|
+[Deck]games}
 
 {[Title]Doom|
 [Icon]/icons/dooml.bmp|
 [Param]Null|
 [App]/doom.exe|
 [Size]W|
-[Color]ink}
+[Color]ink|
+[Name]doom|
+[Kicker]PLAY|
+[Deck]the classic}
 
 {[Title]Store|
 [Icon]/icons/plystrl.bmp|
 [Param]android|
 [App]/ctrl.exe|
 [Size]S|
-[Color]muga}
+[Color]muga|
+[Name]store|
+[Kicker]GET|
+[Deck]get more apps}
 
 {[Title]Controls|
 [Icon]/icons/gearl.bmp|
 [Param]default|
 [App]/ctrl.exe|
 [Size]S|
-[Color]red}
+[Pin]0|
+[Color]red|
+[Name]controls|
+[Kicker]TUNE|
+[Deck]settings}
 
 {[Title]Xeneva|
 [Icon]/icons/xeabtl.bmp|
 [Param]about|
 [App]/ctrl.exe|
 [Size]W|
-[Color]red}
+[Pin]0|
+[Color]red|
+[Name]xeneva|
+[Kicker]ABOUT|
+[Deck]about this system}
 
 {[Title]XEPaints|
 [Icon]/icons/paintl.bmp|
@@ -95,7 +136,10 @@
 [App]/xepaints.exe|
 [Size]S|
 [Pin]0|
-[Color]ivory}
+[Color]ivory|
+[Name]paints|
+[Kicker]DRAW|
+[Deck]sketch and paint}
 
 {[Title]XESheets|
 [Icon]/icons/sheetl.bmp|
@@ -103,7 +147,10 @@
 [App]/xesheets.exe|
 [Size]S|
 [Pin]0|
-[Color]ivory}
+[Color]ivory|
+[Name]sheets|
+[Kicker]TALLY|
+[Deck]rows and sums}
 
 {[Title]Solitaire|
 [Icon]/icons/solitrl.bmp|
@@ -111,4 +158,7 @@
 [App]/solitr.exe|
 [Size]S|
 [Pin]0|
-[Color]ink>
+[Color]ink|
+[Name]solitaire|
+[Kicker]PLAY|
+[Deck]one more round>

@@ -237,7 +237,11 @@ void NamdaphaGetOnlineTime() {
 void NamdaphaGetYMD(uint32_t* year, uint32_t* month, uint32_t* day, int32_t tz_offset) {
 	int64_t sec_, nsec_;
 	_KeGetWalltime(&sec_, &nsec_);
-	//sec_ += tz_offset;
+	/* the wall clock is UTC (NamdaphaGetWallTime adds the zone too): without
+	 * this the date lagged a day from 00:00 to 05:30 IST */
+	sec_ += tz_offset;
+	if (sec_ < 0)
+		sec_ = 0;
 
 	int64_t days = (int64_t)sec_ / 86400;
 	uint32_t secs_of_day = sec_ % 86400;

@@ -35,6 +35,8 @@
 
 void ChSidebarPaint(ChWidget* widget, ChWindow* win);
 void ChSidebarMouseEvent(ChWidget* wid, ChWindow* win, int mx, int my, int button);
+/* flatsidebar.cpp */
+void ChSidebarFlatDrawRow(ChSidebar* sb, ChWindow* win, int sIdx, int iIdx, int rowY, int drawY, int drawH);
 /**
  * @brief ChSidebarCreate -- create a new sidebar
  * @param x -- x location of the sidebar
@@ -250,34 +252,38 @@ _sidebar_draw_single_row_(ChSidebar* sb, ChWindow* win, int sIdx, int iIdx, ChRe
 	if (drawH <= 0)
 		return false;
 
-	uint32_t row_col = sb->bgColor;
-	if (item->selected)
-		row_col = sb->selectedColor;
-	else if (sIdx == sb->hoverSectionIdx && iIdx == sb->hoverItemIdx)
-		row_col = sb->hoverColor;
+	if (sb->styleFlags & CH_SIDEBAR_FLAT) {
+		ChSidebarFlatDrawRow(sb, win, sIdx, iIdx, curY, drawY, drawH);
+	} else {
+		uint32_t row_col = sb->bgColor;
+		if (item->selected)
+			row_col = sb->selectedColor;
+		else if (sIdx == sb->hoverSectionIdx && iIdx == sb->hoverItemIdx)
+			row_col = sb->hoverColor;
 
-	ChDrawRect(win->canv, sb->base.x, drawY, sb->base.w, drawH, row_col);
+		ChDrawRect(win->canv, sb->base.x, drawY, sb->base.w, drawH, row_col);
 
-	if (curY >= sb->base.y) {
-		ChRect rowClip;
-		rowClip.x = sb->base.x;
-		rowClip.y = drawY;
-		rowClip.w = sb->base.w;
-		rowClip.h = drawH;
+		if (curY >= sb->base.y) {
+			ChRect rowClip;
+			rowClip.x = sb->base.x;
+			rowClip.y = drawY;
+			rowClip.w = sb->base.w;
+			rowClip.h = drawH;
 
-		int textX = sb->base.x + SIDEBAR_INDENT;
+			int textX = sb->base.x + SIDEBAR_INDENT;
 
-		if (item->icon) {
-			int iconY = curY + (SIDEBAR_ROW_HEIGHT - item->icon->image.height) / 2;
-			ChDrawIconClipped(win->canv, item->icon, textX, iconY, &rowClip);
-			textX += item->icon->image.width + 8;
+			if (item->icon) {
+				int iconY = curY + (SIDEBAR_ROW_HEIGHT - item->icon->image.height) / 2;
+				ChDrawIconClipped(win->canv, item->icon, textX, iconY, &rowClip);
+				textX += item->icon->image.width + 8;
+			}
+
+			uint32_t textCol = item->selected ? sb->selectedTextColor : sb->textColor;
+			int baseY = _sidebar_baseline_y(curY, SIDEBAR_ROW_HEIGHT, 13);
+			ChFontSetSize(win->app->baseFont, 13);
+			ChFontDrawTextClipped(
+				win->canv, win->app->baseFont, item->label, textX, baseY, textCol, &rowClip);
 		}
-
-		uint32_t textCol = item->selected ? sb->selectedTextColor : sb->textColor;
-		int baseY = _sidebar_baseline_y(curY, SIDEBAR_ROW_HEIGHT, 13);
-		ChFontSetSize(win->app->baseFont, 13);
-		ChFontDrawTextClipped(
-			win->canv, win->app->baseFont, item->label, textX, baseY, textCol, &rowClip);
 	}
 
 	if (out_rect) {
@@ -313,17 +319,20 @@ void ChSidebarMouseEvent(ChWidget* wid, ChWindow* win, int mx, int my, int butto
 	int curY = sb->base.y - sb->scrollOfsetY;
 	int hitSection = -1, hitItem = -1;
 
+	/* rows have a fixed height: one division per section finds the row,
+	 * O(sections) instead of O(rows) */
 	for (int s = 0; s < sb->sectionCount; s++) {
 		ChSidebarSection* sec = &sb->sections[s];
 		curY += SIDEBAR_HEADER;
-
-		for (int i = 0; i < sec->itemCount; i++) {
-			if (my >= curY && my < curY + SIDEBAR_ROW_HEIGHT) {
-				hitSection = s;
-				hitItem = i;
-			}
-			curY += SIDEBAR_ROW_HEIGHT;
+		int span = sec->itemCount * SIDEBAR_ROW_HEIGHT;
+		if (my >= curY && my < curY + span) {
+			hitSection = s;
+			hitItem = (my - curY) / SIDEBAR_ROW_HEIGHT;
+			break;
 		}
+		if (my < curY)
+			break; /* on a header */
+		curY += span;
 	}
 
 	if (button == 0) {

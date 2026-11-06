@@ -45,6 +45,17 @@
  * rectangle per frame, at ~30 fps. The engine gives the CPU away for a few
  * ms after every device write; that window is enough for a frame.
  *
+ * Launcher: while a song plays, its title / artist / progress go to the
+ * XELnch "accent" tile (livetile.h): once per second of playback, at once on
+ * a track change or pause, and the tile is cleared when playback stops or
+ * the window closes.
+ *
+ * Album art: the ID3 tag walk that reads title / artist / album also notes
+ * where the first picture frame is. A baseline JPEG there is decoded once per
+ * track (nanojpg.h) and kept only as the square the now-playing page shows,
+ * area-averaged to its exact size; the decoder's buffers are freed at once.
+ * Anything else (PNG, progressive JPEG, no picture) keeps the coloured tile.
+ *
  * Launch: "accent /path/song.mp3" (any argv slot -- static images see the
  * arguments as passed, dynamic ones get the exe path prepended by xeldr)
  * opens the song's folder as the library and starts playing it.
@@ -65,6 +76,8 @@
 #include <widgets/base.h>
 #include <widgets/window.h>
 #include <widgets/layout/border_layout.h>
+#include <livetile.h>
+#include <nanojpg.h>
 
 #define MINIMP3_IMPLEMENTATION
 #include "engine.h"
@@ -102,6 +115,11 @@
 
 #define AC_NAME_MAX 32
 #define AC_TAG_MAX	64
+
+/* the launcher finds the tile by this path: it must equal [App] in lncher.cnf */
+#define AC_LAUNCHER_PATH "/audplr.exe"
+/* album art larger than this is not loaded (a 300 px square needs far less) */
+#define AC_ART_MAX_BYTES (2u * 1024u * 1024u)
 
 /* ------------------------------------------------------------------------ */
 /*  Palette (Windows 8)                                                     */
@@ -276,6 +294,23 @@ typedef struct _ac_app_ {
 	char tagArtist[AC_TAG_MAX];
 	char tagAlbum[AC_TAG_MAX];
 	char notice[96];
+
+	/* album art: where the picture frame sits (found by AcReadTags), and the
+	 * decoded square, already scaled to the now-playing tile */
+	uint32_t artOff; /* file offset of the picture frame body, 0 = none */
+	uint32_t artLen; /* frame body size */
+	uint8_t artVer;	 /* ID3 major version of that tag */
+	uint8_t artDli;	 /* v2.4 data-length indicator present */
+	bool artTried;	 /* decode attempted for this track at artSize */
+	uint32_t* art;	 /* artSize x artSize ARGB, NULL = draw the tile */
+	int artSize;
+
+	/* launcher live tile: what was last sent, so only changes go out */
+	bool liveShown;
+	int liveCur;
+	bool livePaused;
+	uint32_t liveSec;
+	bool liveHadDur;
 
 	/* now playing */
 	int page;
@@ -920,8 +955,18 @@ static void AcTagText(const uint8_t* p, int n, char* out, int cap) {
 		out[--w] = '\0';
 }
 
+static void AcArtFree(void) {
+	if (g.art)
+		free(g.art);
+	g.art = NULL;
+	g.artSize = 0;
+	g.artTried = false;
+}
+
 static void AcReadTags(const char* path) {
 	g.tagTitle[0] = g.tagArtist[0] = g.tagAlbum[0] = '\0';
+	AcArtFree();
+	g.artOff = g.artLen = 0;
 	if (!AcHasExt(path, "mp3"))
 		return;
 	AcTagReader* r = &g_tag;
@@ -948,7 +993,8 @@ static void AcReadTags(const char* path) {
 		}
 		int hdr = (ver == 2) ? 6 : 10;
 		int found = 0;
-		for (int guard = 0; guard < 96 && found < 3 && p + (uint32_t)hdr <= end; guard++) {
+		for (int guard = 0; guard < 96 && (found < 3 || !g.artOff) && p + (uint32_t)hdr <= end;
+			 guard++) {
 			uint8_t f[10];
 			if (AcTagRead(r, p, f, hdr) != hdr || f[0] == 0)
 				break;
@@ -976,6 +1022,17 @@ static void AcReadTags(const char* path) {
 				else if (!memcmp(f, "TALB", 4))
 					dst = g.tagAlbum;
 			}
+			/* the first picture frame: only its place is noted here, the bytes
+			 * are read when the now-playing page needs them */
+			bool pic = (ver == 2) ? !memcmp(f, "PIC", 3) : !memcmp(f, "APIC", 4);
+			if (pic && !g.artOff && size > 8 && p + (uint32_t)hdr + size <= end) {
+				g.artOff = p + (uint32_t)hdr;
+				g.artLen = size;
+				g.artVer = (uint8_t)ver;
+				g.artDli = (uint8_t)(ver >= 4 && (f[9] & 0x01));
+				if (ver >= 3 && (f[9] & 0x02)) /* unsynchronised frame: not handled */
+					g.artOff = g.artLen = 0;
+			}
 			if (dst && size > 0 && !dst[0]) {
 				uint8_t txt[160];
 				int n = (int)(size < sizeof(txt) ? size : sizeof(txt));
@@ -988,6 +1045,209 @@ static void AcReadTags(const char* path) {
 	}
 	_KeCloseFile(r->fd);
 	r->fd = -1;
+}
+
+/* ------------------------------------------------------------------------ */
+/*  Album art                                                               */
+/* ------------------------------------------------------------------------ */
+
+static void* AcJpgAlloc(uint32_t n) {
+	return malloc(n);
+}
+static void AcJpgFree(void* p) {
+	free(p);
+}
+
+/* skip an ID3 text field (encoding aware); returns false past the end */
+static bool AcSkipText(const uint8_t* b, int n, int* i, int enc) {
+	if (enc == 1 || enc == 2) {
+		while (*i + 1 < n && !(b[*i] == 0 && b[*i + 1] == 0))
+			*i += 2;
+		*i += 2;
+	} else {
+		while (*i < n && b[*i])
+			(*i)++;
+		(*i)++;
+	}
+	return *i <= n;
+}
+
+/*
+ * AcArtBuild -- decode the current track's picture into a size x size
+ * square (centre crop, area average). O(picture pixels) once per track and
+ * size; nothing of the JPEG stays in memory afterwards.
+ */
+static void AcArtBuild(int size) {
+	AcArtFree();
+	g.artTried = true;
+	g.artSize = size;
+	if (!g.artOff || g.cur < 0 || size <= 0 || g.artLen > AC_ART_MAX_BYTES)
+		return;
+	char path[AC_PATH_MAX];
+	AcSongPath(g.cur, path, sizeof(path));
+	AcTagReader* r = &g_tag;
+	r->fd = _KeOpenFile(path, FILE_OPEN_READ_ONLY);
+	if (r->fd < 0)
+		return;
+	XEFileStatus st;
+	memset(&st, 0, sizeof(st));
+	_KeFileStat(r->fd, &st);
+	r->size = (uint32_t)st.size;
+	r->block = -1;
+
+	/* frame header fields: encoding, MIME (or 3-char format), type, text */
+	uint8_t head[256];
+	int hn = AcTagRead(r, g.artOff, head, (int)(g.artLen < sizeof(head) ? g.artLen : sizeof(head)));
+	int i = g.artDli ? 4 : 0;
+	uint32_t imgOff = 0, imgLen = 0;
+	if (hn > i + 4) {
+		int enc = head[i++];
+		bool ok;
+		if (g.artVer == 2) {
+			i += 3;
+			ok = i < hn;
+		} else {
+			ok = AcSkipText(head, hn, &i, 0); /* MIME is always Latin-1 */
+		}
+		if (ok) {
+			i++; /* picture type */
+			if (AcSkipText(head, hn, &i, enc) && (uint32_t)i < g.artLen) {
+				imgOff = g.artOff + (uint32_t)i;
+				imgLen = g.artLen - (uint32_t)i;
+			}
+		}
+	}
+	uint8_t* jpg = NULL;
+	if (imgLen > 4) {
+		jpg = (uint8_t*)malloc(imgLen);
+		if (jpg && AcTagRead(r, imgOff, jpg, (int)imgLen) != (int)imgLen) {
+			free(jpg);
+			jpg = NULL;
+		}
+	}
+	_KeCloseFile(r->fd);
+	r->fd = -1;
+	if (!jpg)
+		return;
+	if (!(jpg[0] == 0xFF && jpg[1] == 0xD8)) { /* PNG and friends: tile stays */
+		free(jpg);
+		return;
+	}
+
+	Jpeg::Decoder* dec = new Jpeg::Decoder(jpg, imgLen, AcJpgAlloc, AcJpgFree);
+	free(jpg); /* the decoder keeps no pointer into it */
+	if (!dec)
+		return;
+	int sw = dec->GetWidth(), sh = dec->GetHeight();
+	const uint8_t* px = dec->GetImage();
+	if (dec->GetResult() != Jpeg::Decoder::OK || sw <= 0 || sh <= 0 || !px) {
+		delete dec;
+		return;
+	}
+	int bpp = dec->IsColor() ? 3 : 1;
+	uint32_t* out = (uint32_t*)malloc((size_t)size * size * 4);
+	if (out) {
+		/* centre square of the picture -> size x size, box filtered */
+		int side = sw < sh ? sw : sh;
+		int ox = (sw - side) / 2, oy = (sh - side) / 2;
+		for (int y = 0; y < size; y++) {
+			int y0 = oy + (y * side) / size, y1 = oy + ((y + 1) * side) / size;
+			if (y1 <= y0)
+				y1 = y0 + 1;
+			for (int x = 0; x < size; x++) {
+				int x0 = ox + (x * side) / size, x1 = ox + ((x + 1) * side) / size;
+				if (x1 <= x0)
+					x1 = x0 + 1;
+				uint32_t sr = 0, sg = 0, sb = 0, n = 0;
+				for (int yy = y0; yy < y1; yy++) {
+					const uint8_t* row = px + ((size_t)yy * sw + x0) * bpp;
+					for (int xx = x0; xx < x1; xx++, row += bpp) {
+						sr += row[0];
+						sg += row[bpp == 3 ? 1 : 0];
+						sb += row[bpp == 3 ? 2 : 0];
+						n++;
+					}
+				}
+				out[(size_t)y * size + x] =
+					0xFF000000 | ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+			}
+		}
+		g.art = out;
+	}
+	delete dec;
+}
+
+/* blit the cached square at (x, y), clipped like every other draw call */
+static void AcArtDraw(int x, int y) {
+	if (!g.art)
+		return;
+	int cx = x, cy = y, cw = g.artSize, ch = g.artSize;
+	if (!AcClipRect(&cx, &cy, &cw, &ch))
+		return;
+	ChCanvas* c = g.win->canv;
+	for (int row = 0; row < ch; row++) {
+		const uint32_t* src = g.art + (size_t)(cy - y + row) * g.artSize + (cx - x);
+		memmove(&c->buffer[(size_t)(cy + row) * c->canvasWidth + cx], src, (size_t)cw * 4);
+	}
+}
+
+/* ------------------------------------------------------------------------ */
+/*  Launcher live tile                                                      */
+/* ------------------------------------------------------------------------ */
+
+static void AcLiveClear(void) {
+	if (!g.liveShown)
+		return;
+	XelnchLiveTileClear(g.app->postboxfd, AC_LAUNCHER_PATH);
+	g.liveShown = false;
+}
+
+static const char* AcTitle(void);
+static bool AcIsPaused(void);
+
+/*
+ * AcLivePublish -- keep the launcher's accent tile in step. Cheap to call
+ * every tick: it only posts when the track, the paused state or the second
+ * changed (one event a second while playing, nothing while paused).
+ */
+static void AcLivePublish(void) {
+	if (g.closing)
+		return;
+	if (g.cur < 0 || g.count == 0 || g.stopped || g.pendingPlay >= 0) {
+		if (g.cur < 0 || g.stopped)
+			AcLiveClear();
+		return;
+	}
+	bool paused = AcIsPaused();
+	uint32_t pos = AcLoad(&g_sh.posMs), dur = AcLoad(&g_sh.durMs);
+	uint32_t sec = pos / 1000;
+	if (g.liveShown && g.liveCur == g.cur && g.livePaused == paused && g.liveSec == sec &&
+		g.liveHadDur == (dur != 0))
+		return;
+
+	char line2[AC_TAG_MAX + 16];
+	const char* who = g.tagArtist[0] ? g.tagArtist : g.tagAlbum;
+	if (paused)
+		snprintf(line2, sizeof(line2), who[0] ? "paused  -  %s" : "paused", who);
+	else
+		AcStrCopy(line2, who, sizeof(line2));
+	uint16_t prog = XELNCH_NO_PROGRESS;
+	if (dur) {
+		uint32_t pm = (uint32_t)(((uint64_t)(pos > dur ? dur : pos) * 1000) / dur);
+		prog = (uint16_t)pm;
+	}
+	XelnchLiveTileUpdate(g.app->postboxfd,
+						 AC_LAUNCHER_PATH,
+						 XELNCH_TILE_NOWPLAYING,
+						 AcTitle(),
+						 line2[0] ? line2 : NULL,
+						 0,
+						 prog);
+	g.liveShown = true;
+	g.liveCur = g.cur;
+	g.livePaused = paused;
+	g.liveSec = sec;
+	g.liveHadDur = dur != 0;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1061,6 +1321,7 @@ static void AcTogglePlay(void) {
 		return;
 	}
 	AcStore(&g_sh.paused, AcIsPaused() ? 0 : 1);
+	AcLivePublish(); /* the tick sleeps while paused: tell the launcher now */
 	AcRepaintAppBar();
 	if (g.page == PAGE_NOW)
 		AcRepaintPages(); /* "now playing" <-> "paused" */
@@ -1732,11 +1993,23 @@ static void AcPaintNow(int ox) {
 	}
 	uint32_t col = AcSongColor(g.cur);
 	if (n->art) {
-		AcFill(n->artR.x + ox, n->artR.y, n->artR.w, n->artR.h, col);
-		AcNotes(n->artR.x + ox + n->artR.w / 2,
-				n->artR.y + n->artR.h / 2 - n->artR.h / 16,
-				n->artR.w / 3,
-				COL_TEXT);
+		/* decoded once per track and tile size (a resize rebuilds it) */
+		if (!g.artTried || g.artSize != n->artR.w)
+			AcArtBuild(n->artR.w);
+		if (g.art) {
+			AcArtDraw(n->artR.x + ox, n->artR.y);
+			/* a dark band keeps the white index readable on any picture */
+			for (int k = 0; k < 30; k++)
+				for (int x = 0; x < n->artR.w; x++)
+					AcBlend(
+						n->artR.x + ox + x, n->artR.y + n->artR.h - 30 + k, 0xFF000000, 30 + k * 4);
+		} else {
+			AcFill(n->artR.x + ox, n->artR.y, n->artR.w, n->artR.h, col);
+			AcNotes(n->artR.x + ox + n->artR.w / 2,
+					n->artR.y + n->artR.h / 2 - n->artR.h / 16,
+					n->artR.w / 3,
+					COL_TEXT);
+		}
 		char idx[32];
 		snprintf(idx, sizeof(idx), "%d / %d", g.cur + 1, g.count);
 		AcText(AcBase(),
@@ -2520,6 +2793,7 @@ static void AcHandleReinitBuffer(int key) {
 static int AcTick(void) {
 	uint64_t now = AcNow();
 	AcServiceEngine();
+	AcLivePublish();
 
 	if (g.anim.type != ANIM_NONE) {
 		AcAnimStep(now);
@@ -2628,6 +2902,10 @@ static void AcOnClose(ChWindow* win) {
 	if (g.closing)
 		return;
 	g.closing = true;
+	if (g.liveShown) {
+		XelnchLiveTileClear(g.app->postboxfd, AC_LAUNCHER_PATH);
+		g.liveShown = false;
+	}
 	/* stop the engine first: it unregisters its DSP (keyed by its thread id)
 	 * so the kernel does not keep a stale player around */
 	AcStore(&g_sh.quit, 1);
@@ -2637,6 +2915,7 @@ static void AcOnClose(ChWindow* win) {
 	free(g.songs);
 	g.songs = NULL;
 	g.count = g.cap = 0;
+	AcArtFree();
 	AcLayoutFree(g.root);
 	g.root = NULL;
 	if (g.light) {
@@ -2672,8 +2951,13 @@ int main(int argc, char* argv[]) {
 	g.shownBtnState = -1;
 
 	g.app = ChitralekhaStartApp(argc, argv);
-	g.win = ChCreateWindow(
-		g.app, WINDOW_FLAG_MOVABLE, (char*)"Accent", AC_WIN_X, AC_WIN_Y, AC_WIN_W, AC_WIN_H);
+	g.win = ChCreateWindow(g.app,
+						   WINDOW_FLAG_MOVABLE | WINDOW_FLAG_STYLE_KNOT,
+						   (char*)"Accent",
+						   AC_WIN_X,
+						   AC_WIN_Y,
+						   AC_WIN_W,
+						   AC_WIN_H);
 	g.win->color = COL_BG;
 	g.win->ChCloseWin = AcOnClose;
 	g.light = ChInitialiseFont((char*)ROBOTO_LIGHT);
@@ -2747,6 +3031,7 @@ int main(int argc, char* argv[]) {
 	ChWindowPaint(g.win);
 	ChWindowBroadcastIcon(g.app, (char*)"/icons/media.bmp");
 
+	AcLivePublish(); /* a song started from the command line */
 	PostEvent e;
 	memset(&e, 0, sizeof(PostEvent));
 	setjmp(g.win->jump);

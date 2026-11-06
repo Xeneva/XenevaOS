@@ -81,17 +81,26 @@ uint32_t XlTileTextColor(int idx) {
 	return _tile_txt[idx];
 }
 
-/* clip (x,y,w,h) to the canvas and optional clip rect; false if empty */
+/* deep red, shaded muga and ink make solid cards; the rest sit on paper */
+bool XlColorIsDark(int idx) {
+	return idx == XL_COL_RED_DEEP || idx == XL_COL_MUGA_DEEP || idx == XL_COL_INK;
+}
+
+int xlOriginY = 0;
+
+/* clip (x,y,w,h) to the canvas and optional clip rect; false if empty.
+ * Coordinates are panel coordinates; the canvas covers the rows
+ * [xlOriginY, xlOriginY + canvasHeight). */
 static bool _clip(ChCanvas* c, int* x, int* y, int* w, int* h, const XlRect* clip) {
 	int x0 = *x, y0 = *y, x1 = *x + *w, y1 = *y + *h;
 	if (x0 < 0)
 		x0 = 0;
-	if (y0 < 0)
-		y0 = 0;
+	if (y0 < xlOriginY)
+		y0 = xlOriginY;
 	if (x1 > (int)c->canvasWidth)
 		x1 = (int)c->canvasWidth;
-	if (y1 > (int)c->canvasHeight)
-		y1 = (int)c->canvasHeight;
+	if (y1 > xlOriginY + (int)c->canvasHeight)
+		y1 = xlOriginY + (int)c->canvasHeight;
 	if (clip) {
 		if (x0 < clip->x)
 			x0 = clip->x;
@@ -111,10 +120,54 @@ static bool _clip(ChCanvas* c, int* x, int* y, int* w, int* h, const XlRect* cli
 	return true;
 }
 
+bool XlClipRect(ChCanvas* c, XlRect* r, const XlRect* clip) {
+	return _clip(c, &r->x, &r->y, &r->w, &r->h, clip);
+}
+
+void XlFillAlpha(ChCanvas* c, int x, int y, int w, int h, uint32_t col, uint32_t a, const XlRect* clip) {
+	if (a >= 255) {
+		XlFill(c, x, y, w, h, col, clip);
+		return;
+	}
+	if (!a || !c || !c->buffer || !_clip(c, &x, &y, &w, &h, clip))
+		return;
+	uint32_t* row = c->buffer + (size_t)(y - xlOriginY) * c->canvasWidth + x;
+	for (int j = 0; j < h; j++, row += c->canvasWidth)
+		for (int i = 0; i < w; i++)
+			row[i] = XlBlend(row[i], col, a);
+}
+
+void XlLozenge(ChCanvas* c, int cx, int cy, int r, uint32_t col, const XlRect* clip) {
+	for (int dy = -r; dy <= r; dy++) {
+		int hw = r - (dy < 0 ? -dy : dy);
+		XlFill(c, cx - hw, cy + dy, 2 * hw + 1, 1, col, clip);
+	}
+}
+
+/*
+ * XlJaapi -- the pointer head: a jaapi (the Assamese sun hat) seen from
+ * above, concentric muga and red rings with a cotton star in the middle.
+ */
+void XlJaapi(ChCanvas* c, int cx, int cy, int r, const XlRect* clip) {
+	int r2o = r * r, r2m = (r - 3) * (r - 3), r2i = (r - 5) * (r - 5);
+	for (int dy = -r; dy <= r; dy++) {
+		for (int dx = -r; dx <= r; dx++) {
+			int d = dx * dx + dy * dy;
+			if (d > r2o)
+				continue;
+			uint32_t col = d > r2m ? XL_MUGA_DEEP : (d > r2i ? XL_MUGA : XL_RED);
+			XlFill(c, cx + dx, cy + dy, 1, 1, col, clip);
+		}
+	}
+	XlLozenge(c, cx, cy, 2, XL_PAPER, clip);
+	XlFill(c, cx - 3, cy, 7, 1, XL_PAPER, clip);
+	XlFill(c, cx, cy - 3, 1, 7, XL_PAPER, clip);
+}
+
 void XlFill(ChCanvas* c, int x, int y, int w, int h, uint32_t col, const XlRect* clip) {
 	if (!c || !c->buffer || !_clip(c, &x, &y, &w, &h, clip))
 		return;
-	uint32_t* row = c->buffer + (size_t)y * c->canvasWidth + x;
+	uint32_t* row = c->buffer + (size_t)(y - xlOriginY) * c->canvasWidth + x;
 	for (int j = 0; j < h; j++, row += c->canvasWidth)
 		for (int i = 0; i < w; i++)
 			row[i] = col;
@@ -176,15 +229,4 @@ void XlGamusaPhulBand(ChCanvas* c, int x, int y, int w) {
 		XlDrawMotif(c, XL_MOTIF_PHUL, px, y + 4, s, XL_WEAVE, &clip);
 		XlDrawMotif(c, XL_MOTIF_LOZENGE, px + 11 * s, y + 6, s, XL_WEAVE, &clip);
 	}
-}
-
-/*
- * XlGamusaBorders -- the red borders along the two long sides, as two
- * fine threads each, inset from the panel edge.
- */
-void XlGamusaBorders(ChCanvas* c, int h, int w) {
-	XlFill(c, 5, 0, 2, h, XL_WEAVE_LINE, NULL);
-	XlFill(c, 9, 0, 1, h, XL_WEAVE, NULL);
-	XlFill(c, w - 7, 0, 2, h, XL_WEAVE_LINE, NULL);
-	XlFill(c, w - 10, 0, 1, h, XL_WEAVE, NULL);
 }

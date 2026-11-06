@@ -124,6 +124,10 @@ void NmButtonMouseEvent(NamdaphaButton* wid, ChWindow* win, int x, int y, int bu
 }
 
 void NmButtonDefaultPaint(NamdaphaButton* button, ChWindow* win) {
+	if (NmGamusa()) {
+		NmGmButtonPaint(button, win);
+		return;
+	}
 	if (button->focused) {
 		ChColorDrawHorizontalGradient(win->canv,
 									  button->x,
@@ -202,12 +206,22 @@ ButtonInfo* NmCreateButtonInfo(char* filename) {
 		return NULL;
 	}
 	XEFileStatus stat;
+	memset(&stat, 0, sizeof(stat));
 	_KeFileStat(fd, &stat);
-
-	btninfo->filename = (char*)malloc(strlen(filename) + 1);
-	memset(btninfo->filename, 0, strlen(filename) + 1);
-	strcpy(btninfo->filename, filename);
+	/* an icon is a few KB; refuse empty or absurd files instead of mapping them */
+	if (stat.size < sizeof(BMP) + sizeof(BMPInfo) || stat.size > (1u << 20)) {
+		_KeCloseFile(fd);
+		free(btninfo);
+		return NULL;
+	}
 	btninfo->fileBuffer = (uint8_t*)_KeMemMap(NULL, stat.size, 0, 0, MEMMAP_NO_FILEDESC, 0);
+	if (!btninfo->fileBuffer) {
+		_KeCloseFile(fd);
+		free(btninfo);
+		return NULL;
+	}
+	btninfo->filename = (char*)malloc(strlen(filename) + 1);
+	strcpy(btninfo->filename, filename);
 	btninfo->iconFd = fd;
 	btninfo->fileSize = stat.size;
 	btninfo->usageCount = 0;
@@ -218,11 +232,15 @@ ButtonInfo* NmCreateButtonInfo(char* filename) {
 * @param btninfo -- Pointer to Button information
 */
 void NmButtonInfoRead(ButtonInfo* btninfo) {
-	if (!btninfo)
+	if (!btninfo || btninfo->iconFd < 0)
 		return;
-	_KeReadFile(btninfo->iconFd, btninfo->fileBuffer, btninfo->fileSize);
+	size_t got = _KeReadFile(btninfo->iconFd, btninfo->fileBuffer, btninfo->fileSize);
+	_KeCloseFile(btninfo->iconFd);
+	btninfo->iconFd = -1;
 
 	uint8_t* buffer = (uint8_t*)btninfo->fileBuffer;
+	if (got < sizeof(BMP) + sizeof(BMPInfo) || buffer[0] != 'B' || buffer[1] != 'M')
+		return; /* imageData stays NULL: nothing is drawn */
 
 	BMP* bmp = (BMP*)buffer;
 	unsigned int offset = bmp->off_bits;
@@ -235,13 +253,36 @@ void NmButtonInfoRead(ButtonInfo* btninfo) {
 	int bpp = 0;
 	memcpy(&bpp, (uint8_t*)info + 14, sizeof(unsigned short));
 
+	/* the pixels must lie inside the file, or the draw loop would read past it */
+	size_t pitch = ((size_t)width * (bpp ? bpp : 32) + 31) / 32 * 4;
+	if (width <= 0 || height <= 0 || width > 1024 || height > 1024 || offset >= got ||
+		pitch * (size_t)height > got - offset)
+		return;
 	void* image_bytes = (void*)(buffer + offset);
 	btninfo->imageData = (uint8_t*)image_bytes;
 	btninfo->iconWidth = width;
 	btninfo->iconHeight = height;
 	btninfo->iconBpp = bpp;
-	_KeCloseFile(btninfo->iconFd);
-	btninfo->iconFd = -1;
+}
+
+/*
+ * NmButtonInfoRelease -- drop one use of an icon; the last use unmaps
+ * the file and frees the record
+ */
+void NmButtonInfoRelease(ButtonInfo* info) {
+	if (!info)
+		return;
+	if (info->usageCount > 1) {
+		info->usageCount--;
+		return;
+	}
+	NmGmIconRelease(info);
+	if (info->iconFd >= 0)
+		_KeCloseFile(info->iconFd);
+	if (info->fileBuffer)
+		_KeMemUnmap(info->fileBuffer, info->fileSize);
+	free(info->filename);
+	free(info);
 }
 
 /*

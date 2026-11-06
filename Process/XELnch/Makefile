@@ -21,8 +21,8 @@ CROSS_COMPILE ?= aarch64-linux-gnu-
 
 INCLUDES = -I../../Libs/XEClib/includes -I../../Libs/XEClib/includes/c++ -I../../BaseHdr -I../../Libs/Chitralekha -I../../Ports/freetype2/include
 
-CPP_SRCS = anim.cpp applist.cpp gamusa.cpp layout.cpp lconfig.cpp livetile.cpp main.cpp \
-           tiles.cpp xlicon.cpp xlui.cpp
+CPP_SRCS = anim.cpp applist.cpp bento.cpp cards.cpp gamusa.cpp lconfig.cpp livetile.cpp \
+           luitflow.cpp main.cpp text.cpp xlicon.cpp xlui.cpp
 S_SRCS = crt_arm64.s
 
 OBJDIR = obj
