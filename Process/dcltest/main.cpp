@@ -60,6 +60,34 @@ static void note(const char* what, int value) {
 	emit(line);
 }
 
+/* fat_find_name -- open a directory and look for one 8.3 name.  Returns 1
+ * when found, 0 when the directory was read but the name is absent, and -1
+ * when the directory could not be opened. */
+static int fat_find_name(const char* path, const char* name, int* entries) {
+	int dfd = _KeOpenDir((char*)path);
+	XEDirectoryEntry ent;
+	int items = 0;
+	int found = 0;
+	if (entries)
+		*entries = 0;
+	if (dfd < 0)
+		return -1;
+	memset(&ent, 0, sizeof ent);
+	while (items < 64) {
+		int code = _KeReadDir(dfd, &ent);
+		if (code == -1 || ent.index == -1)
+			break;
+		items++;
+		if (strcmp(ent.filename, name) == 0)
+			found = 1;
+		memset(ent.filename, 0, sizeof ent.filename);
+	}
+	_KeCloseFile(dfd);
+	if (entries)
+		*entries = items;
+	return found;
+}
+
 /* opendev -- open a node through the real syscall path; the open itself is a
  * check, because that is where mainline's memory_open() per-minor fops swap
  * happens (fileserv calls node->open at Serv/fileserv.c:127). */
@@ -141,7 +169,61 @@ static unsigned int kms_prop_id(int fd, unsigned int obj_id,
 	return 0;
 }
 
-/* ── card2: the vendored virtio-gpu, driven by atomic commits ─────────────
+/* drm_find_card -- find /dev/dri/cardN by the driver name VERSION reports.
+ *
+ * Card numbers are assigned in probe order, and QEMU decides which devices
+ * exist: vkms is always card0, but whether bochs and virtio-gpu are there,
+ * and in which order, is a property of the machine rather than of this
+ * test.  Matching on the driver name keeps every stage independent of that
+ * numbering.  Returns 0 and fills `path` on a match, -1 otherwise.
+ */
+static int drm_find_card(const char* want, char* path, size_t path_len) {
+	static const char* const cards[] = {
+		"/dev/dri/card0", "/dev/dri/card1",
+		"/dev/dri/card2", "/dev/dri/card3",
+	};
+	struct drm_version_arg {
+		int major, minor, patchlevel;
+		size_t name_len;
+		char* name;
+		size_t date_len;
+		char* date;
+		size_t desc_len;
+		char* desc;
+	} ver;
+	char name[32];
+	size_t i, n, want_len = strlen(want);
+
+	for (i = 0; i < sizeof(cards) / sizeof(cards[0]); i++) {
+		int fd = _KeOpenFile((char*)cards[i],
+				     FILE_OPEN_READ_ONLY | FILE_OPEN_WRITE);
+		int rc;
+
+		if (fd < 0)
+			continue;
+
+		memset(&ver, 0, sizeof ver);
+		memset(name, 0, sizeof name);
+		ver.name = name;
+		ver.name_len = sizeof name;
+		rc = _KeFileIoControl(fd, 0xC0406400, &ver);
+		_KeCloseFile(fd);
+		if (rc != 0 || ver.name_len < want_len)
+			continue;
+		if (memcmp(name, want, want_len) != 0)
+			continue;
+
+		n = strlen(cards[i]);
+		if (n >= path_len)
+			n = path_len - 1;
+		memcpy(path, (void*)cards[i], n);
+		path[n] = 0;
+		return 0;
+	}
+	return -1;
+}
+
+/* ── the vendored virtio-gpu, driven by atomic commits ────────────────────
  *
  * The console's boot framebuffer is created by DCL/virtgpu_console.c and
  * committed through the driver's atomic path.  This test reads that live
@@ -151,7 +233,7 @@ static unsigned int kms_prop_id(int fd, unsigned int obj_id,
  * It deliberately does not change the mode: that would blank the console
  * while the test FB is up and is already covered on vkms and bochs.
  */
-static void test_virtgpu_card2(void) {
+static void test_virtgpu_card(const char* path) {
 	struct drm_version_arg {
 		int major, minor, patchlevel;
 		size_t name_len;
@@ -227,8 +309,7 @@ static void test_virtgpu_card2(void) {
 	unsigned int console_fb_id, width = 0, height = 0, p;
 	char cname[32], cdesc[64];
 	const unsigned int pattern = 0x0000BEEFu;
-	int vfd = opendev("/dev/dri/card2",
-			  FILE_OPEN_READ_ONLY | FILE_OPEN_WRITE);
+	int vfd = opendev(path, FILE_OPEN_READ_ONLY | FILE_OPEN_WRITE);
 
 	if (vfd < 0)
 		return;
@@ -240,9 +321,9 @@ static void test_virtgpu_card2(void) {
 	ver.name_len = sizeof cname;
 	ver.desc = cdesc;
 	ver.desc_len = sizeof cdesc;
-	report("drm card2 VERSION",
+	report("drm virtio-gpu VERSION",
 	       _KeFileIoControl(vfd, 0xC0406400, &ver), 0);
-	report("drm card2 name is virtio_gpu",
+	report("drm virtio-gpu name is virtio_gpu",
 	       (int)memcmp(cname, "virtio_gpu", 10), 0);
 
 	/* universal planes + atomic, same caps the other KMS stages set */
@@ -253,18 +334,18 @@ static void test_virtgpu_card2(void) {
 		} scc;
 		scc.capability = 2;
 		scc.value = 1;
-		report("drm card2 universal planes cap",
+		report("drm virtio-gpu universal planes cap",
 		       _KeFileIoControl(vfd, 0x4010640D, &scc), 0);
 		scc.capability = 3;
-		report("drm card2 atomic cap",
+		report("drm virtio-gpu atomic cap",
 		       _KeFileIoControl(vfd, 0x4010640D, &scc), 0);
 	}
 
 	memset(&res, 0, sizeof res);
-	report("drm card2 GETRESOURCES",
+	report("drm virtio-gpu GETRESOURCES",
 	       _KeFileIoControl(vfd, 0xC04064A0, &res), 0);
-	report("drm card2 crtcs", (int)res.count_crtcs, 1);
-	report("drm card2 connectors", (int)res.count_connectors, 1);
+	report("drm virtio-gpu crtcs", (int)res.count_crtcs, 1);
+	report("drm virtio-gpu connectors", (int)res.count_connectors, 1);
 
 	memset(&res, 0, sizeof res);
 	res.crtc_id_ptr = (unsigned long long)(size_t)crtc_ids;
@@ -273,31 +354,31 @@ static void test_virtgpu_card2(void) {
 	res.count_connectors = 4;
 	res.encoder_id_ptr = (unsigned long long)(size_t)enc_ids;
 	res.count_encoders = 4;
-	report("drm card2 GETRESOURCES (ids)",
+	report("drm virtio-gpu GETRESOURCES (ids)",
 	       _KeFileIoControl(vfd, 0xC04064A0, &res), 0);
-	report("drm card2 crtc id", (int)(crtc_ids[0] != 0), 1);
-	report("drm card2 connector id", (int)(conn_ids[0] != 0), 1);
+	report("drm virtio-gpu crtc id", (int)(crtc_ids[0] != 0), 1);
+	report("drm virtio-gpu connector id", (int)(conn_ids[0] != 0), 1);
 
 	memset(&crtc, 0, sizeof crtc);
 	crtc.crtc_id = crtc_ids[0];
-	report("drm card2 GETCRTC",
+	report("drm virtio-gpu GETCRTC",
 	       _KeFileIoControl(vfd, 0xC06864A1, &crtc), 0);
-	report("drm card2 crtc programmed", (int)crtc.mode_valid, 1);
+	report("drm virtio-gpu crtc programmed", (int)crtc.mode_valid, 1);
 	width = crtc.mode.hdisplay;
 	height = crtc.mode.vdisplay;
-	report("drm card2 console mode", (int)(width >= 640 && height >= 480), 1);
+	report("drm virtio-gpu console mode", (int)(width >= 640 && height >= 480), 1);
 
 	pres.plane_id_ptr = (unsigned long long)(size_t)plane_ids;
 	pres.count_planes = 4;
-	report("drm card2 GETPLANERESOURCES",
+	report("drm virtio-gpu GETPLANERESOURCES",
 	       _KeFileIoControl(vfd, 0xC01064B5, &pres), 0);
-	report("drm card2 primary planes", (int)pres.count_planes, 1);
+	report("drm virtio-gpu primary planes", (int)pres.count_planes, 1);
 
 	memset(&pl, 0, sizeof pl);
 	pl.plane_id = plane_ids[0];
-	report("drm card2 GETPLANE",
+	report("drm virtio-gpu GETPLANE",
 	       _KeFileIoControl(vfd, 0xC02064B6, &pl), 0);
-	report("drm card2 console fb bound", (int)(pl.fb_id != 0), 1);
+	report("drm virtio-gpu console fb bound", (int)(pl.fb_id != 0), 1);
 	console_fb_id = pl.fb_id;
 
 	conn_crtc_id = kms_prop_id(vfd, conn_ids[0], DRM_MODE_OBJECT_CONNECTOR,
@@ -314,7 +395,7 @@ static void test_virtgpu_card2(void) {
 	crtc_y = kms_prop_id(vfd, plane_ids[0], DRM_MODE_OBJECT_PLANE, "CRTC_Y");
 	crtc_w = kms_prop_id(vfd, plane_ids[0], DRM_MODE_OBJECT_PLANE, "CRTC_W");
 	crtc_h = kms_prop_id(vfd, plane_ids[0], DRM_MODE_OBJECT_PLANE, "CRTC_H");
-	report("drm card2 atomic property ids",
+	report("drm virtio-gpu atomic property ids",
 	       (int)(conn_crtc_id && plane_fb_id && plane_crtc_id && src_x &&
 		     src_y && src_w && src_h && crtc_x && crtc_y && crtc_w &&
 		     crtc_h), 1);
@@ -323,13 +404,13 @@ static void test_virtgpu_card2(void) {
 	dumb.width = width;
 	dumb.height = height;
 	dumb.bpp = 32;
-	report("drm card2 CREATE_DUMB",
+	report("drm virtio-gpu CREATE_DUMB",
 	       _KeFileIoControl(vfd, 0xC02064B2, &dumb), 0);
-	report("drm card2 dumb pitch", (int)dumb.pitch, (int)width * 4);
+	report("drm virtio-gpu dumb pitch", (int)dumb.pitch, (int)width * 4);
 
 	memset(&map, 0, sizeof map);
 	map.handle = dumb.handle;
-	report("drm card2 MAP_DUMB",
+	report("drm virtio-gpu MAP_DUMB",
 	       _KeFileIoControl(vfd, 0xC01064B3, &map), 0);
 	{
 		volatile unsigned int* pix =
@@ -337,7 +418,7 @@ static void test_virtgpu_card2(void) {
 		unsigned long long words = dumb.size >> 2;
 		for (unsigned long long i = 0; i < words; i++)
 			pix[i] = pattern;
-		report("drm card2 pattern written",
+		report("drm virtio-gpu pattern written",
 		       (int)(pix[0] == pattern), 1);
 	}
 
@@ -347,9 +428,9 @@ static void test_virtgpu_card2(void) {
 	fb.pixel_format = 0x34325258; /* XRGB8888 */
 	fb.handles[0] = dumb.handle;
 	fb.pitches[0] = dumb.pitch;
-	report("drm card2 ADDFB2",
+	report("drm virtio-gpu ADDFB2",
 	       _KeFileIoControl(vfd, 0xC06864B8, &fb), 0);
-	report("drm card2 fb id", (int)(fb.fb_id != 0), 1);
+	report("drm virtio-gpu fb id", (int)(fb.fb_id != 0), 1);
 
 	a_objs[0] = conn_ids[0];
 	a_counts[0] = 1;
@@ -386,17 +467,17 @@ static void test_virtgpu_card2(void) {
 	at.props_ptr = (unsigned long long)(size_t)a_props;
 	at.prop_values_ptr = (unsigned long long)(size_t)a_vals;
 	at.flags = 0x100 | 0x400; /* TEST_ONLY | ALLOW_MODESET */
-	report("drm card2 atomic TEST_ONLY",
+	report("drm virtio-gpu atomic TEST_ONLY",
 	       _KeFileIoControl(vfd, 0xC03864BC, &at), 0);
 	at.flags = 0x400;
-	report("drm card2 atomic commit",
+	report("drm virtio-gpu atomic commit",
 	       _KeFileIoControl(vfd, 0xC03864BC, &at), 0);
 
 	memset(&pl, 0, sizeof pl);
 	pl.plane_id = plane_ids[0];
-	report("drm card2 GETPLANE (test fb)",
+	report("drm virtio-gpu GETPLANE (test fb)",
 	       _KeFileIoControl(vfd, 0xC02064B6, &pl), 0);
-	report("drm card2 test fb active", (int)(pl.fb_id == fb.fb_id), 1);
+	report("drm virtio-gpu test fb active", (int)(pl.fb_id == fb.fb_id), 1);
 
 	/* The bochs watcher captures just before this stage; give its monitor
 	 * connection time to close before the gpu0 watcher connects. */
@@ -414,19 +495,19 @@ static void test_virtgpu_card2(void) {
 	at.props_ptr = (unsigned long long)(size_t)a_props;
 	at.prop_values_ptr = (unsigned long long)(size_t)a_vals;
 	at.flags = 0x400;
-	report("drm card2 console fb restore",
+	report("drm virtio-gpu console fb restore",
 	       _KeFileIoControl(vfd, 0xC03864BC, &at), 0);
 
 	memset(&pl, 0, sizeof pl);
 	pl.plane_id = plane_ids[0];
-	report("drm card2 GETPLANE (restored)",
+	report("drm virtio-gpu GETPLANE (restored)",
 	       _KeFileIoControl(vfd, 0xC02064B6, &pl), 0);
-	report("drm card2 console fb active",
+	report("drm virtio-gpu console fb active",
 	       (int)(pl.fb_id == console_fb_id), 1);
 
 	{
 		unsigned int rmfb_id = fb.fb_id;
-		report("drm card2 RMFB",
+		report("drm virtio-gpu RMFB",
 		       _KeFileIoControl(vfd, 0xC00464AF, &rmfb_id), 0);
 	}
 	{
@@ -434,7 +515,7 @@ static void test_virtgpu_card2(void) {
 			unsigned int handle;
 		} dd;
 		dd.handle = dumb.handle;
-		report("drm card2 DESTROY_DUMB",
+		report("drm virtio-gpu DESTROY_DUMB",
 		       _KeFileIoControl(vfd, 0xC00864B4, &dd), 0);
 	}
 
@@ -1537,12 +1618,17 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	/* ── stage 5: /dev/dri/card1 -- the vendored tiny/bochs.c ─────────────
+	/* ── stage 5: the vendored tiny/bochs.c ───────────────────────────────
 	 *
-	 * The second DRM device is this tree's first PCI driver: no virtio
-	 * rings anywhere, matched by the DCL PCI fabric (pci_shim.c) against
-	 * QEMU's bochs-display (1234:1111) and bound at 0000:00:04.0.  Every
-	 * uapi shape below mirrors the vkms block above -- same two-pass
+	 * When QEMU exposes a bochs-display, this is the tree's first PCI
+	 * driver: no virtio rings anywhere, matched by the DCL PCI fabric
+	 * (pci_shim.c) against 1234:1111 and bound at 0000:00:04.0.  The
+	 * card is found by the name its DRM VERSION reports, not by index:
+	 * whether bochs is present, and where it lands, is QEMU's decision.
+	 * Current upstream does not add a bochs-display by default, so this
+	 * stage skips -- and says so -- unless the machine provides one.
+	 *
+	 * Every uapi shape below mirrors the vkms block above -- same two-pass
 	 * ioctls, same property names -- but the half userspace cannot see is
 	 * the point: the commit's plane update memcpys the shadow buffer into
 	 * the device's BAR0, which QEMU scans out.  The real pixel proof is
@@ -1663,8 +1749,18 @@ int main(int argc, char* argv[]) {
 		unsigned int crtc_x, crtc_y, crtc_w, crtc_h;
 		unsigned int bw = 0, bh = 0, k, pick = 0;
 		char bname[32], bdesc[64];
-		int bfd = opendev("/dev/dri/card1",
-				  FILE_OPEN_READ_ONLY | FILE_OPEN_WRITE);
+		char bpath[32];
+		int bfd = -1;
+
+		if (drm_find_card("bochs-drm", bpath, sizeof bpath) == 0) {
+			char line[96];
+			sprintf(line, "[dcltest] info bochs at %s\n", bpath);
+			emit(line);
+			bfd = opendev(bpath,
+				      FILE_OPEN_READ_ONLY | FILE_OPEN_WRITE);
+		} else {
+			emit("[dcltest] info bochs-drm absent, stage 5 skipped\n");
+		}
 
 		if (bfd >= 0) {
 			/* identity first: this is the PCI device's driver,
@@ -1676,29 +1772,29 @@ int main(int argc, char* argv[]) {
 			ver.name_len = sizeof bname;
 			ver.desc = bdesc;
 			ver.desc_len = sizeof bdesc;
-			report("drm card1 VERSION",
+			report("drm bochs VERSION",
 			       _KeFileIoControl(bfd, 0xC0406400, &ver), 0);
-			report("drm card1 version major", ver.major, 1);
-			report("drm card1 name is bochs-drm",
+			report("drm bochs version major", ver.major, 1);
+			report("drm bochs name is bochs-drm",
 			       (int)memcmp(bname, "bochs-drm", 9), 0);
-			report("drm card1 desc length", (int)ver.desc_len,
+			report("drm bochs desc length", (int)ver.desc_len,
 			       (int)strlen("bochs dispi vga interface (qemu stdvga)"));
 
 			memset(&cap, 0, sizeof cap);
 			cap.capability = 0x1;	/* DRM_CAP_DUMB_BUFFER */
-			report("drm card1 GET_CAP",
+			report("drm bochs GET_CAP",
 			       _KeFileIoControl(bfd, 0xC010640C, &cap), 0);
-			report("drm card1 dumb-buffer cap", (int)cap.value, 1);
+			report("drm bochs dumb-buffer cap", (int)cap.value, 1);
 
 			/* The caps the vkms block sets too: universal planes
 			 * makes the primary plane listable, atomic makes the
 			 * commit legal.  Both are _IOW('d', 0x0D). */
 			scc.capability = 2;
 			scc.value = 1;
-			report("drm card1 universal planes cap",
+			report("drm bochs universal planes cap",
 			       _KeFileIoControl(bfd, 0x4010640D, &scc), 0);
 			scc.capability = 3;
-			report("drm card1 atomic cap",
+			report("drm bochs atomic cap",
 			       _KeFileIoControl(bfd, 0x4010640D, &scc), 0);
 
 			/* bochs registers one CRTC, one encoder and one
@@ -1707,13 +1803,13 @@ int main(int argc, char* argv[]) {
 			 * status as always connected -- so it is, and the
 			 * first GETCONNECTOR is what builds the mode list. */
 			memset(&res, 0, sizeof res);
-			report("drm card1 GETRESOURCES",
+			report("drm bochs GETRESOURCES",
 			       _KeFileIoControl(bfd, 0xC04064A0, &res), 0);
-			report("drm card1 crtcs", (int)res.count_crtcs, 1);
-			report("drm card1 connectors",
+			report("drm bochs crtcs", (int)res.count_crtcs, 1);
+			report("drm bochs connectors",
 			       (int)res.count_connectors, 1);
-			report("drm card1 encoders", (int)res.count_encoders, 1);
-			report("drm card1 fbs", (int)res.count_fbs, 0);
+			report("drm bochs encoders", (int)res.count_encoders, 1);
+			report("drm bochs fbs", (int)res.count_fbs, 0);
 
 			res.crtc_id_ptr = (unsigned long long)(size_t)crtc_ids;
 			res.count_crtcs = 4;
@@ -1723,22 +1819,22 @@ int main(int argc, char* argv[]) {
 			res.encoder_id_ptr =
 				(unsigned long long)(size_t)enc_ids;
 			res.count_encoders = 4;
-			report("drm card1 GETRESOURCES (ids)",
+			report("drm bochs GETRESOURCES (ids)",
 			       _KeFileIoControl(bfd, 0xC04064A0, &res), 0);
-			report("drm card1 crtc id",
+			report("drm bochs crtc id",
 			       (int)(crtc_ids[0] != 0), 1);
-			report("drm card1 connector id",
+			report("drm bochs connector id",
 			       (int)(conn_ids[0] != 0), 1);
-			report("drm card1 encoder id",
+			report("drm bochs encoder id",
 			       (int)(enc_ids[0] != 0), 1);
 
 			memset(&conn, 0, sizeof conn);
 			conn.connector_id = conn_ids[0];
-			report("drm card1 GETCONNECTOR (counts)",
+			report("drm bochs GETCONNECTOR (counts)",
 			       _KeFileIoControl(bfd, 0xC05064A7, &conn), 0);
-			report("drm card1 connector connected",
+			report("drm bochs connector connected",
 			       (int)(conn.connection == 1), 1);
-			report("drm card1 connector has modes",
+			report("drm bochs connector has modes",
 			       (int)(conn.count_modes > 0), 1);
 
 			/* the list pass: 128 slots are more than enough for
@@ -1752,9 +1848,9 @@ int main(int argc, char* argv[]) {
 			conn.count_modes = 128;
 			conn.encoders_ptr = (unsigned long long)(size_t)enc_ids;
 			conn.count_encoders = 4;
-			report("drm card1 GETCONNECTOR (modes)",
+			report("drm bochs GETCONNECTOR (modes)",
 			       _KeFileIoControl(bfd, 0xC05064A7, &conn), 0);
-			report("drm card1 connector mode count",
+			report("drm bochs connector mode count",
 			       (int)(conn.count_modes >= 1 &&
 				     conn.count_modes <= 128), 1);
 
@@ -1772,27 +1868,27 @@ int main(int argc, char* argv[]) {
 			bh = modes[pick].vdisplay;
 			note("bochs mode width", (int)bw);
 			note("bochs mode height", (int)bh);
-			report("drm card1 mode picked",
+			report("drm bochs mode picked",
 			       (int)(bw > 0 && bh > 0), 1);
 			/* the bound bochs's mode_valid enforces: the mode
 			 * has to fit the 16 MiB BAR0 at 32 bpp. */
-			report("drm card1 mode fits vram",
+			report("drm bochs mode fits vram",
 			       (int)((unsigned long long)bw * bh * 4 <=
 				     16ULL * 1024 * 1024), 1);
 
 			pres.plane_id_ptr =
 				(unsigned long long)(size_t)plane_ids;
 			pres.count_planes = 4;
-			report("drm card1 GETPLANERESOURCES",
+			report("drm bochs GETPLANERESOURCES",
 			       _KeFileIoControl(bfd, 0xC01064B5, &pres), 0);
-			report("drm card1 primary planes",
+			report("drm bochs primary planes",
 			       (int)pres.count_planes, 1);
 
 			memset(&pl, 0, sizeof pl);
 			pl.plane_id = plane_ids[0];
-			report("drm card1 GETPLANE",
+			report("drm bochs GETPLANE",
 			       _KeFileIoControl(bfd, 0xC02064B6, &pl), 0);
-			report("drm card1 plane on crtc 0",
+			report("drm bochs plane on crtc 0",
 			       (int)((pl.possible_crtcs & 1) == 1), 1);
 
 			conn_crtc_id = kms_prop_id(bfd, conn_ids[0],
@@ -1826,7 +1922,7 @@ int main(int argc, char* argv[]) {
 					     DRM_MODE_OBJECT_PLANE, "CRTC_W");
 			crtc_h = kms_prop_id(bfd, plane_ids[0],
 					     DRM_MODE_OBJECT_PLANE, "CRTC_H");
-			report("drm card1 atomic property ids",
+			report("drm bochs atomic property ids",
 			       (int)(conn_crtc_id && crtc_mode_id &&
 				     crtc_active && plane_fb_id &&
 				     plane_crtc_id && src_x && src_y &&
@@ -1837,22 +1933,22 @@ int main(int argc, char* argv[]) {
 			memset(&blob, 0, sizeof blob);
 			blob.data = (unsigned long long)(size_t)&modes[pick];
 			blob.length = sizeof modes[pick];
-			report("drm card1 CREATEPROPBLOB",
+			report("drm bochs CREATEPROPBLOB",
 			       _KeFileIoControl(bfd, 0xC01064BD, &blob), 0);
-			report("drm card1 blob id",
+			report("drm bochs blob id",
 			       (int)(blob.blob_id != 0), 1);
 
 			memset(&dumb, 0, sizeof dumb);
 			dumb.width = bw;
 			dumb.height = bh;
 			dumb.bpp = 32;
-			report("drm card1 CREATE_DUMB",
+			report("drm bochs CREATE_DUMB",
 			       _KeFileIoControl(bfd, 0xC02064B2, &dumb), 0);
-			report("drm card1 dumb handle",
+			report("drm bochs dumb handle",
 			       (int)(dumb.handle != 0), 1);
-			report("drm card1 dumb pitch",
+			report("drm bochs dumb pitch",
 			       (int)dumb.pitch, (int)bw * 4);
-			report("drm card1 dumb size",
+			report("drm bochs dumb size",
 			       (int)(dumb.size ==
 				     ((((unsigned long long)dumb.pitch * bh) +
 				       4095) & ~4095ULL)), 1);
@@ -1862,7 +1958,7 @@ int main(int argc, char* argv[]) {
 			 * the surface can show is this colour. */
 			memset(&map, 0, sizeof map);
 			map.handle = dumb.handle;
-			report("drm card1 MAP_DUMB",
+			report("drm bochs MAP_DUMB",
 			       _KeFileIoControl(bfd, 0xC01064B3, &map), 0);
 			{
 				volatile unsigned int* pix =
@@ -1871,7 +1967,7 @@ int main(int argc, char* argv[]) {
 				unsigned long long words = dumb.size >> 2;
 				for (unsigned long long i = 0; i < words; i++)
 					pix[i] = 0x00123456u;
-				report("drm card1 pattern written",
+				report("drm bochs pattern written",
 				       (int)(pix[0] == 0x00123456u), 1);
 			}
 
@@ -1881,9 +1977,9 @@ int main(int argc, char* argv[]) {
 			fb.pixel_format = 0x34325258; /* 'X','R','2','4' */
 			fb.handles[0] = dumb.handle;
 			fb.pitches[0] = dumb.pitch;
-			report("drm card1 ADDFB2",
+			report("drm bochs ADDFB2",
 			       _KeFileIoControl(bfd, 0xC06864B8, &fb), 0);
-			report("drm card1 fb id", (int)(fb.fb_id != 0), 1);
+			report("drm bochs fb id", (int)(fb.fb_id != 0), 1);
 
 			/* the atomic request: connector -> crtc, crtc mode +
 			 * active, plane carrying the fb over the full mode
@@ -1937,33 +2033,43 @@ int main(int argc, char* argv[]) {
 			 * whose plane update writes the pattern into BAR0 --
 			 * after it returns, QEMU is scanning it out. */
 			at.flags = 0x100 | 0x400;
-			report("drm card1 atomic TEST_ONLY",
+			report("drm bochs atomic TEST_ONLY",
 			       _KeFileIoControl(bfd, 0xC03864BC, &at), 0);
 			at.flags = 0x400;
-			report("drm card1 atomic commit",
+			report("drm bochs atomic commit",
 			       _KeFileIoControl(bfd, 0xC03864BC, &at), 0);
 
 			memset(&prog, 0, sizeof prog);
 			prog.crtc_id = crtc_ids[0];
-			report("drm card1 GETCRTC",
+			report("drm bochs GETCRTC",
 			       _KeFileIoControl(bfd, 0xC06864A1, &prog), 0);
-			report("drm card1 crtc programmed",
+			report("drm bochs crtc programmed",
 			       (int)prog.mode_valid, 1);
-			report("drm card1 crtc mode matches",
+			report("drm bochs crtc mode matches",
 			       (int)(prog.mode.hdisplay == bw &&
 				     prog.mode.vdisplay == bh), 1);
 
 			/* the marker the gate waits for before screendumping
 			 * bochs0; the pattern stays on the scanout, nothing
-			 * else draws on card1. */
+			 * else draws on the bochs card. */
 			note("bochs scanout committed", 1);
 			_KeCloseFile(bfd);
 		}
 	}
 
-	/* stage 6: /dev/dri/card2, the vendored virtio-gpu.  Absent images skip
-	 * silently; the bypass gate is what makes it appear. */
-	test_virtgpu_card2();
+	/* stage 6: the vendored virtio-gpu, found by driver name.  Absent
+	 * images skip silently; the bypass gate is what makes it appear. */
+	{
+		char gpath[32];
+		if (drm_find_card("virtio_gpu", gpath, sizeof gpath) == 0) {
+			char line[96];
+			sprintf(line, "[dcltest] info virtio-gpu at %s\n", gpath);
+			emit(line);
+			test_virtgpu_card(gpath);
+		} else {
+			emit("[dcltest] info virtio_gpu card absent, stage 6 skipped\n");
+		}
+	}
 
 	/* privileged device nodes belong to the daemons group; an ordinary process (this
 	 * one has world only) must be refused even when it asks for a write-mode open,
@@ -1977,6 +2083,36 @@ int main(int argc, char* argv[]) {
 			report(what, pfd < 0, 1);
 			if (pfd >= 0)
 				_KeCloseFile(pfd);
+		}
+	}
+
+	/* A FAT directory read must walk past deleted records, volume labels and
+	 * long-name fragments instead of reporting end-of-directory.  The gate's
+	 * USB FAT image puts a label and a deleted record ahead of GATE.TXT, so
+	 * the old skip-returns-minus-one path would hide that file. */
+	{
+		int items = 0;
+		int found = fat_find_name("/b", "GATE.TXT", &items);
+		/* Only the gate's USB volume carries GATE.TXT.  A manual run
+		 * may have an unrelated FAT volume on b, so a missing marker
+		 * is a skip, not a failure; the gate asserts the PASS lines. */
+		if (found <= 0) {
+			note("usb fat dir has no gate file, stage skipped", found);
+		} else {
+			report("vfs usb dir lists entries", items > 0, 1);
+			report("vfs usb dir finds GATE.TXT", found, 1);
+
+			int rc = _KeUnmount((char*)"b");
+			report("vfs unmounts usb volume", rc == 0, 1);
+			int gone = _KeOpenDir((char*)"/b");
+			report("vfs unmounted volume is absent", gone < 0, 1);
+			if (gone >= 0)
+				_KeCloseFile(gone);
+
+			rc = _KeMount((char*)"b");
+			report("vfs remounts usb volume", rc == 0, 1);
+			found = fat_find_name("/b", "GATE.TXT", &items);
+			report("vfs remount finds GATE.TXT", found == 1, 1);
 		}
 	}
 

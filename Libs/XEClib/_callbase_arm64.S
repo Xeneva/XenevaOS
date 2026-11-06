@@ -571,6 +571,20 @@ _KeGetIfAddrs:
 	mov x0, x6
 	ret
 
+.global _KeMount
+_KeMount:
+	mov x16, SYS_VFS_MOUNT
+	svc #0
+	mov x0, x6
+	ret
+
+.global _KeUnmount
+_KeUnmount:
+	mov x16, SYS_VFS_UNMOUNT
+	svc #0
+	mov x0, x6
+	ret
+
 .global _KeCreatePipe
 _KeCreatePipe:
 	mov x16, SYS_CREATE_PIPE

@@ -585,27 +585,43 @@ void *vmemdup_user(const void __user *src, size_t len);
  * than fail. The only caller's count is a virtio-console control message.
  */
 /*
- * struct kmem_cache -- mainline's per-cache descriptor, cut to the one
- * field its callers read here.  DCL allocates from one TLSF heap whether
+ * struct kmem_cache -- mainline's per-cache descriptor, cut to the two
+ * fields its callers read here.  DCL allocates from one TLSF heap whether
  * or not the caller named a cache, so the descriptor carries only the
- * object size kmem_cache_alloc_lru() needs to hand back.  The only cache
- * in reach of this tree is radix-tree.h's extern radix_tree_node_cachep,
- * whose size is set in DCL/drm_stubs.c.
+ * object size and the optional constructor; the name, alignment and flags
+ * have nothing to act on.  The caches in reach of this tree are
+ * radix-tree.h's extern radix_tree_node_cachep, whose descriptor is set in
+ * DCL/drm_stubs.c, and virtio-gpu's vbuf cache, created below.
  */
 struct kmem_cache {
 	unsigned int size;
+	void (*ctor)(void*);
 };
 
 /*
- * kmem_cache_alloc_lru(cache, lru, gfp) -- allocate from `cache`.  The lru
- * node mainline tracks the allocation against is dropped with every other
- * gfp flag here; see the flags note at the top of this header.
+ * kmem_cache_alloc_lru(cache, lru, gfp) -- allocate an object from `cache`
+ * with mainline's gfp semantics.  The lru node mainline tracks the
+ * allocation against is dropped with every other gfp flag here; see the
+ * flags note at the top of this header.  __GFP_ZERO still routes to the
+ * zeroing allocator, which is what the generic kmem_cache_alloc() path
+ * expects, and the cache's constructor runs afterwards exactly as it does
+ * in mainline's slab allocator.
+ *
+ * The constructor matters for xarray: xas_alloc() fills in a new node's
+ * shift/parent/array but treats slots[] as NULL until it installs a child,
+ * relying on the radix-tree cache's constructor to clear the object.  With
+ * neither a constructor nor __GFP_ZERO, a recycled TLSF block keeps its
+ * previous contents and the first tree walk follows a stale pointer.
  */
 static inline void* kmem_cache_alloc_lru(struct kmem_cache* cache,
 					 const void* lru, gfp_t gfp)
 {
+	void* obj = dcl_kmalloc_flags(cache->size, gfp);
+
 	(void)lru;
-	return kmalloc(cache->size, gfp);
+	if (obj && cache->ctor)
+		cache->ctor(obj);
+	return obj;
 }
 
 /*
@@ -617,10 +633,13 @@ static inline void* kmem_cache_alloc_lru(struct kmem_cache* cache,
  * out of that same heap, destroy() returns it, and the two allocation
  * spellings bottom out in kmalloc/kzalloc by way of the descriptor's size.
  *
- * `align`, the flags word and the constructor have nothing to act on and are
- * accepted because mainline's signature is what the vendored caller compiles
- * against. The one consequence a reader should see: it is a real allocation,
- * so create() can fail, and the caller checks -- which is the same failure
+ * `align` and the flags word have nothing to act on and are accepted
+ * because mainline's signature is what the vendored caller compiles
+ * against. The constructor is real, though: it is stored in the descriptor
+ * and run by both allocation entry points, because a cache whose objects
+ * need initialising needs it on every allocation, not just a zeroed one.
+ * The one consequence a reader should see: it is a real allocation, so
+ * create() can fail, and the caller checks -- which is the same failure
  * path mainline's create() has.
  */
 static inline struct kmem_cache* kmem_cache_create(const char* name,
@@ -634,11 +653,11 @@ static inline struct kmem_cache* kmem_cache_create(const char* name,
 	(void)name;
 	(void)align;
 	(void)flags;
-	(void)ctor;
 	cache = dcl_kmalloc(sizeof(*cache));
 	if (!cache)
 		return NULL;
 	cache->size = size;
+	cache->ctor = ctor;
 	return cache;
 }
 
@@ -649,8 +668,11 @@ static inline void kmem_cache_destroy(struct kmem_cache* cache)
 
 static inline void* kmem_cache_zalloc(struct kmem_cache* cache, gfp_t gfp)
 {
-	(void)gfp;
-	return dcl_kzalloc(cache->size);
+	void* obj = dcl_kmalloc_flags(cache->size, gfp | __GFP_ZERO);
+
+	if (obj && cache->ctor)
+		cache->ctor(obj);
+	return obj;
 }
 
 static inline void kmem_cache_free(struct kmem_cache* cache, void* obj)

@@ -116,6 +116,13 @@ typedef struct _VDISK_ {
 	/* more device specific functions
 	 * needs to be added like eject
 	 */
+	/* Set when the backing device is present.  A surprise unplug clears
+	 * it and detaches the file system without freeing either the fs node
+	 * or this disk, so a re-plug can reuse both. */
+	uint8_t online;
+	/* Set while the file system node is attached to the VFS.  An explicit
+	 * unmount clears it but keeps the reserved mount letter. */
+	uint8_t mounted;
 }AuVDisk;
 //#pragma pack(pop)
 
@@ -210,6 +217,33 @@ AU_EXTERN AU_EXPORT int AuVDiskFlush(AuVDisk* disk);
 * device-side cache is lost
 */
 AU_EXTERN AU_EXPORT void AuVDiskFlushAll();
+
+/**
+* @brief AuVDiskMount -- attach a registered disk's file system at the
+* mount point reserved when the volume was first discovered
+* @param name -- one-letter mount point, with or without a leading '/'
+* @return 0 on success, -1 if no registered volume uses that letter or the
+* disk is offline
+*/
+AU_EXTERN AU_EXPORT int AuVDiskMount(const char* name);
+
+/**
+* @brief AuVDiskUnmount -- flush a mounted disk and detach its file system
+* from the VFS.  The reserved letter and the file-system node stay alive so
+* AuVDiskMount() can attach the same volume again.
+* @param name -- one-letter mount point, with or without a leading '/'
+* @return 0 on success, -1 if the volume is not mounted or is the root
+*/
+AU_EXTERN AU_EXPORT int AuVDiskUnmount(const char* name);
+
+/**
+* @brief AuVDiskSetOnline -- track whether the backing device is present.
+* Going offline detaches the file system without flushing (the device is
+* already gone); coming online reattaches a previously mounted volume.
+* @param vdisk -- virtual disk to update
+* @param online -- non-zero when the device is present
+*/
+AU_EXTERN AU_EXPORT void AuVDiskSetOnline(AuVDisk* vdisk, int online);
 
 /**
  * @brief AuVDiskDestroy -- destroy's a vdisk

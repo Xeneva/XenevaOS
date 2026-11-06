@@ -32,6 +32,7 @@
 #include <Serv/sysserv.h>
 #include <Cap/capability.h>
 #include <Fs/vfs.h>
+#include <Fs/vdisk.h>
 #include <Fs/Fat/Fat.h>
 #include <Hal/AA64/sched.h>
 #include <process.h>
@@ -595,6 +596,26 @@ int FileStat(int fd, void* buf) {
 	status->user_id = 0;
 	status->group_id = 0;
 	return 0;
+}
+
+/**
+ * @brief VFSMount -- attach a registered volume's file system at the
+ * mount point it reserved when the disk was first discovered
+ * @param name -- one-letter mount point
+ * @return 0 on success, -1 on failure
+ */
+int VFSMount(char* name) {
+	return AuVDiskMount(name);
+}
+
+/**
+ * @brief VFSUnmount -- flush a mounted volume and detach its file system
+ * from the VFS.  The mount letter stays reserved for a later mount.
+ * @param name -- one-letter mount point
+ * @return 0 on success, -1 on failure
+ */
+int VFSUnmount(char* name) {
+	return AuVDiskUnmount(name);
 }
 
 /**

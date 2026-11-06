@@ -460,6 +460,20 @@ extern "C" void main(int argc, char* argv[]) {
 		_KePrint("[init]: dcltest.exe absent, skipping DCL self-test\r\n");
 	}
 
+	/* bttest: /dev/bt0 end-to-end test. Same opt-in-by-presence rule as
+	 * dcltest.exe -- production images do not carry the binary. It gets
+	 * the world-group credentials the device node expects, and is spawned
+	 * without a console fd; results go to /dev/kmsg on the serial log. */
+	int btest = _KeOpenFile("/bttest.exe", FILE_OPEN_READ_ONLY);
+	if (btest != -1) {
+		_KeCloseFile(btest);
+		proc = _KeCreateProcess(0, "bttest");
+		_KeSetUID(proc, UAC_NORMAL_USER);
+		_KeSetGID(proc, UAC_NORMAL_USER);
+		_KeCredAddSGroup(proc, ggid_misc_world);
+		_KeProcessLoadExec(proc, "/bttest.exe", 0, NULL);
+	}
+
 	/* hwtest: user-space driver access test for /dev/hwdev. Only present when
 	 * the image was built with HWTEST=1. It is the one process that gets the
 	 * MISC_DAEMONS group, which is what /dev/hwdev and /dev/drvctl require --
