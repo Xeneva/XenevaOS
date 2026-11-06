@@ -8,11 +8,11 @@ Cells are green (implemented and covered by the DCL xHCI gate), amber
 gray (not implemented).
 
 The feature matrix below is deliberately small and curated.  Each feature
-carries a code marker that must exist in KernelAA64/Usb/xhci.c and, unless it
-is a boot-path or missing feature, a test marker that must exist in
-Tests/dcl_test_all.sh or Tests/dcl_input_inject.py.  The generator fails when
-a marker disappears, so the chart cannot silently claim coverage that the
-gate no longer has.
+carries a code marker that must exist in its source file (by default
+KernelAA64/Usb/xhci.c) and, unless it is a boot-path or missing feature, a
+test marker that must exist in Tests/dcl_test_all.sh or
+Tests/dcl_input_inject.py.  The generator fails when a marker disappears, so
+the chart cannot silently claim coverage that the gate no longer has.
 
 Usage:
     python3 Tools/xhci-progress.py
@@ -32,6 +32,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE = ROOT / "KernelAA64" / "Usb" / "xhci.c"
+DEFAULT_SOURCE_KEY = "KernelAA64/Usb/xhci.c"
+EXTRA_SOURCES = (
+    ROOT / "KernelAA64" / "Fs" / "vdisk.c",
+    ROOT / "KernelAA64" / "Fs" / "Fat" / "FatDir.c",
+)
 DEFAULT_GATE = ROOT / "Tests" / "dcl_test_all.sh"
 DEFAULT_HOST = ROOT / "Tests" / "dcl_input_inject.py"
 DEFAULT_OUT = ROOT / "Docs" / "Development"
@@ -89,6 +94,7 @@ class Feature:
     test: str | None = None
     kind: str = "boot"  # boot, gate, host, conditional, none
     note: str = ""
+    source: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +375,13 @@ FEATURES = [
     ),
     Feature(
         "Lifecycle",
+        "Surprise-unplug volume detach",
+        "AuVDiskSetOnline(d->msc->vd, 0)",
+        kind="none",
+        note="QEMU device_del detaches /b and a replug reattaches it; the gate checks vdisk reuse but does not assert the detach itself.",
+    ),
+    Feature(
+        "Lifecycle",
         "DMA reclaim and replug reuse",
         "vdisk reuse slot",
         test="[xhci-msc]: vdisk reuse slot",
@@ -571,6 +584,24 @@ FEATURES = [
     ),
     Feature(
         "Bulk-Only storage",
+        "FAT directory enumeration",
+        "Deleted entries, volume labels, long-name fragments",
+        test="[dcltest] PASS vfs usb dir lists entries (1)",
+        kind="gate",
+        source="KernelAA64/Fs/Fat/FatDir.c",
+        note="The gate volume puts a label and a deleted record ahead of GATE.TXT; the walk skips both instead of reporting end-of-directory.",
+    ),
+    Feature(
+        "Bulk-Only storage",
+        "Runtime unmount and remount",
+        "int AuVDiskUnmount(const char* name)",
+        test="[dcltest] PASS vfs unmounts usb volume (1)",
+        kind="gate",
+        source="KernelAA64/Fs/vdisk.c",
+        note="The mount letter stays reserved, so remount reattaches the same volume; the gate checks GATE.TXT before unmount, after unmount and after remount.",
+    ),
+    Feature(
+        "Bulk-Only storage",
         "SCSI UNMAP/TRIM",
         None,
         kind="none",
@@ -745,15 +776,19 @@ FEATURES = [
 # Feature resolution and summaries
 
 
-def resolve_features(source: str, gate: str, host: str) -> list[dict]:
+def resolve_features(sources: dict[str, str], gate: str, host: str) -> list[dict]:
     states = []
     for feature in FEATURES:
         if feature.kind not in {"boot", "gate", "host", "conditional", "none"}:
             raise ValueError(f"{feature.name}: unknown kind {feature.kind!r}")
+        source_name = feature.source or DEFAULT_SOURCE_KEY
+        source = sources.get(source_name)
+        if source is None:
+            raise ValueError(f"{feature.name}: source {source_name} was not loaded")
         has_code = feature.code is not None
         if has_code and feature.code not in source:
             raise ValueError(
-                f"{feature.name}: code marker missing from KernelAA64/Usb/xhci.c: "
+                f"{feature.name}: code marker missing from {source_name}: "
                 f"{feature.code!r}"
             )
         if feature.kind in {"gate", "conditional"}:
@@ -1005,7 +1040,7 @@ def render_svg(core: dict, classes: dict, generated: str) -> str:
         text(
             WIDTH - 12,
             legend_y,
-            f"generated {generated} · source: xhci.c + dcl_test_all.sh",
+            f"generated {generated} · source: xhci.c + vdisk.c + FatDir.c + dcl_test_all.sh",
             10,
             fill=MUTED,
             anchor="end",
@@ -1163,7 +1198,9 @@ def render_html(core: dict, classes: dict, generated: str) -> str:
             "</style></head><body>",
             "<h1>XenevaOS xHCI/USB readiness</h1>",
             '<p class="muted">Generated ' + escape(generated) + " from "
-            '<a href="../../KernelAA64/Usb/xhci.c"><code>KernelAA64/Usb/xhci.c</code></a> and '
+            '<a href="../../KernelAA64/Usb/xhci.c"><code>KernelAA64/Usb/xhci.c</code></a>, '
+            '<a href="../../KernelAA64/Fs/vdisk.c"><code>KernelAA64/Fs/vdisk.c</code></a>, '
+            '<a href="../../KernelAA64/Fs/Fat/FatDir.c"><code>KernelAA64/Fs/Fat/FatDir.c</code></a>, and '
             '<a href="../../Tests/dcl_test_all.sh"><code>Tests/dcl_test_all.sh</code></a>. '
             f"<strong>{percent} green</strong> ({total}/{count}): {partial} partial and {todo} missing. "
             "Green means implemented and exercised by the DCL xHCI gate; amber means implemented "
@@ -1231,7 +1268,13 @@ def json_snapshot(core: dict, classes: dict, generated: str) -> dict:
                 )
     return {
         "generated": generated,
-        "source": ["KernelAA64/Usb/xhci.c", "Tests/dcl_test_all.sh", "Tests/dcl_input_inject.py"],
+        "source": [
+            "KernelAA64/Usb/xhci.c",
+            "KernelAA64/Fs/vdisk.c",
+            "KernelAA64/Fs/Fat/FatDir.c",
+            "Tests/dcl_test_all.sh",
+            "Tests/dcl_input_inject.py",
+        ],
         "legend": {
             "done": "implemented and exercised by the DCL xHCI gate",
             "partial": "implemented but untested or only conditionally tested",
@@ -1533,17 +1576,31 @@ def write_outputs(out: Path, core: dict, classes: dict, generated: str, snapshot
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Generate the xHCI/USB readiness treemap from xhci.c and the DCL gate."
+        description="Generate the xHCI/USB readiness treemap from xhci.c, vdisk.c, FatDir.c and the DCL gate."
     )
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument(
+        "--extra-source",
+        type=Path,
+        action="append",
+        default=None,
+        help="additional source file that may hold a feature's code marker",
+    )
     parser.add_argument("--gate", type=Path, default=DEFAULT_GATE)
     parser.add_argument("--host", type=Path, default=DEFAULT_HOST)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--check", action="store_true", help="verify markers and print totals; write nothing")
     args = parser.parse_args(argv)
 
+    extra = args.extra_source if args.extra_source is not None else list(EXTRA_SOURCES)
+    sources: dict[str, str] = {}
     try:
-        source = args.source.read_text(encoding="utf-8")
+        for path in [args.source, *extra]:
+            try:
+                key = path.resolve().relative_to(ROOT).as_posix()
+            except ValueError:
+                key = path.name
+            sources[key] = path.read_text(encoding="utf-8")
         gate = args.gate.read_text(encoding="utf-8")
         host = args.host.read_text(encoding="utf-8")
     except OSError as exc:
@@ -1551,7 +1608,7 @@ def main(argv=None) -> int:
         return 1
 
     try:
-        records = resolve_features(source, gate, host)
+        records = resolve_features(sources, gate, host)
     except ValueError as exc:
         print(f"xhci-progress: {exc}")
         return 1

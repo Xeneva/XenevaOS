@@ -1,7 +1,9 @@
 {
-  "generated": "2026-11-04",
+  "generated": "2026-11-05",
   "source": [
     "KernelAA64/Usb/xhci.c",
+    "KernelAA64/Fs/vdisk.c",
+    "KernelAA64/Fs/Fat/FatDir.c",
     "Tests/dcl_test_all.sh",
     "Tests/dcl_input_inject.py"
   ],
@@ -11,20 +13,20 @@
     "todo": "not implemented"
   },
   "totals": {
-    "done": 55,
-    "partial": 23,
+    "done": 57,
+    "partial": 24,
     "todo": 12,
-    "total": 90,
-    "percent": 61.1
+    "total": 93,
+    "percent": 61.3
   },
   "panels": [
     {
       "name": "Controller and transport",
       "done": 26,
-      "partial": 12,
+      "partial": 13,
       "todo": 5,
-      "total": 43,
-      "percent": 60.5,
+      "total": 44,
+      "percent": 59.1,
       "groups": [
         {
           "name": "Bringup",
@@ -57,9 +59,9 @@
         {
           "name": "Lifecycle",
           "done": 4,
-          "partial": 0,
+          "partial": 1,
           "todo": 0,
-          "total": 4
+          "total": 5
         },
         {
           "name": "Power management",
@@ -72,11 +74,11 @@
     },
     {
       "name": "Device classes and verification",
-      "done": 29,
+      "done": 31,
       "partial": 11,
       "todo": 7,
-      "total": 47,
-      "percent": 61.7,
+      "total": 49,
+      "percent": 63.3,
       "groups": [
         {
           "name": "HID and input",
@@ -87,10 +89,10 @@
         },
         {
           "name": "Bulk-Only storage",
-          "done": 10,
+          "done": 12,
           "partial": 2,
           "todo": 1,
-          "total": 13
+          "total": 15
         },
         {
           "name": "UAS storage",
@@ -583,6 +585,18 @@
     {
       "panel": "Controller and transport",
       "group": "Lifecycle",
+      "name": "Surprise-unplug volume detach",
+      "state": "partial",
+      "evidence": {
+        "code": "AuVDiskSetOnline(d->msc->vd, 0)",
+        "kind": "none",
+        "marker": null
+      },
+      "note": "QEMU device_del detaches /b and a replug reattaches it; the gate checks vdisk reuse but does not assert the detach itself."
+    },
+    {
+      "panel": "Controller and transport",
+      "group": "Lifecycle",
       "name": "DMA reclaim and replug reuse",
       "state": "done",
       "evidence": {
@@ -915,6 +929,30 @@
         "marker": "[fat]: USB QEMU HARDDISK mounted at"
       },
       "note": ""
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "FAT directory enumeration",
+      "state": "done",
+      "evidence": {
+        "code": "Deleted entries, volume labels, long-name fragments",
+        "kind": "gate",
+        "marker": "[dcltest] PASS vfs usb dir lists entries (1)"
+      },
+      "note": "The gate volume puts a label and a deleted record ahead of GATE.TXT; the walk skips both instead of reporting end-of-directory."
+    },
+    {
+      "panel": "Device classes and verification",
+      "group": "Bulk-Only storage",
+      "name": "Runtime unmount and remount",
+      "state": "done",
+      "evidence": {
+        "code": "int AuVDiskUnmount(const char* name)",
+        "kind": "gate",
+        "marker": "[dcltest] PASS vfs unmounts usb volume (1)"
+      },
+      "note": "The mount letter stays reserved, so remount reattaches the same volume; the gate checks GATE.TXT before unmount, after unmount and after remount."
     },
     {
       "panel": "Device classes and verification",

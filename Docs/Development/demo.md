@@ -5,6 +5,9 @@ recording. It uses the same QEMU machine and xHCI topology as the automated
 gate, then attaches one extra FAT32 stick with sample files. It does not run
 the gate programs.
 
+For the short proof and pull-request command card, see
+[`usb-poc.md`](usb-poc.md) and `Scripts/Linux/usb_poc.sh`.
+
 ## Start it
 
 ```sh
