@@ -32,6 +32,7 @@
 #include <Serv/sysserv.h>
 #include <Cap/capability.h>
 #include <Fs/vfs.h>
+#include <Fs/vdisk.h>
 #include <Fs/Fat/Fat.h>
 #include <Hal/AA64/sched.h>
 #include <process.h>
@@ -216,7 +217,11 @@ int FileSetOffset(int fd, size_t offset) {
 	if (!((file->flags & FS_FLAG_FILE_SYSTEM) || (file->flags & FS_FLAG_DEVICE) ||
 		  (file->flags & FS_FLAG_PIPE) || (file->flags & FS_FLAG_DIRECTORY) ||
 		  (file->flags & FS_FLAG_TTY))) {
-		AuVFSNode* fsys = AuVFSFind("/");
+		/* the file's own volume: always using "/" resolved a seek on a
+		 * USB volume with the root disk's cluster size and FAT */
+		AuVFSNode* fsys = (AuVFSNode*)file->device;
+		if (!fsys)
+			fsys = AuVFSFind("/");
 		if (!fsys)
 			return -1;
 		size_t block = AuVFSGetBlockFor(fsys, file, offset);
@@ -372,20 +377,23 @@ size_t WriteFile(int fd, void* buffer, size_t length) {
 		 * correctly across the loop --axiss */
 		size_t remaining = length;
 		uint8_t* src = aligned_buffer;
+		/* one staging page for the whole write, not one per 4K chunk */
+		uint64_t* buff = (uint64_t*)P2V((size_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
 		while (remaining > 0) {
 			size_t chunk = remaining > PAGE_SIZE ? PAGE_SIZE : remaining;
-			uint64_t* buff = (uint64_t*)P2V((size_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
 			memset(buff, 0, PAGE_SIZE);
-			//memcpy(buff, src, chunk);
-			if (__bordoisila_copy_from_user(buff, aligned_buffer, chunk) != 0) {
+			/* copy from src: this copied from aligned_buffer every time,
+			 * so each 4K chunk of a longer write repeated the first one */
+			if (__bordoisila_copy_from_user(buff, src, chunk) != 0) {
 				AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
-				return remaining;
+				/* bytes actually written, not the bytes left over */
+				return length - remaining;
 			}
 			AuVFSNodeWrite(fsys, file, buff, chunk);
-			AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 			src += chunk;
 			remaining -= chunk;
 		}
+		AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 		return length;
 	}
 
@@ -598,6 +606,26 @@ int FileStat(int fd, void* buf) {
 }
 
 /**
+ * @brief VFSMount -- attach a registered volume's file system at the
+ * mount point it reserved when the disk was first discovered
+ * @param name -- one-letter mount point
+ * @return 0 on success, -1 on failure
+ */
+int VFSMount(char* name) {
+	return AuVDiskMount(name);
+}
+
+/**
+ * @brief VFSUnmount -- flush a mounted volume and detach its file system
+ * from the VFS.  The mount letter stays reserved for a later mount.
+ * @param name -- one-letter mount point
+ * @return 0 on success, -1 on failure
+ */
+int VFSUnmount(char* name) {
+	return AuVDiskUnmount(name);
+}
+
+/**
  * @brief OpenDir -- opens a directory
  * @param filename -- name of the directory
  */
@@ -617,8 +645,29 @@ int OpenDir(char* filename) {
 	AuVFSNode* dirfile = NULL;
 	if (!fsys)
 		return -1;
+
+	char* path_to_open = filename;
+	if (strcmp(fsys->filename, "/") != 0) {
+		char* next = strchr(filename, '/');
+		if (next) {
+			next++;
+			char pathname[16];
+			int i = 0;
+			for (i = 0; i < 15; i++) {
+				if (next[i] == '/' || next[i] == '\0')
+					break;
+				pathname[i] = next[i];
+			}
+			pathname[i] = 0;
+			if (strcmp(fsys->filename, pathname) == 0) {
+				next += i;
+				path_to_open = (next[0] == '\0') ? "/" : next;
+			}
+		}
+	}
+
 	if (fsys->opendir)
-		dirfile = fsys->opendir(fsys, filename);
+		dirfile = fsys->opendir(fsys, path_to_open);
 
 	if (!dirfile)
 		return -1;
@@ -766,4 +815,53 @@ int CreateDir(char* filename) {
 	}
 
 	return -1;
+}
+
+/**
+ * @brief Chmod -- change a file mode
+ * @param filename -- name of the file
+ * @param mode -- mode value
+ */
+int Chmod(const char* pathname, unsigned int mode) {
+	if (!pathname)
+		return -1;
+
+	int pathlen = 4096;
+	char* kpath = kmalloc(pathlen);
+
+	long n = _bordoisila_strncpy_from_user(kpath, pathname, pathlen);
+	if (n < 0) {
+		kfree(kpath);
+		return -1;
+	} else if (n == 0) {
+		kfree(kpath);
+		return -1;
+	}
+
+	AuVFSNode* file = AuVFSOpen(kpath);
+	if (!file)
+		return -1;
+
+	AuVFSNode* fs = AuVFSFind(kpath);
+	if (!fs) {
+		kfree(file);
+		UARTDebugOut("[aurora-chmod]: file system not specified \r\n");
+		return -1;
+	}
+
+	int ret = AuVFSChmodNode(fs, file, mode);
+	if (ret < 0) {
+		kfree(file);
+		UARTDebugOut(
+			"[aurora-chmod]: failed to change mode of path : %s filename : %s, ret = %d \r\n",
+			kpath,
+			file->filename,
+			ret);
+		return -1;
+	}
+
+	UARTDebugOut("[aurora-chmod]: file mode changed successfully %s \r\n", file->filename);
+	kfree(kpath);
+	kfree(file);
+	return 0;
 }

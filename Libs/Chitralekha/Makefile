@@ -84,6 +84,9 @@ CPP_SRCS = audio/audio.cpp \
            widgets/defaulttextbox.cpp \
            widgets/defaultviews.cpp \
            widgets/defaultwindow.cpp \
+           widgets/flatbutton.cpp \
+           widgets/flatsidebar.cpp \
+           widgets/gmstyle.cpp \
            widgets/gridview.cpp \
            widgets/icon.cpp \
            widgets/list.cpp \
@@ -102,6 +105,8 @@ CPP_SRCS = audio/audio.cpp \
            widgets/toolbar.cpp \
            widgets/view.cpp \
            widgets/window.cpp \
+           widgets/winstyle.cpp \
+           widgets/knotwindow.cpp \
 		   widgets/layout/border_layout.cpp \
 		   widgets/layout/box_layout.cpp
 

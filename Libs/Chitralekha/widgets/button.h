@@ -40,9 +40,21 @@
 XE_EXTERN {
 #endif
 
+	/* style flags (ChButtonSetStyle / ChCreateButtonEx). 0 keeps the
+	 * classic painter in button.cpp untouched. */
+#define CH_BUTTON_STYLE_DEFAULT	  0
+#define CH_BUTTON_FLAT			  (1 << 0) /* flat Gamusa painter (flatbutton.cpp)  */
+#define CH_BUTTON_FLAT_SECONDARY  (1 << 1) /* ink outline on paper                 */
+#define CH_BUTTON_FLAT_QUIET	  (1 << 2) /* text only, a red thread on hover     */
+#define CH_BUTTON_FLAT_LOZENGE	  (1 << 3) /* small lozenge marker before the label */
+#define CH_BUTTON_DISABLED		  (1 << 4) /* sand, no hover, no action            */
+	/* no variant bit = primary: gamusa red plate, white label */
+
 	typedef struct _CHButton_ {
 		ChWidget base;
 		char* title;
+		/* kept last: apps built against the older layout still work */
+		uint16_t styleFlags;
 	} ChButton;
 
 	/**
@@ -54,6 +66,18 @@ XE_EXTERN {
 	* @param text -- button text
 	*/
 	XE_EXPORT ChButton* ChCreateButton(int x, int y, int w, int h, char* text);
+
+	/**
+	* @brief ChCreateButtonEx -- create a button with style flags
+	* @param flags -- CH_BUTTON_* style flags, e.g. CH_BUTTON_FLAT | CH_BUTTON_FLAT_QUIET
+	*/
+	XE_EXPORT ChButton* ChCreateButtonEx(int x, int y, int w, int h, char* text, uint16_t flags);
+
+	/**
+	* @brief ChButtonSetStyle -- change the painter / variant of a button
+	* @param flags -- CH_BUTTON_* style flags, 0 for the classic look
+	*/
+	XE_EXPORT void ChButtonSetStyle(ChButton * button, uint16_t flags);
 
 #ifdef __cplusplus
 }

@@ -45,7 +45,7 @@
 typedef struct _proc_token_ {
 	AuProcess* proc;
 	int thread_id;
-}AuProcessToken;
+} AuProcessToken;
 
 enum _proc_tokens_ {
 	PROCESS_TOKEN_NETWORK,
@@ -53,8 +53,8 @@ enum _proc_tokens_ {
 	PROCESS_TOKEN_AUDIO,
 	PROCESS_TOKEN_DEV,
 	PROCESS_TOKEN_NETSERVER,
+	PROCESS_TOKEN_LAUNCHER,
 };
-
 
 /**
  * @brief AuProcessTokenInitialize -- initialize token manager
@@ -75,7 +75,6 @@ extern int AuProcessTokenAddSelf(uint8_t category);
  */
 extern AuProcess* AuProcessTokenGetProc(uint8_t category);
 
-
 /**
  * @brief AuProcessTokenGetThreadID -- get the thread id
  * of a slot
@@ -87,6 +86,5 @@ extern int AuProcessTokenGetThreadID(uint8_t category);
  * @param category -- category to free
  */
 extern int AuProcessTokenRemoveSelf(uint8_t category);
-
 
 #endif

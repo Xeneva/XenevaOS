@@ -166,6 +166,17 @@ typedef struct _FatFS_ {
 	AuMutex* fat_write_mutex;
 	AuMutex* fat_read_mutex;
 #endif
+	/* one-sector caches, each a page allocated once at mount. Every
+	 * FAT write goes through the FAT cache (write-through) and every
+	 * directory sector write invalidates the directory cache, so
+	 * neither can go stale. Both are dropped on detach/attach. */
+	uint8_t __NumFats;
+	uint8_t* __FatCache;
+	uint64_t __FatCacheLBA;
+	bool __FatCacheValid;
+	uint8_t* __DirCache;
+	uint64_t __DirCacheLBA;
+	bool __DirCacheValid;
 } FatFS;
 
 /*
@@ -266,5 +277,29 @@ extern void FatFromDosToFilename(char* filename, char* dirfname);
  * @param file -- Pointer to file which need attribute update
  */
 extern int FatSetAttribute(AuVFSNode* fsys, AuVFSNode* file);
+
+/*
+ * FatDirSector -- read one directory sector through the directory
+ * sector cache; the returned buffer must not be written to or kept
+ * @param fs -- Pointer to fat file system
+ * @param lba -- sector to read
+ */
+extern uint8_t* FatDirSector(FatFS* fs, uint64_t lba);
+
+/*
+ * FatWriteDirSector -- write a modified directory sector to disk
+ * and drop it from the directory sector cache
+ * @param fs -- Pointer to fat file system
+ * @param lba -- sector to write
+ * @param buf -- sector content, page sized buffer
+ */
+extern void FatWriteDirSector(FatFS* fs, uint64_t lba, void* buf);
+
+/*
+ * FatInvalidateCaches -- forget everything cached for a volume, used
+ * when a removable volume is detached or attached again
+ * @param fsys -- Pointer to file system node
+ */
+extern void FatInvalidateCaches(AuVFSNode* fsys);
 
 #endif

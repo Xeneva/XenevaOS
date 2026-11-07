@@ -1,0 +1,180 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1216 518" width="1216" height="518">
+<rect x="0.00" y="0.00" width="1216.00" height="518.00" fill="#0d1117" stroke="#0d1117" stroke-width="0"/>
+<rect x="0.5" y="0.5" width="1215" height="517" fill="none" stroke="#30363d" stroke-width="1"/>
+<text x="6.00" y="24.00" font-family="sans-serif" font-size="17" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Controller and transport</text>
+<text x="6.00" y="42.00" font-family="sans-serif" font-size="11" font-weight="normal" text-anchor="start" fill="#8b949e" >59.1% green · 26/44 done · 13 partial · 5 missing</text>
+<g><title>Bringup: 5 done, 4 partial, 1 missing, 10 total</title>
+<rect x="0.00" y="54.00" width="272.73" height="215.00" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>PCIe discovery and BAR mapping — done</title><rect x="1.00" y="55.00" width="67.68" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Controller reset and start — done</title><rect x="68.68" y="55.00" width="67.68" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Command and event rings — done</title><rect x="136.36" y="55.00" width="67.68" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>MSI-X interrupt handling — done</title><rect x="204.05" y="55.00" width="67.68" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Extended capabilities and protocols — done</title><rect x="1.00" y="126.00" width="90.24" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>32-bit DMA ceiling — partial</title><rect x="91.24" y="126.00" width="90.24" height="71.00" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Controller page size — partial</title><rect x="181.48" y="126.00" width="90.24" height="71.00" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Scratchpad buffers — partial</title><rect x="1.00" y="197.00" width="90.24" height="71.00" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>BIOS legacy handoff — partial</title><rect x="91.24" y="197.00" width="90.24" height="71.00" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Debug capability — todo</title><rect x="181.48" y="197.00" width="90.24" height="71.00" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="0.00" y="54.00" width="272.73" height="215.00" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="5.00" y="68.00" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Bringup</text>
+<text x="5.00" y="82.00" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">5/10 green</text>
+</g>
+<g><title>Enumeration: 8 done, 2 partial, 0 missing, 10 total</title>
+<rect x="0.00" y="269.00" width="272.73" height="215.00" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>Device descriptor — done</title><rect x="1.00" y="270.00" width="67.68" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Configuration descriptor — done</title><rect x="68.68" y="270.00" width="67.68" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>String descriptors — done</title><rect x="136.36" y="270.00" width="67.68" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Set configuration — done</title><rect x="204.05" y="270.00" width="67.68" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Class-driver dispatch — done</title><rect x="1.00" y="341.00" width="90.24" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Unsupported class handling — done</title><rect x="91.24" y="341.00" width="90.24" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>SuperSpeed companion descriptors — done</title><rect x="181.48" y="341.00" width="90.24" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>EP0 max packet update — done</title><rect x="1.00" y="412.00" width="90.24" height="71.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Transaction translator for low/full speed — partial</title><rect x="91.24" y="412.00" width="90.24" height="71.00" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Large configuration descriptors — partial</title><rect x="181.48" y="412.00" width="90.24" height="71.00" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="0.00" y="269.00" width="272.73" height="215.00" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="5.00" y="283.00" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Enumeration</text>
+<text x="5.00" y="297.00" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">8/10 green</text>
+</g>
+<g><title>Transfers and recovery: 4 done, 4 partial, 1 missing, 9 total</title>
+<rect x="272.73" y="54.00" width="184.09" height="286.67" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>Control transfers — done</title><rect x="273.73" y="55.00" width="60.70" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Interrupt IN transfers — done</title><rect x="334.42" y="55.00" width="60.70" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Bulk IN transfers — done</title><rect x="395.12" y="55.00" width="60.70" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Bulk OUT transfers — done</title><rect x="273.73" y="126.17" width="91.05" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Transfer timeout handling — partial</title><rect x="364.77" y="126.17" width="91.05" height="71.17" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Endpoint halt recovery — partial</title><rect x="273.73" y="197.33" width="91.05" height="71.17" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Command ring abort and restart — partial</title><rect x="364.77" y="197.33" width="91.05" height="71.17" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Isochronous OUT — partial</title><rect x="273.73" y="268.50" width="91.05" height="71.17" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Isochronous IN — todo</title><rect x="364.77" y="268.50" width="91.05" height="71.17" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="272.73" y="54.00" width="184.09" height="286.67" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="277.73" y="68.00" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Transfers and recovery</text>
+<text x="277.73" y="82.00" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">4/9 green</text>
+</g>
+<g><title>Ports and hubs: 5 done, 2 partial, 0 missing, 7 total</title>
+<rect x="456.82" y="54.00" width="143.18" height="286.67" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>Root-port power and reset — done</title><rect x="457.82" y="55.00" width="70.59" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Root-port hotplug — done</title><rect x="528.41" y="55.00" width="70.59" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>USB 2.0 hub — done</title><rect x="457.82" y="126.17" width="70.59" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Multi-tier hub scan — done</title><rect x="528.41" y="126.17" width="70.59" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Hub port power and reset — done</title><rect x="457.82" y="197.33" width="70.59" height="71.17" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>USB 3.0 hub — partial</title><rect x="528.41" y="197.33" width="70.59" height="71.17" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Overcurrent recovery — partial</title><rect x="457.82" y="268.50" width="141.18" height="71.17" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="456.82" y="54.00" width="143.18" height="286.67" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="461.82" y="68.00" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Ports and hubs</text>
+<text x="461.82" y="82.00" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">5/7 green</text>
+</g>
+<g><title>Lifecycle: 4 done, 1 partial, 0 missing, 5 total</title>
+<rect x="272.73" y="340.67" width="204.55" height="143.33" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>Slot allocation and addressing — done</title><rect x="273.73" y="341.67" width="67.52" height="70.67" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Disconnect and release — done</title><rect x="341.24" y="341.67" width="67.52" height="70.67" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>DMA reclaim and replug reuse — done</title><rect x="408.76" y="341.67" width="67.52" height="70.67" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Hotplug while HID polling — done</title><rect x="273.73" y="412.33" width="101.27" height="70.67" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Surprise-unplug volume detach — partial</title><rect x="375.00" y="412.33" width="101.27" height="70.67" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="272.73" y="340.67" width="204.55" height="143.33" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="277.73" y="354.67" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Lifecycle</text>
+<text x="277.73" y="368.67" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">4/5 green</text>
+</g>
+<g><title>Power management: 0 done, 0 partial, 3 missing, 3 total</title>
+<rect x="477.27" y="340.67" width="122.73" height="143.33" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>Suspend and resume — todo</title><rect x="478.27" y="341.67" width="60.36" height="70.67" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>USB link power management — todo</title><rect x="538.64" y="341.67" width="60.36" height="70.67" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>ACPI power transitions — todo</title><rect x="478.27" y="412.33" width="120.73" height="70.67" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="477.27" y="340.67" width="122.73" height="143.33" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="482.27" y="354.67" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Power management</text>
+<text x="482.27" y="368.67" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">0/3 green</text>
+</g>
+<text x="622.00" y="24.00" font-family="sans-serif" font-size="17" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Device classes and verification</text>
+<text x="622.00" y="42.00" font-family="sans-serif" font-size="11" font-weight="normal" text-anchor="start" fill="#8b949e" >63.3% green · 31/49 done · 11 partial · 7 missing</text>
+<g><title>Bulk-Only storage: 12 done, 2 partial, 1 missing, 15 total</title>
+<rect x="616.00" y="54.00" width="318.37" height="248.08" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>Bulk-Only CBW/CSW transport — done</title><rect x="617.00" y="55.00" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>SCSI INQUIRY — done</title><rect x="680.27" y="55.00" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>READ CAPACITY (10/16) — done</title><rect x="743.55" y="55.00" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>READ/WRITE (10/16) — done</title><rect x="806.82" y="55.00" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>64-bit LBA access — done</title><rect x="870.09" y="55.00" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>REQUEST SENSE / CHECK CONDITION — done</title><rect x="617.00" y="137.03" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>REPORT LUNS and multi-LUN — done</title><rect x="680.27" y="137.03" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Vdisk reuse across replug — done</title><rect x="743.55" y="137.03" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>GPT partition scan — done</title><rect x="806.82" y="137.03" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>FAT32 mount — done</title><rect x="870.09" y="137.03" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>FAT directory enumeration — done</title><rect x="617.00" y="219.05" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Runtime unmount and remount — done</title><rect x="680.27" y="219.05" width="63.27" height="82.03" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>BOT reset recovery — partial</title><rect x="743.55" y="219.05" width="63.27" height="82.03" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>SYNCHRONIZE CACHE — partial</title><rect x="806.82" y="219.05" width="63.27" height="82.03" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>SCSI UNMAP/TRIM — todo</title><rect x="870.09" y="219.05" width="63.27" height="82.03" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="616.00" y="54.00" width="318.37" height="248.08" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="621.00" y="68.00" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Bulk-Only storage</text>
+<text x="621.00" y="82.00" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">12/15 green</text>
+</g>
+<g><title>HID and input: 8 done, 2 partial, 1 missing, 11 total</title>
+<rect x="616.00" y="302.08" width="318.37" height="181.92" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>Boot keyboard — done</title><rect x="617.00" y="303.08" width="79.09" height="59.97" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Boot pointer/tablet — done</title><rect x="696.09" y="303.08" width="79.09" height="59.97" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>HID report descriptor parser — done</title><rect x="775.18" y="303.08" width="79.09" height="59.97" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Report ID support — done</title><rect x="854.28" y="303.08" width="79.09" height="59.97" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Generic keyboard decoder — done</title><rect x="617.00" y="363.05" width="79.09" height="59.97" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Generic absolute pointer decoder — done</title><rect x="696.09" y="363.05" width="79.09" height="59.97" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Keyboard LED output — done</title><rect x="775.18" y="363.05" width="79.09" height="59.97" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>HID poll thread — done</title><rect x="854.28" y="363.05" width="79.09" height="59.97" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Relative pointer and wheel — partial</title><rect x="617.00" y="423.03" width="105.46" height="59.97" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Composite HID interfaces — partial</title><rect x="722.46" y="423.03" width="105.46" height="59.97" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Gamepad and consumer controls — todo</title><rect x="827.91" y="423.03" width="105.46" height="59.97" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="616.00" y="302.08" width="318.37" height="181.92" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="621.00" y="316.08" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">HID and input</text>
+<text x="621.00" y="330.08" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">8/11 green</text>
+</g>
+<g><title>UAS storage: 9 done, 0 partial, 0 missing, 9 total</title>
+<rect x="934.37" y="54.00" width="281.63" height="168.26" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>UAS endpoint discovery — done</title><rect x="935.37" y="55.00" width="55.93" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Stream context arrays — done</title><rect x="991.29" y="55.00" width="55.93" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Streams enabled — done</title><rect x="1047.22" y="55.00" width="55.93" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>No-stream shared rings — done</title><rect x="1103.15" y="55.00" width="55.93" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Command and status IUs — done</title><rect x="1159.07" y="55.00" width="55.93" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Data IUs — done</title><rect x="935.37" y="138.13" width="69.91" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Multi-LUN discovery — done</title><rect x="1005.28" y="138.13" width="69.91" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>UAS sense handling — done</title><rect x="1075.18" y="138.13" width="69.91" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Stream release on replug — done</title><rect x="1145.09" y="138.13" width="69.91" height="83.13" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="934.37" y="54.00" width="281.63" height="168.26" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="939.37" y="68.00" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">UAS storage</text>
+<text x="939.37" y="82.00" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">9/9 green</text>
+</g>
+<g><title>Bluetooth: 0 done, 5 partial, 0 missing, 5 total</title>
+<rect x="934.37" y="222.26" width="201.17" height="130.87" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>USB HCI class probe — partial</title><rect x="935.37" y="223.26" width="66.39" height="64.43" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>HCI event and bulk pipes — partial</title><rect x="1001.76" y="223.26" width="66.39" height="64.43" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>SCO isochronous pipes — partial</title><rect x="1068.14" y="223.26" width="66.39" height="64.43" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Kernel Bluetooth bridge — partial</title><rect x="935.37" y="287.70" width="99.58" height="64.43" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>USB BT hotplug attach/detach — partial</title><rect x="1034.95" y="287.70" width="99.58" height="64.43" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="934.37" y="222.26" width="201.17" height="130.87" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="939.37" y="236.26" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Bluetooth</text>
+<text x="939.37" y="250.26" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">0/5 green</text>
+</g>
+<g><title>Serial: 2 done, 2 partial, 1 missing, 5 total</title>
+<rect x="934.37" y="353.13" width="201.17" height="130.87" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>FTDI probe and init — done</title><rect x="935.37" y="354.13" width="66.39" height="64.43" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>ttyUSB VFS node — done</title><rect x="1001.76" y="354.13" width="66.39" height="64.43" fill="#2ea043" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>CDC ACM probe and line coding — partial</title><rect x="1068.14" y="354.13" width="66.39" height="64.43" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>Serial read/write path — partial</title><rect x="935.37" y="418.57" width="99.58" height="64.43" fill="#d29922" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>CDC notifications and flow control — todo</title><rect x="1034.95" y="418.57" width="99.58" height="64.43" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="934.37" y="353.13" width="201.17" height="130.87" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="939.37" y="367.13" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Serial</text>
+<text x="939.37" y="381.13" font-family="sans-serif" font-size="9" font-weight="normal" text-anchor="start" fill="#8b949e" stroke="#0d1117" stroke-width="2" paint-order="stroke">2/5 green</text>
+</g>
+<g><title>Other USB classes: 0 done, 0 partial, 4 missing, 4 total</title>
+<rect x="1135.53" y="222.26" width="80.47" height="261.74" fill="#161b22" stroke="#010409" stroke-width="1.5"/>
+<g><title>USB audio class — todo</title><rect x="1136.53" y="223.26" width="78.47" height="64.93" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>USB network (CDC ECM/NCM) — todo</title><rect x="1136.53" y="288.20" width="78.47" height="64.93" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>USB video class — todo</title><rect x="1136.53" y="353.13" width="78.47" height="64.93" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<g><title>USB printer class — todo</title><rect x="1136.53" y="418.07" width="78.47" height="64.93" fill="#6e7681" stroke="#0d1117" stroke-width="0.4"/></g>
+<rect x="1135.53" y="222.26" width="80.47" height="261.74" fill="none" stroke="#010409" stroke-width="1.5"/>
+<text x="1140.53" y="236.26" font-family="sans-serif" font-size="11" font-weight="bold" text-anchor="start" fill="#ffffff" stroke="#0d1117" stroke-width="3" paint-order="stroke">Other USB …</text>
+</g>
+<line x1="600" y1="0" x2="600" y2="484" stroke="#30363d" stroke-width="1"/>
+<rect x="12.00" y="489.00" width="9.00" height="9.00" fill="#2ea043" stroke="#0d1117" stroke-width="0.5"/>
+<text x="26.00" y="498.00" font-family="sans-serif" font-size="11" font-weight="normal" text-anchor="start" fill="#8b949e" >green — implemented + gate-tested</text>
+<rect x="248.00" y="489.00" width="9.00" height="9.00" fill="#d29922" stroke="#0d1117" stroke-width="0.5"/>
+<text x="262.00" y="498.00" font-family="sans-serif" font-size="11" font-weight="normal" text-anchor="start" fill="#8b949e" >amber — implemented, untested</text>
+<rect x="462.00" y="489.00" width="9.00" height="9.00" fill="#6e7681" stroke="#0d1117" stroke-width="0.5"/>
+<text x="476.00" y="498.00" font-family="sans-serif" font-size="11" font-weight="normal" text-anchor="start" fill="#8b949e" >gray — missing</text>
+<text x="1204.00" y="498.00" font-family="sans-serif" font-size="10" font-weight="normal" text-anchor="end" fill="#8b949e" >generated 2026-11-05 · source: xhci.c + vdisk.c + FatDir.c + dcl_test_all.sh</text>
+</svg>

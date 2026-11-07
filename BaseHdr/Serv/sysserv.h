@@ -217,6 +217,13 @@ extern int FileIoControl(int fd, int code, void* arg);
 */
 extern int FileStat(int fd, void* buf);
 
+/**
+ * @brief Chmod -- change a file mode
+ * @param filename -- name of the file
+ * @param mode -- mode value
+ */
+extern int Chmod(const char* pathname, unsigned int mode);
+
 /*
 * GetSystemTimerTick -- returns the current system
 * tick
@@ -285,6 +292,20 @@ extern int OpenDir(char* filename);
 * @param dirent -- aurora directory entry struct
 */
 extern int ReadDir(int dirfd, void* dirent);
+
+/**
+* @brief VFSMount -- attach a registered volume's file system
+* @param name -- one-letter mount point
+* @return 0 on success, -1 on failure
+*/
+extern int VFSMount(char* name);
+
+/**
+* @brief VFSUnmount -- flush and detach a mounted volume
+* @param name -- one-letter mount point
+* @return 0 on success, -1 on failure
+*/
+extern int VFSUnmount(char* name);
 
 /**
 * @brief CreateTimer -- create timer service

@@ -165,8 +165,8 @@ static void NsFormClearFocus(void);
 static void NsFormSubmit(NsCssNode* submitNode);
 static void NsCaptchaOffer(NsCssNode* root);
 static void NsCaptchaActivate(void);
-static const char kNsUa[] =
-	"Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+static const char kNsUa[] = "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like "
+							"Gecko) Chrome/128.0.0.0 Safari/537.36";
 
 /* ---------------- JS host plumbing (Ports/quickjs via js.c) ----------------
  * js.c calls the sink for document.write and console lines. Mid-parse the
@@ -175,10 +175,10 @@ static const char kNsUa[] =
 static char* s_outDst = NULL;
 static size_t s_outSz = 0;
 static size_t* s_outDi = NULL;
-static bool s_outLive = false;  /* NsHtmlToText emission target is live */
+static bool s_outLive = false;	/* NsHtmlToText emission target is live */
 static bool s_postPage = false; /* parse finished: sink appends instead */
-static bool g_inWrite = false;  /* parsing a document.write fragment */
-static int g_writeDepth = 0;    /* fragment recursion guard (max 3) */
+static bool g_inWrite = false;	/* parsing a document.write fragment */
+static int g_writeDepth = 0;	/* fragment recursion guard (max 3) */
 
 /* Style-array indirection: a fragment parse styles into a scratch buffer
  * instead of clobbering page prefix styles, since NsEmitChar indexes the
@@ -190,9 +190,9 @@ static uint8_t* g_flCur = s_fl;
 static size_t g_colMaxCur = NS_BODY_MAX;
 
 /* Console colors (0xAARRGGBB, matching the CSS pass values). */
-#define NS_JS_COL_LOG 0xffaaaaaau
+#define NS_JS_COL_LOG  0xffaaaaaau
 #define NS_JS_COL_WARN 0xffe0a030u
-#define NS_JS_COL_ERR 0xffff5050u
+#define NS_JS_COL_ERR  0xffff5050u
 
 /* document.write fragment conversion buffers, one pair per depth level:
  * nested writes parse while the outer parse is suspended, so static
@@ -300,8 +300,8 @@ static void NsPagePaint(ChWidget* wid, ChWindow* win) {
 	int peny = tb->wid.y + 19;
 	if (s_googleHome && tb->font) {
 		static const char* letters = "Google";
-		static const uint32_t cols[6] = {0xff4285f4u, 0xffea4335u, 0xfffbbc05u,
-										 0xff4285f4u, 0xff34a853u, 0xffea4335u};
+		static const uint32_t cols[6] = {
+			0xff4285f4u, 0xffea4335u, 0xfffbbc05u, 0xff4285f4u, 0xff34a853u, 0xffea4335u};
 		int tw = 0;
 		int i;
 		for (i = 0; letters[i]; i++)
@@ -377,8 +377,8 @@ static void NsPagePaint(ChWidget* wid, ChWindow* win) {
 					if (x < tb->wid.x + 4)
 						x = tb->wid.x + 4;
 					for (size_t t = 0; t < llen; t++) {
-						ChFontDrawCharClipped(win->canv, tb->font, line[t], x, tb->wid.y + 22,
-											  0xff202124u, &clip);
+						ChFontDrawCharClipped(
+							win->canv, tb->font, line[t], x, tb->wid.y + 22, 0xff202124u, &clip);
 						x += ChFontGetWidthChar(tb->font, line[t]);
 					}
 					k += llen;
@@ -393,8 +393,13 @@ static void NsPagePaint(ChWidget* wid, ChWindow* win) {
 					chip.y = tb->wid.y + 6;
 					chip.w = bw;
 					chip.h = 22;
-					ChFontDrawTextClipped(win->canv, tb->font, "Sign in", bx + 12, tb->wid.y + 22,
-										  0xffffffffu, &chip);
+					ChFontDrawTextClipped(win->canv,
+										  tb->font,
+										  "Sign in",
+										  bx + 12,
+										  tb->wid.y + 22,
+										  0xffffffffu,
+										  &chip);
 					k += llen;
 					continue;
 				}
@@ -405,8 +410,8 @@ static void NsPagePaint(ChWidget* wid, ChWindow* win) {
 						bw = tb->wid.w > 8 ? tb->wid.w - 8 : tb->wid.w;
 					bx = tb->wid.x + (tb->wid.w - bw) / 2;
 					ChDrawRect(win->canv, bx, peny - 16, bw, 26, 0xffffffffu);
-					ChDrawRectUnfilled(win->canv, bx, peny - 16, bw, 26,
-									   s_qFocus ? 0xff4285f4u : 0xffdadce0u);
+					ChDrawRectUnfilled(
+						win->canv, bx, peny - 16, bw, 26, s_qFocus ? 0xff4285f4u : 0xffdadce0u);
 					s_qX = bx;
 					s_qY = peny - 16;
 					s_qW = bw;
@@ -418,8 +423,8 @@ static void NsPagePaint(ChWidget* wid, ChWindow* win) {
 						field.y = peny - 16;
 						field.w = bw - 16;
 						field.h = 26;
-						ChFontDrawTextClipped(win->canv, tb->font, s_query, bx + 8, peny,
-											  0xff202124u, &field);
+						ChFontDrawTextClipped(
+							win->canv, tb->font, s_query, bx + 8, peny, 0xff202124u, &field);
 					}
 					if (s_qFocus && tb->font) {
 						int cw = 0;
@@ -493,8 +498,8 @@ static void NsPagePaint(ChWidget* wid, ChWindow* win) {
 							chip.y = peny - 16;
 							chip.w = bw;
 							chip.h = 24;
-							ChFontDrawTextClipped(win->canv, tb->font, label, bx + 12, peny,
-												  0xff3c4043u, &chip);
+							ChFontDrawTextClipped(
+								win->canv, tb->font, label, bx + 12, peny, 0xff3c4043u, &chip);
 							if (!strcmp(label, "Google Search")) {
 								s_btnX = bx;
 								s_btnY = peny - 16;
@@ -534,7 +539,8 @@ static void NsPagePaint(ChWidget* wid, ChWindow* win) {
 				for (row = 0; row < dh; row++) {
 					int sy = row * s_imgH[ix] / dh;
 					uint32_t* dstp = win->canv->buffer +
-									 (uint32_t)(peny + row) * win->canv->canvasWidth + (tb->wid.x + 8);
+									 (uint32_t)(peny + row) * win->canv->canvasWidth +
+									 (tb->wid.x + 8);
 					if (peny + row >= tb->wid.y + tb->wid.h)
 						break;
 					for (col = 0; col < dw; col++) {
@@ -825,8 +831,7 @@ static void* NsImgAlloc(uint32_t n) {
 	return malloc(n);
 }
 
-int NsJpegDecode(const unsigned char* data, size_t len, unsigned** out_px, int* out_w,
-						int* out_h) {
+int NsJpegDecode(const unsigned char* data, size_t len, unsigned** out_px, int* out_w, int* out_h) {
 	void* mem;
 	Jpeg::Decoder* d;
 	unsigned char* src;
@@ -990,34 +995,51 @@ static void NsSvgAppendEscaped(char* out, size_t cap, size_t* len, const char* t
 }
 
 static const char* NsSvgTagName(const char* tag) {
-	if (!strcmp(tag, "clippath")) return "clipPath";
-	if (!strcmp(tag, "lineargradient")) return "linearGradient";
-	if (!strcmp(tag, "radialgradient")) return "radialGradient";
-	if (!strcmp(tag, "pattern")) return "pattern";
-	if (!strcmp(tag, "textpath")) return "textPath";
+	if (!strcmp(tag, "clippath"))
+		return "clipPath";
+	if (!strcmp(tag, "lineargradient"))
+		return "linearGradient";
+	if (!strcmp(tag, "radialgradient"))
+		return "radialGradient";
+	if (!strcmp(tag, "pattern"))
+		return "pattern";
+	if (!strcmp(tag, "textpath"))
+		return "textPath";
 	return tag;
 }
 
 static const char* NsSvgAttrName(const char* name) {
-	if (!strcmp(name, "viewbox")) return "viewBox";
-	if (!strcmp(name, "preserveaspectratio")) return "preserveAspectRatio";
-	if (!strcmp(name, "gradientunits")) return "gradientUnits";
-	if (!strcmp(name, "gradienttransform")) return "gradientTransform";
-	if (!strcmp(name, "patternunits")) return "patternUnits";
-	if (!strcmp(name, "patterncontentunits")) return "patternContentUnits";
-	if (!strcmp(name, "patterntransform")) return "patternTransform";
-	if (!strcmp(name, "markerwidth")) return "markerWidth";
-	if (!strcmp(name, "markerheight")) return "markerHeight";
-	if (!strcmp(name, "markerunits")) return "markerUnits";
-	if (!strcmp(name, "refx")) return "refX";
-	if (!strcmp(name, "refy")) return "refY";
+	if (!strcmp(name, "viewbox"))
+		return "viewBox";
+	if (!strcmp(name, "preserveaspectratio"))
+		return "preserveAspectRatio";
+	if (!strcmp(name, "gradientunits"))
+		return "gradientUnits";
+	if (!strcmp(name, "gradienttransform"))
+		return "gradientTransform";
+	if (!strcmp(name, "patternunits"))
+		return "patternUnits";
+	if (!strcmp(name, "patterncontentunits"))
+		return "patternContentUnits";
+	if (!strcmp(name, "patterntransform"))
+		return "patternTransform";
+	if (!strcmp(name, "markerwidth"))
+		return "markerWidth";
+	if (!strcmp(name, "markerheight"))
+		return "markerHeight";
+	if (!strcmp(name, "markerunits"))
+		return "markerUnits";
+	if (!strcmp(name, "refx"))
+		return "refX";
+	if (!strcmp(name, "refy"))
+		return "refY";
 	return name;
 }
 
 static bool NsSvgSelfClosing(const char* tag) {
 	return !strcmp(tag, "path") || !strcmp(tag, "rect") || !strcmp(tag, "circle") ||
-	       !strcmp(tag, "ellipse") || !strcmp(tag, "line") || !strcmp(tag, "polyline") ||
-	       !strcmp(tag, "polygon") || !strcmp(tag, "stop") || !strcmp(tag, "use");
+		   !strcmp(tag, "ellipse") || !strcmp(tag, "line") || !strcmp(tag, "polyline") ||
+		   !strcmp(tag, "polygon") || !strcmp(tag, "stop") || !strcmp(tag, "use");
 }
 
 static void NsSvgSerializeNode(NsCssNode* n, char* out, size_t cap, size_t* len, int depth) {
@@ -1033,8 +1055,8 @@ static void NsSvgSerializeNode(NsCssNode* n, char* out, size_t cap, size_t* len,
 		if (!an || !av || !an[0])
 			continue;
 		if (!strcmp(an, "class") || !strcmp(an, "id") || !strcmp(an, "role") ||
-		    !strcmp(an, "aria-label") || !strcmp(an, "focusable") ||
-		    !strcmp(an, "aria-hidden") || !strcmp(an, "tabindex"))
+			!strcmp(an, "aria-label") || !strcmp(an, "focusable") || !strcmp(an, "aria-hidden") ||
+			!strcmp(an, "tabindex"))
 			continue;
 		NsSvgAppend(out, cap, len, " ");
 		NsSvgAppend(out, cap, len, NsSvgAttrName(an));
@@ -1062,16 +1084,19 @@ static void NsSvgSerializeNode(NsCssNode* n, char* out, size_t cap, size_t* len,
 	NsSvgAppend(out, cap, len, ">");
 }
 
-extern "C" const uint32_t* NsInlineSvgLookup(NsCssNode* node, int* w, int* h,
-											int* iw, int* ih) {
+extern "C" const uint32_t* NsInlineSvgLookup(NsCssNode* node, int* w, int* h, int* iw, int* ih) {
 	static char markup[96 * 1024];
 	size_t len = 0;
 	unsigned* px = NULL;
 	int bw = 0, bh = 0, biw = 0, bih = 0;
-	if (w) *w = 0;
-	if (h) *h = 0;
-	if (iw) *iw = 0;
-	if (ih) *ih = 0;
+	if (w)
+		*w = 0;
+	if (h)
+		*h = 0;
+	if (iw)
+		*iw = 0;
+	if (ih)
+		*ih = 0;
 	if (!node)
 		return NULL;
 	markup[0] = 0;
@@ -1081,17 +1106,20 @@ extern "C" const uint32_t* NsInlineSvgLookup(NsCssNode* node, int* w, int* h,
 	markup[len] = 0;
 	if (ns_svg_decode(markup, len, &px, &bw, &bh, &biw, &bih) != 0 || !px)
 		return NULL;
-	if (w) *w = bw;
-	if (h) *h = bh;
-	if (iw) *iw = biw > 0 ? biw : bw;
-	if (ih) *ih = bih > 0 ? bih : bh;
+	if (w)
+		*w = bw;
+	if (h)
+		*h = bh;
+	if (iw)
+		*iw = biw > 0 ? biw : bw;
+	if (ih)
+		*ih = bih > 0 ? bih : bh;
 	return px;
 }
 
 /* Called by the layout engine for every <img>.  Resolve relative URLs
  * against the document, not the current URL-bar text. */
-extern "C" const uint32_t* NsImageLookup(const char* src, int* w, int* h,
-										 int* iw, int* ih) {
+extern "C" const uint32_t* NsImageLookup(const char* src, int* w, int* h, int* iw, int* ih) {
 	char abs[NS_URL_MAX * 2];
 	int i;
 	if (w)
@@ -1313,8 +1341,12 @@ static void NsRunFromTop(NsCssNode** stack, int depth) {
  * so text and background never resolved. Substitute a single-token
  * custom property, or the fallback, when the replacement fits. */
 /* Last `--name:` whose value is a single token with no function call. */
-static int NsCssVarValue(const char* name, size_t nl, const char** val, size_t* vl,
-						  const char* gap_lo, const char* gap_hi) {
+static int NsCssVarValue(const char* name,
+						 size_t nl,
+						 const char** val,
+						 size_t* vl,
+						 const char* gap_lo,
+						 const char* gap_hi) {
 	const char* p = s_cssBuf;
 	int found = 0;
 	*val = NULL;
@@ -1329,8 +1361,8 @@ static int NsCssVarValue(const char* name, size_t nl, const char** val, size_t* 
 		size_t n;
 		char prev;
 		prev = (p == s_cssBuf) ? ';' : p[-1];
-		if (prev != '{' && prev != ';' && prev != ' ' && prev != '\t' &&
-			prev != '\n' && prev != '\r') {
+		if (prev != '{' && prev != ';' && prev != ' ' && prev != '\t' && prev != '\n' &&
+			prev != '\r') {
 			p += 2;
 			continue;
 		}
@@ -1368,8 +1400,8 @@ static void NsCssResolveVars(void) {
 			const char* rep = NULL;
 			size_t rl = 0;
 			size_t nl;
-			while (*c && (isalpha((unsigned char)*c) || isdigit((unsigned char)*c) ||
-						  *c == '_' || *c == '-'))
+			while (*c && (isalpha((unsigned char)*c) || isdigit((unsigned char)*c) || *c == '_' ||
+						  *c == '-'))
 				c++;
 			nl = (size_t)(c - n);
 			if (nl && (*c == ')' || *c == ',')) {
@@ -1547,8 +1579,8 @@ static bool NsContainsCI(const char* h, const char* needle) {
 
 /* Resolve a stylesheet href against the page URL. */
 /* Xeneva's snprintf has no %.*s support, so prefixes are copied by hand. */
-static void NsUrlPrefix(char* dst, size_t dstsz, const char* a, size_t alen,
-						const char* b, size_t blen) {
+static void
+NsUrlPrefix(char* dst, size_t dstsz, const char* a, size_t alen, const char* b, size_t blen) {
 	if (!dst || dstsz == 0)
 		return;
 	if (alen >= dstsz)
@@ -1630,8 +1662,8 @@ static int NsCssAppendFetched(xe_http_response* resp) {
 	css = resp->body;
 	n = resp->body_len;
 	room = sizeof(s_cssBuf) - at - 2;
-	if (n >= 3 && (unsigned char)css[0] == 0xEF &&
-		(unsigned char)css[1] == 0xBB && (unsigned char)css[2] == 0xBF) {
+	if (n >= 3 && (unsigned char)css[0] == 0xEF && (unsigned char)css[1] == 0xBB &&
+		(unsigned char)css[2] == 0xBF) {
 		css += 3;
 		n -= 3;
 	}
@@ -1668,8 +1700,11 @@ static void NsCssFetchBatch(char* url0, char* url1, int n, int* fetched) {
 	if (xe_http_get_many(urls, n, kNsUa, resp, caps, rcs) != 0)
 		return;
 	for (k = 0; k < n; k++) {
-		_KePrint("[css] link %s -> %d bytes rc=%d %s\n", urls[k],
-				 (int)resp[k].body_len, rcs[k], resp[k].error);
+		_KePrint("[css] link %s -> %d bytes rc=%d %s\n",
+				 urls[k],
+				 (int)resp[k].body_len,
+				 rcs[k],
+				 resp[k].error);
 		if (*fetched < 2 && rcs[k] == 0 && NsCssAppendFetched(&resp[k]))
 			(*fetched)++;
 		xe_http_response_free(&resp[k]);
@@ -1692,8 +1727,7 @@ static void NsCollectCssLinks(const char* src, size_t srclen, const char* base) 
 		size_t k;
 		bool quote;
 		char quote_c;
-		if (src[i] != '<' ||
-			tolower((unsigned char)src[i + 1]) != 'l' ||
+		if (src[i] != '<' || tolower((unsigned char)src[i + 1]) != 'l' ||
 			tolower((unsigned char)src[i + 2]) != 'i' ||
 			tolower((unsigned char)src[i + 3]) != 'n' ||
 			tolower((unsigned char)src[i + 4]) != 'k') {
@@ -1701,8 +1735,8 @@ static void NsCollectCssLinks(const char* src, size_t srclen, const char* base) 
 			continue;
 		}
 		j = i + 5;
-		if (j < srclen && src[j] != ' ' && src[j] != '\t' &&
-			src[j] != '\r' && src[j] != '\n' && src[j] != '/' && src[j] != '>') {
+		if (j < srclen && src[j] != ' ' && src[j] != '\t' && src[j] != '\r' && src[j] != '\n' &&
+			src[j] != '/' && src[j] != '>') {
 			i++;
 			continue;
 		}
@@ -1722,17 +1756,14 @@ static void NsCollectCssLinks(const char* src, size_t srclen, const char* base) 
 			break;
 		href[0] = rel[0] = media[0] = 0;
 		if (!NsTagAttr(src, j, k, "href", href, sizeof(href)) ||
-			!NsTagAttr(src, j, k, "rel", rel, sizeof(rel)) ||
-			!NsContainsCI(rel, "stylesheet") ||
-			!href[0] || !strncmp(href, "data:", 5) ||
-			!strncmp(href, "javascript:", 11) ||
+			!NsTagAttr(src, j, k, "rel", rel, sizeof(rel)) || !NsContainsCI(rel, "stylesheet") ||
+			!href[0] || !strncmp(href, "data:", 5) || !strncmp(href, "javascript:", 11) ||
 			(strlen(s_cssBuf) + 2048 >= sizeof(s_cssBuf))) {
 			i = k + 1;
 			continue;
 		}
-		if (NsTagAttr(src, j, k, "media", media, sizeof(media)) &&
-			NsContainsCI(media, "print") && !NsContainsCI(media, "screen") &&
-			!NsContainsCI(media, "all")) {
+		if (NsTagAttr(src, j, k, "media", media, sizeof(media)) && NsContainsCI(media, "print") &&
+			!NsContainsCI(media, "screen") && !NsContainsCI(media, "all")) {
 			i = k + 1;
 			continue;
 		}
@@ -1978,7 +2009,10 @@ static void NsHtmlToText(const char* src, size_t srclen, char* dst, size_t dstsz
 							if (!g_inWrite && s_nlinks < NS_LINK_MAX) {
 								link_slot = s_nlinks;
 								link_at = di;
-								snprintf(s_links[link_slot].href, sizeof(s_links[link_slot].href), "%s", href);
+								snprintf(s_links[link_slot].href,
+										 sizeof(s_links[link_slot].href),
+										 "%s",
+										 href);
 							}
 							s_latinLink = NULL;
 							s_latinUsed = 0;
@@ -1987,19 +2021,19 @@ static void NsHtmlToText(const char* src, size_t srclen, char* dst, size_t dstsz
 								static const struct {
 									const char* id;
 									const char* name;
-								} kHl[] = {{"hi", "Hindi"},		{"bn", "Bengali"},
-										   {"te", "Telugu"},		{"mr", "Marathi"},
-										   {"ta", "Tamil"},		{"gu", "Gujarati"},
-										   {"kn", "Kannada"},		{"ml", "Malayalam"},
-										   {"pa", "Punjabi"},		{"ur", "Urdu"},
-										   {"ar", "Arabic"},		{"ru", "Russian"},
-										   {"ja", "Japanese"},	{"ko", "Korean"},
-										   {"zh-CN", "Chinese"},	{"zh-TW", "Chinese"},
-										   {"de", "German"},		{"fr", "French"},
-										   {"es", "Spanish"},		{"pt-BR", "Portuguese"},
-										   {"pt", "Portuguese"},	{"it", "Italian"},
-										   {"nl", "Dutch"},		{"pl", "Polish"},
-										   {"en", "English"},		{NULL, NULL}};
+								} kHl[] = {{"hi", "Hindi"},		 {"bn", "Bengali"},
+										   {"te", "Telugu"},	 {"mr", "Marathi"},
+										   {"ta", "Tamil"},		 {"gu", "Gujarati"},
+										   {"kn", "Kannada"},	 {"ml", "Malayalam"},
+										   {"pa", "Punjabi"},	 {"ur", "Urdu"},
+										   {"ar", "Arabic"},	 {"ru", "Russian"},
+										   {"ja", "Japanese"},	 {"ko", "Korean"},
+										   {"zh-CN", "Chinese"}, {"zh-TW", "Chinese"},
+										   {"de", "German"},	 {"fr", "French"},
+										   {"es", "Spanish"},	 {"pt-BR", "Portuguese"},
+										   {"pt", "Portuguese"}, {"it", "Italian"},
+										   {"nl", "Dutch"},		 {"pl", "Polish"},
+										   {"en", "English"},	 {NULL, NULL}};
 								if (hl) {
 									hl += 3;
 									for (int hi = 0; kHl[hi].id; hi++) {
@@ -2933,7 +2967,8 @@ again:
 		xe_http_response_free(&resp);
 		return -1;
 	}
-	_KePrint("[css] fetched %d bytes tls=%d status=%d\n", (int)resp.body_len, resp.tls, resp.status);
+	_KePrint(
+		"[css] fetched %d bytes tls=%d status=%d\n", (int)resp.body_len, resp.tls, resp.status);
 	xe_heap_check("post-fetch");
 
 	blen = resp.body_len;
@@ -2978,8 +3013,7 @@ again:
 	_KePrint("[css] author sheet %d bytes\n", (int)strlen(s_cssBuf));
 	xe_heap_check("post-collect");
 	NsCssBegin();
-	NsCssSetViewport(s_pageBox ? s_pageBox->wid.w : 632,
-					 s_pageBox ? s_pageBox->wid.h : 420);
+	NsCssSetViewport(s_pageBox ? s_pageBox->wid.w : 632, s_pageBox ? s_pageBox->wid.h : 420);
 	_KePrint("[css] begin ok\n");
 	xe_heap_check("post-begin");
 	NsCssAddSheet(s_cssBuf, strlen(s_cssBuf));
@@ -3182,8 +3216,8 @@ static int NsFormEditable(NsCssNode* n) {
 		if (!type || !type[0])
 			return 1;
 		if (!strcmp(type, "text") || !strcmp(type, "search") || !strcmp(type, "email") ||
-		    !strcmp(type, "url") || !strcmp(type, "password") || !strcmp(type, "number") ||
-		    !strcmp(type, "tel"))
+			!strcmp(type, "url") || !strcmp(type, "password") || !strcmp(type, "number") ||
+			!strcmp(type, "tel"))
 			return 1;
 	}
 	return 0;
@@ -3199,7 +3233,7 @@ static int NsFormSubmitControl(NsCssNode* n) {
 	if (!strcmp(n->tag, "input")) {
 		const char* type = NsCssNodeAttr(n, "type");
 		return type && (!strcmp(type, "submit") || !strcmp(type, "button") ||
-		                !strcmp(type, "reset") || !strcmp(type, "image"));
+						!strcmp(type, "reset") || !strcmp(type, "image"));
 	}
 	return 0;
 }
@@ -3251,12 +3285,12 @@ static void NsFormAppendFields(NsCssNode* n, NsCssNode* submitNode, char* url, s
 			if (!type || !type[0])
 				type = "text";
 			if (!strcmp(type, "submit") || !strcmp(type, "button") || !strcmp(type, "reset") ||
-			    !strcmp(type, "image")) {
+				!strcmp(type, "image")) {
 				if (c != submitNode)
 					continue;
 			}
 			if ((!strcmp(type, "checkbox") || !strcmp(type, "radio")) &&
-			    !NsCssNodeAttr(c, "checked"))
+				!NsCssNodeAttr(c, "checked"))
 				continue;
 			NsControlValue(c, value, sizeof(value));
 			if (!value[0] && (!strcmp(type, "checkbox") || !strcmp(type, "radio")))
@@ -3320,8 +3354,8 @@ static int s_capBlockCode;
 
 /* isalnum is not declared in this libc. A name byte is a letter, digit, '-' or '_'. */
 static int NsNameByte(unsigned char c) {
-	return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-	       c == '-' || c == '_';
+	return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-' ||
+		   c == '_';
 }
 
 static int NsCaptchaPage(const char* html) {
@@ -3600,8 +3634,10 @@ static int NsCaptchaParse(const char* html, const char* base) {
 	else if (!strncmp(action, "https://", 8) || !strncmp(action, "http://", 7))
 		snprintf(s_capAction, sizeof(s_capAction), "%s", action);
 	else
-		NsResolveUrl(base && base[0] ? base : "https://www.google.com/sorry/index", action,
-					 s_capAction, sizeof(s_capAction));
+		NsResolveUrl(base && base[0] ? base : "https://www.google.com/sorry/index",
+					 action,
+					 s_capAction,
+					 sizeof(s_capAction));
 	return s_capSite[0] ? 1 : 0;
 }
 
@@ -3760,8 +3796,8 @@ static void NsCaptchaNote(const char* label) {
 	btn = NsCssNodeById(s_domRoot, "ns-captcha");
 	if (btn && label && label[0])
 		NsCssNodeAddAttribute(btn, "value", label);
-	if (NsLayoutBuild(s_domRoot, s_pageBox ? s_pageBox->wid.w : 632,
-					  s_pageBox ? s_pageBox->wid.h : 420) == 0)
+	if (NsLayoutBuild(
+			s_domRoot, s_pageBox ? s_pageBox->wid.w : 632, s_pageBox ? s_pageBox->wid.h : 420) == 0)
 		s_layoutActive = 1;
 	else
 		s_layoutActive = 0;
@@ -3894,8 +3930,7 @@ static int NsCaptchaToken(const char* html, char* out, size_t outsz) {
 }
 
 static int NsCapHttp(const char* url) {
-	return url && url[0] &&
-		   (!strncmp(url, "https://", 8) || !strncmp(url, "http://", 7));
+	return url && url[0] && (!strncmp(url, "https://", 8) || !strncmp(url, "http://", 7));
 }
 
 static int NsCapSorry(const char* url) {
@@ -3929,8 +3964,8 @@ static int NsCaptchaSorryUrl(const char* html, const char* base, char* out, size
 			return out[0] ? 1 : 0;
 		}
 		if (raw[0] == '/' || !strncmp(raw, "sorry/", 6)) {
-			NsResolveUrl(base && base[0] ? base : "https://www.google.com/sorry/index", raw, out,
-						 outsz);
+			NsResolveUrl(
+				base && base[0] ? base : "https://www.google.com/sorry/index", raw, out, outsz);
 			return out[0] ? 1 : 0;
 		}
 		p += 11;
@@ -4042,8 +4077,10 @@ static void NsCaptchaActivate(void) {
 				NsCaptchaNote(note);
 				return;
 			}
-			n = snprintf(w->sorry, sizeof(w->sorry),
-						 "https://www.google.com/sorry/index?continue=%s", w->enc);
+			n = snprintf(w->sorry,
+						 sizeof(w->sorry),
+						 "https://www.google.com/sorry/index?continue=%s",
+						 w->enc);
 			if (n < 0 || (size_t)n >= sizeof(w->sorry)) {
 				snprintf(note, sizeof(note), "Check link is too long");
 				free(w);
@@ -4084,8 +4121,8 @@ static void NsCaptchaActivate(void) {
 		return;
 	}
 
-	rc = xe_http_get("https://www.google.com/recaptcha/enterprise.js", "GET", kNsUa, &resp,
-					 NS_BODY_MAX);
+	rc = xe_http_get(
+		"https://www.google.com/recaptcha/enterprise.js", "GET", kNsUa, &resp, NS_BODY_MAX);
 	if (resp.body) {
 		const char* p = resp.body;
 		const char* hit;
@@ -4133,10 +4170,14 @@ static void NsCaptchaActivate(void) {
 			snprintf(note, sizeof(note), "Could not start the check");
 			goto done;
 		}
-		n = snprintf(w->anchor, sizeof(w->anchor),
-					 "https://www.google.com/recaptcha/enterprise/anchor?ar=1&k=%s&co=%s&hl=en&v=%s&"
-					 "size=normal",
-					 sk, coe, w->ver);
+		n = snprintf(
+			w->anchor,
+			sizeof(w->anchor),
+			"https://www.google.com/recaptcha/enterprise/anchor?ar=1&k=%s&co=%s&hl=en&v=%s&"
+			"size=normal",
+			sk,
+			coe,
+			w->ver);
 		if (n < 0 || (size_t)n >= sizeof(w->anchor)) {
 			snprintf(note, sizeof(note), "Check link is too long");
 			goto done;
@@ -4188,7 +4229,9 @@ static void NsCaptchaActivate(void) {
 			snprintf(note, sizeof(note), "Checkbox was not accepted");
 			goto done;
 		}
-		snprintf(reload, sizeof(reload), "https://www.google.com/recaptcha/enterprise/reload?k=%s",
+		snprintf(reload,
+				 sizeof(reload),
+				 "https://www.google.com/recaptcha/enterprise/reload?k=%s",
 				 s_capSite);
 		xe_http_set_body("application/x-www-form-urlencoded", w->body, strlen(w->body));
 		rc = xe_http_get(reload, "POST", kNsUa, &resp, NS_BODY_MAX);
@@ -4218,8 +4261,11 @@ static void NsCaptchaActivate(void) {
 		}
 	}
 	xe_http_set_body("application/x-www-form-urlencoded", w->body, strlen(w->body));
-	rc = xe_http_get(s_capAction[0] ? s_capAction : "https://www.google.com/sorry/index", "POST",
-					 kNsUa, &resp, NS_BODY_MAX);
+	rc = xe_http_get(s_capAction[0] ? s_capAction : "https://www.google.com/sorry/index",
+					 "POST",
+					 kNsUa,
+					 &resp,
+					 NS_BODY_MAX);
 	xe_http_last_url(w->finalu, sizeof(w->finalu));
 	_KePrint("[captcha] post %d\n", resp.status);
 	{
@@ -4315,7 +4361,7 @@ static void NsHandleKey(int raw) {
 		if (raw == NS_KEY_PGUP || raw == NS_KEY_PGDN) {
 			int vis = NsVisibleLines();
 			NsPageScroll(raw == NS_KEY_PGUP ? (vis > 1 ? -(vis - 1) : -1)
-			                                : (vis > 1 ? (vis - 1) : 1));
+											: (vis > 1 ? (vis - 1) : 1));
 			return;
 		}
 		if (raw == 0x01) { /* Escape: leave the field. */
@@ -4329,8 +4375,9 @@ static void NsHandleKey(int raw) {
 		}
 		if (rawkey == KEY_BACKSPACE) {
 			if (s_formCursor > 0) {
-				memmove(s_formValue + s_formCursor - 1, s_formValue + s_formCursor,
-				        len - s_formCursor + 1);
+				memmove(s_formValue + s_formCursor - 1,
+						s_formValue + s_formCursor,
+						len - s_formCursor + 1);
 				s_formCursor--;
 				NsLayoutSetEdit(s_formFocus, s_formValue, (int)s_formCursor, 1);
 				NsPageRender();
@@ -4339,8 +4386,8 @@ static void NsHandleKey(int raw) {
 		}
 		if (raw == 0xE053 || raw == KEY_DELETE) {
 			if (s_formCursor < len) {
-				memmove(s_formValue + s_formCursor, s_formValue + s_formCursor + 1,
-				        len - s_formCursor);
+				memmove(
+					s_formValue + s_formCursor, s_formValue + s_formCursor + 1, len - s_formCursor);
 				NsLayoutSetEdit(s_formFocus, s_formValue, (int)s_formCursor, 1);
 				NsPageRender();
 			}
@@ -4348,8 +4395,8 @@ static void NsHandleKey(int raw) {
 		}
 		int fc = ChitralekhaKeyToASCII(raw);
 		if (fc >= 32 && fc < 127 && len + 1 < sizeof(s_formValue)) {
-			memmove(s_formValue + s_formCursor + 1, s_formValue + s_formCursor,
-			        len - s_formCursor + 1);
+			memmove(
+				s_formValue + s_formCursor + 1, s_formValue + s_formCursor, len - s_formCursor + 1);
 			s_formValue[s_formCursor] = (char)fc;
 			s_formCursor++;
 			NsLayoutSetEdit(s_formFocus, s_formValue, (int)s_formCursor, 1);
@@ -4532,7 +4579,8 @@ static void WindowHandleMessage(PostEvent* e) {
 					NsFormClearFocus();
 				}
 			}
-			if (!s_layoutActive && s_qHave && lx >= s_qX && lx < s_qX + s_qW && ly >= s_qY && ly < s_qY + s_qH) {
+			if (!s_layoutActive && s_qHave && lx >= s_qX && lx < s_qX + s_qW && ly >= s_qY &&
+				ly < s_qY + s_qH) {
 				int rel = lx - s_qX - 8;
 				size_t i = 0;
 				int w = 0;
@@ -4638,8 +4686,7 @@ int main(int argc, char* argv[]) {
      * user args, so scan everything (argv[0] is already "--selftest"
      * under init's TERM runner). */
 	for (int a = 0; a < argc; a++) {
-		if (argv[a] &&
-			(!strcmp(argv[a], "--selftest") || !strcmp(argv[a], "selftest")) &&
+		if (argv[a] && (!strcmp(argv[a], "--selftest") || !strcmp(argv[a], "selftest")) &&
 			a + 1 < argc && argv[a + 1] && argv[a + 1][0]) {
 			char turl[NS_URL_MAX];
 			strncpy(turl, argv[a + 1], sizeof(turl) - 1);
@@ -4669,8 +4716,14 @@ int main(int argc, char* argv[]) {
 				if (s_layoutActive) {
 					int nb = 0, nl = 0, nr = 0, nk = 0;
 					NsLayoutStats(&nb, &nl, &nr, &nk);
-					_KePrint("[layouttest] text=%d blocks=%d lines=%d runs=%d links=%d content=%d\n",
-							(int)strlen(NsLayoutText()), nb, nl, nr, nk, NsLayoutContentHeight());
+					_KePrint(
+						"[layouttest] text=%d blocks=%d lines=%d runs=%d links=%d content=%d\n",
+						(int)strlen(NsLayoutText()),
+						nb,
+						nl,
+						nr,
+						nk,
+						NsLayoutContentHeight());
 				} else {
 					_KePrint("[layouttest] no layout (fallback renderer)\n");
 				}
@@ -4695,7 +4748,12 @@ int main(int argc, char* argv[]) {
 				const char* lt = NsLayoutText();
 				NsLayoutStats(&nb, &nl, &nr, &nk);
 				_KePrint("[layouttest] text=%d blocks=%d lines=%d runs=%d links=%d content=%d\n",
-						(int)strlen(lt), nb, nl, nr, nk, NsLayoutContentHeight());
+						 (int)strlen(lt),
+						 nb,
+						 nl,
+						 nr,
+						 nk,
+						 NsLayoutContentHeight());
 				if (lt[0]) {
 					char lhead[161];
 					strncpy(lhead, lt, 160);
@@ -4706,14 +4764,21 @@ int main(int argc, char* argv[]) {
 				NsLayoutDumpBoxes();
 				{
 					int top = NsLayoutPaintTest(632, 420, 0);
-					int bottom = NsLayoutPaintTest(632, 420,
-							NsLayoutContentHeight() > 420 ? NsLayoutContentHeight() - 420 : 0);
-					_KePrint("[painttest] top_nonbg=%d bottom_nonbg=%d (%s)\n", top, bottom,
-							top > 0 && bottom > 0 ? "PASS" : "FAIL");
+					int bottom = NsLayoutPaintTest(
+						632,
+						420,
+						NsLayoutContentHeight() > 420 ? NsLayoutContentHeight() - 420 : 0);
+					_KePrint("[painttest] top_nonbg=%d bottom_nonbg=%d (%s)\n",
+							 top,
+							 bottom,
+							 top > 0 && bottom > 0 ? "PASS" : "FAIL");
 					{
 						int d1 = NsLayoutDumpPpm("/data/ltop.ppm", 632, 420, 0);
-						int d2 = NsLayoutDumpPpm("/data/lbot.ppm", 632, 420,
-								NsLayoutContentHeight() > 420 ? NsLayoutContentHeight() - 420 : 0);
+						int d2 = NsLayoutDumpPpm(
+							"/data/lbot.ppm",
+							632,
+							420,
+							NsLayoutContentHeight() > 420 ? NsLayoutContentHeight() - 420 : 0);
 						_KePrint("[dumptest] top=%d bottom=%d\n", d1, d2);
 					}
 				}
@@ -4735,7 +4800,8 @@ int main(int argc, char* argv[]) {
 	s_urlCursor = strlen(s_url);
 
 	s_app = ChitralekhaStartApp(argc, argv);
-	s_mainWin = ChCreateWindow(s_app, WINDOW_FLAG_MOVABLE, "NetSurf", 100, 80, 640, 480);
+	s_mainWin = ChCreateWindow(
+		s_app, WINDOW_FLAG_MOVABLE | WINDOW_FLAG_STYLE_KNOT, "NetSurf", 100, 80, 640, 480);
 	s_mainWin->color = 0xFF252525;
 
 	s_urlBox = ChCreateTextBox(s_mainWin, 4, 2, 640 - 92, 24);

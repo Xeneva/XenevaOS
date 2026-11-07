@@ -34,6 +34,7 @@
 
 #include <_xeneva.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 XE_EXTERN {
@@ -152,6 +153,9 @@ XE_EXTERN {
 	XE_LIB int _KeCreatePipe(char* name, size_t sz);
 	XE_LIB int _KeGetStorageDiskInfo(uint8_t diskID, void* buffer);
 	XE_LIB int _KeGetStoragePartitionInfo(uint8_t diskID, uint8_t partitionID, void* buffer);
+	XE_LIB int _KeMount(const char* name);
+	XE_LIB int _KeUnmount(const char* name);
+	XE_LIB int _KeOwnFsys(const char* path, uid_t uid, gid_t gid);
 #ifdef __cplusplus
 }
 #endif

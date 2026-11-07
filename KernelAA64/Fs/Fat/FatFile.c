@@ -175,7 +175,9 @@ AuVFSNode* FatCreateFile(AuVFSNode* fsys, char* filename) {
 	memset(extract, 0, 16);
 	while (p) {
 		int i = 0;
-		for (i = 0; i < 16; i++) {
+		/* at most 15 chars: a 16-char name left extract without a
+		 * terminator and the strcpy below ran off the end */
+		for (i = 0; i < 15; i++) {
 			if (p[i] == '/' || p[i] == '\0')
 				break;
 			extract[i] = p[i];
@@ -200,9 +202,13 @@ AuVFSNode* FatCreateFile(AuVFSNode* fsys, char* filename) {
 			FatDir* dirent = (FatDir*)buff;
 			for (int i = 0; i < 16; i++) {
 				if ((dirent->filename[0] == 0x00) || (dirent->filename[0] == 0xE5)) {
-					memcpy(dirent->filename, fname, 11);
-
+					/* on a full volume this used to write an entry that
+					 * points at cluster 0 */
 					uint32_t cluster = FatFindFreeCluster(fsys);
+					if (!cluster)
+						goto create_failed;
+
+					memcpy(dirent->filename, fname, 11);
 					FatAllocCluster(fsys, cluster, FAT_EOC_MARK);
 					FatClearCluster(fsys, cluster);
 
@@ -218,8 +224,7 @@ AuVFSNode* FatCreateFile(AuVFSNode* fsys, char* filename) {
 
 					uint64_t sector = FatClusterToSector32(_fs, parent_cluster);
 
-					aa64_data_cache_clean_range(buff, PAGE_SIZE);
-					AuVDiskWrite(_fs->vdisk, sector + j, 1, buff);
+					FatWriteDirSector(_fs, sector + j, buff);
 
 					AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 
@@ -240,13 +245,16 @@ AuVFSNode* FatCreateFile(AuVFSNode* fsys, char* filename) {
 			}
 		}
 		parent_cluster = FatReadFAT(fsys, parent_cluster);
-		if (FAT_IS_EOC(parent_cluster))
+		if (FAT_IS_EOC(parent_cluster) || parent_cluster < 2)
 			break;
 		/* actually, here we need to allocate a new
 		 * cluster and write it to root cluster
 		 * so that root directory expands
 		 */
 	}
+create_failed:
+	/* the page used to leak on this path */
+	AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 	kfree(parent);
 	kfree(file);
 	return NULL;
@@ -291,8 +299,7 @@ void FatFileUpdateSize(AuVFSNode* fsys, AuVFSNode* file, size_t size) {
 				 * and matches only by luck --axiss */
 				if (memcmp(fname, name, 11) == 0) {
 					dirent->file_size += size;
-					aa64_data_cache_clean_range(buff, PAGE_SIZE);
-					AuVDiskWrite(_fs->vdisk, FatClusterToSector32(_fs, dir_cluster) + j, 1, buff);
+					FatWriteDirSector(_fs, FatClusterToSector32(_fs, dir_cluster) + j, buff);
 					AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 					return;
 				}
@@ -301,7 +308,7 @@ void FatFileUpdateSize(AuVFSNode* fsys, AuVFSNode* file, size_t size) {
 		}
 
 		dir_cluster = FatReadFAT(fsys, dir_cluster);
-		if (FAT_IS_EOC(dir_cluster)) {
+		if (FAT_IS_EOC(dir_cluster) || dir_cluster < 2) {
 			break;
 		}
 	}
@@ -350,9 +357,13 @@ int FatFileUpdateFilename(AuVFSNode* fsys, AuVFSNode* file, char* newname) {
 				memcpy(name, dirent->filename, 11);
 				//name[11] = 0;
 
-				if (strcmp(name, fname) == 0) {
+				/* fixed 11-byte names without a terminator: strcmp read
+				 * past both arrays */
+				if (memcmp(name, fname, 11) == 0) {
 					memcpy(dirent->filename, nname, 11);
-					AuVDiskWrite(_fs->vdisk, FatClusterToSector32(_fs, dir_cluster) + j, 1, buff);
+					/* also cleans the cache before the write, which this
+					 * path used to skip */
+					FatWriteDirSector(_fs, FatClusterToSector32(_fs, dir_cluster) + j, buff);
 					AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 					return 0;
 				}
@@ -361,49 +372,66 @@ int FatFileUpdateFilename(AuVFSNode* fsys, AuVFSNode* file, char* newname) {
 		}
 
 		dir_cluster = FatReadFAT(fsys, dir_cluster);
-		if (FAT_IS_EOC(dir_cluster))
+		if (FAT_IS_EOC(dir_cluster) || dir_cluster < 2)
 			break;
 	}
 
+	/* the page used to leak on this path */
+	AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 	return -1;
 }
 
 /*
- * FatFileWriteContent -- write contents to fat file (4kib)
+ * FatFileWriteContent -- write one cluster of content to a fat file
  * @param fsys -- Pointer to file system node
  * @param first_cluster -- first cluster of the file
  * @param buffer -- buffer to write
+ * @param length -- bytes of buffer to write, at most one cluster
+ * @return true when the cluster was written
  */
-void FatFileWriteContent(AuVFSNode* fsys, AuVFSNode* file, uint64_t* buffer) {
+bool FatFileWriteContent(AuVFSNode* fsys, AuVFSNode* file, uint8_t* buffer, size_t length) {
 	if (!fsys)
-		return;
+		return false;
 
 	FatFS* _fs = (FatFS*)fsys->device;
-
-	uint64_t* buff = (uint64_t*)P2V((size_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
-	memset(buff, 0, PAGE_SIZE);
+	size_t cluster_sz = _fs->cluster_sz_in_bytes;
 
 	uint32_t cluster = file->current;
 	if (file->eof) {
 		/* write the new cluster value to
-		* old cluster */
+		* old cluster. The volume being full used to link cluster 0
+		* into the chain. */
 		uint32_t new_cluster = FatFindFreeCluster(fsys);
+		if (!new_cluster)
+			return false;
 		FatAllocCluster(fsys, cluster, new_cluster);
 		FatAllocCluster(fsys, new_cluster, FAT_EOC_MARK);
-		FatClearCluster(fsys, new_cluster);
-		uint32_t clust_val = FatReadFAT(fsys, cluster);
+		/* no FatClearCluster here any more: the whole cluster is written
+		 * just below, so clearing it first was a wasted cluster write */
 		cluster = new_cluster;
 		file->eof = 0;
 	}
 
 	/* EOC marks span 0x0FFFFFF8-0x0FFFFFFF; equality against FAT_EOC_MARK
 	 * alone misses the 0x0FFFFFFF terminator mkfs/mtools write --axiss */
-	if (!FAT_IS_EOC(cluster) && (cluster != (FAT_BAD_CLUSTER & 0x0fffffff))) {
-		memcpy(buff, buffer, PAGE_SIZE);
-		aa64_data_cache_clean_range(buff, PAGE_SIZE);
-		AuVDiskWrite(_fs->vdisk, FatClusterToSector32(_fs, cluster), _fs->__SectorPerCluster, buff);
-		file->pos++;
-	}
+	if (FAT_IS_EOC(cluster) || cluster == (FAT_BAD_CLUSTER & 0x0fffffff) || cluster < 2)
+		return false;
+
+	/* bounce through the per-volume scratch page instead of allocating
+	 * and freeing a page for every cluster written. Copy only what the
+	 * caller has: the old code always copied a full 4K page and read
+	 * past the end of a shorter final chunk. */
+	uint8_t* buff = (uint8_t*)_fs->_scratchBuffer;
+	if (length > cluster_sz)
+		length = cluster_sz;
+	memcpy(buff, buffer, length);
+	if (length < cluster_sz)
+		memset(buff + length, 0, cluster_sz - length);
+	aa64_data_cache_clean_range(buff, PAGE_SIZE);
+	AuVDiskWrite(_fs->vdisk, FatClusterToSector32(_fs, cluster), _fs->__SectorPerCluster,
+				 (uint64_t*)buff);
+	file->pos++;
+
 	uint32_t return_cluster = FatReadFAT(fsys, cluster);
 	if (FAT_IS_EOC(return_cluster)) {
 		file->eof = 1;
@@ -411,10 +439,8 @@ void FatFileWriteContent(AuVFSNode* fsys, AuVFSNode* file, uint64_t* buffer) {
 		cluster = return_cluster;
 
 	file->current = cluster;
-	file->size = file->pos * _fs->__SectorPerCluster * _fs->__BytesPerSector;
-	size_t sz = file->size;
-
-	AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
+	file->size = file->pos * cluster_sz;
+	return true;
 }
 
 /*
@@ -447,14 +473,23 @@ size_t FatWrite(AuVFSNode* fsys, AuVFSNode* file, uint64_t* buffer, uint32_t len
 	 * 8x too far since pointer arithmetic scales by sizeof(uint64_t),
 	 * corrupted every cluster after the first on any write > 4KB --axiss */
 	uint8_t* byte_buffer = (uint8_t*)buffer;
-	for (int i = 0; i < num_cluster; i++) {
-		FatFileWriteContent(fsys, file, (uint64_t*)byte_buffer);
-		byte_buffer += (_fs->__BytesPerSector * _fs->__SectorPerCluster);
+	size_t cluster_sz = (size_t)_fs->__BytesPerSector * _fs->__SectorPerCluster;
+	size_t written = 0;
+	for (size_t i = 0; i < num_cluster; i++) {
+		size_t chunk = length - written;
+		if (chunk > cluster_sz)
+			chunk = cluster_sz;
+		/* stop on a full volume instead of reporting the whole length */
+		if (!FatFileWriteContent(fsys, file, byte_buffer, chunk))
+			break;
+		byte_buffer += cluster_sz;
+		written += chunk;
 	}
 
-	FatFileUpdateSize(fsys, file, length);
+	if (written)
+		FatFileUpdateSize(fsys, file, written);
 	//FatFileWriteDone(file);
-	return length;
+	return written;
 }
 /**
  * @brief FatFileClearDirEntry -- clears an entry of a directory
@@ -510,8 +545,7 @@ int FatFileClearDirEntry(AuVFSNode* fsys, AuVFSNode* file) {
 				}
 				if (memcmp(dirent->filename, fname, 11) == 0) {
 					dirent->filename[0] = 0xE5;
-					aa64_data_cache_clean_range(buff, PAGE_SIZE);
-					AuVDiskWrite(_fs->vdisk, FatClusterToSector32(_fs, dir_clust) + j, 1, buff);
+					FatWriteDirSector(_fs, FatClusterToSector32(_fs, dir_clust) + j, buff);
 					AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 					return 0;
 				}

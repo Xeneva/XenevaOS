@@ -48,43 +48,43 @@
 #include <aurora.h>
 
 #ifdef ARCH_X64
-#define X86_64_PAGING_PRESENT 0x1
-#define X86_64_PAGING_WRITABLE 0x2
-#define X86_64_PAGING_USER     0x4
-#define X86_64_PAGING_NO_EXECUTE 0x80000
-#define X86_64_PAGING_NO_CACHING 0x200000
+#define X86_64_PAGING_PRESENT		0x1
+#define X86_64_PAGING_WRITABLE		0x2
+#define X86_64_PAGING_USER			0x4
+#define X86_64_PAGING_NO_EXECUTE	0x80000
+#define X86_64_PAGING_NO_CACHING	0x200000
 #define X86_64_PAGING_WRITE_THROUGH 0x400000
 #else
-#define PTE_VALID (1ULL << 0)
-#define PTE_TABLE (1ULL << 1)
-#define PTE_BLOCK (0ULL << 1)
-#define PTE_AF (1ULL << 10)
-#define PTE_SH_INNER (3ULL << 8)
-#define PTE_AP_RW (0ULL << 6)  //RW access
-#define PTE_AP_RW_USER (1ULL << 6)  //1ULL << 6
-#define PTE_ATTR_IDX_0 (0ULL << 2)  //Device memory
-#define PTE_ATTR_IDX_1 (1ULL << 2)  //Normal memory
-#define PTE_USER_EXECUTABLE (0ULL << 54)
-#define PTE_KERNEL_EXECUTABLE (0ULL << 53)
-#define PTE_USER_NOT_EXECUTABLE (1ULL << 54)
+#define PTE_VALID				  (1ULL << 0)
+#define PTE_TABLE				  (1ULL << 1)
+#define PTE_BLOCK				  (0ULL << 1)
+#define PTE_AF					  (1ULL << 10)
+#define PTE_SH_INNER			  (3ULL << 8)
+#define PTE_AP_RW				  (0ULL << 6) //RW access
+#define PTE_AP_RW_USER			  (1ULL << 6) //1ULL << 6
+#define PTE_ATTR_IDX_0			  (0ULL << 2) //Device memory
+#define PTE_ATTR_IDX_1			  (1ULL << 2) //Normal memory
+#define PTE_USER_EXECUTABLE		  (0ULL << 54)
+#define PTE_KERNEL_EXECUTABLE	  (0ULL << 53)
+#define PTE_USER_NOT_EXECUTABLE	  (1ULL << 54)
 #define PTE_KERNEL_NOT_EXECUTABLE (1ULL << 53)
 
-#define PTE_NORMAL_MEM PTE_ATTR_IDX_1
-#define PTE_DEVICE_MEM PTE_ATTR_IDX_0
-#define PTE_NORMAL_NON_CACHEABLE  (2ULL << 2)
+#define PTE_NORMAL_MEM			 PTE_ATTR_IDX_1
+#define PTE_DEVICE_MEM			 PTE_ATTR_IDX_0
+#define PTE_NORMAL_NON_CACHEABLE (2ULL << 2)
 #endif
 
-#define PHYSICAL_MEM_BASE  0xFFFF800000000000
-#define MMIO_BASE          0xFFFFFF1000000000
+#define PHYSICAL_MEM_BASE 0xFFFF800000000000
+#define MMIO_BASE		  0xFFFFFF1000000000
 
-#define PAGE_SHIFT  12
+#define PAGE_SHIFT 12
 
-#define VIRT_GETPAGE_CREATE (1<<0)
-#define VIRT_GETPAGE_ONLY_RET (1<<1)
+#define VIRT_GETPAGE_CREATE	  (1 << 0)
+#define VIRT_GETPAGE_ONLY_RET (1 << 1)
 
-#define KERNEL_BASE_ADDRESS  0xFFFFE00000000000
-#define USER_BASE_ADDRESS 0x0000000060000000   //0x0000400000000000
-#define USER_END_ADDRESS  0x0000000080000000
+#define KERNEL_BASE_ADDRESS 0xFFFFE00000000000
+#define USER_BASE_ADDRESS	0x0000000060000000 //0x0000400000000000
+#define USER_END_ADDRESS	0x0000000080000000
 
 #ifdef ARCH_X64
 #define PAGE_SIZE 4096
@@ -96,10 +96,11 @@
 /* aligns a virtual address to its immediate page boundary */
 #define VIRT_ADDR_ALIGN(vaddr) (vaddr & ~(PAGE_SIZE - 1))
 
-#define PAGE_ALIGN(value)  (((PAGE_SIZE-1)&value) ? ((value + PAGE_SIZE) & ~(PAGE_SIZE-1)) : value)
+#define PAGE_ALIGN(value)                                                                          \
+	(((PAGE_SIZE - 1) & value) ? ((value + PAGE_SIZE) & ~(PAGE_SIZE - 1)) : value)
 
-#ifdef ARCH_X64	
-#pragma pack(push,1)
+#ifdef ARCH_X64
+#pragma pack(push, 1)
 /* 
  * AuVPage -- structure of virtual page
  */
@@ -119,13 +120,13 @@ typedef union _AuVPage_ {
 		uint64_t page : 28;
 		uint64_t reserved : 12;
 		uint64_t nx : 1;
-	}bits;
+	} bits;
 	uint64_t raw;
-}AuVPage;
+} AuVPage;
 #pragma pack(pop)
 #elif ARCH_ARM64
 
-#pragma pack(push,1)
+#pragma pack(push, 1)
 typedef union _AuVPage_ {
 	struct {
 		uint64_t present : 1;
@@ -148,7 +149,7 @@ typedef union _AuVPage_ {
 		uint64_t avail : 2;
 
 		uint64_t ignored : 5;
-	}bits;
+	} bits;
 
 	struct {
 		uint64_t valid : 1;
@@ -160,9 +161,9 @@ typedef union _AuVPage_ {
 		uint64_t xntable : 1;
 		uint64_t aptable : 2;
 		uint64_t nstable : 1;
-	}tableBits;
+	} tableBits;
 	uint64_t raw;
-}AuVPage;
+} AuVPage;
 #pragma pack(pop)
 #endif
 
@@ -182,7 +183,7 @@ extern void AuVmmngrInitialize();
  * @return virtual page from virtual address
  * in AuVPage format
  */
-AU_EXTERN AU_EXPORT AuVPage * AuVmmngrGetPage(uint64_t virt_addr, uint8_t flags, uint8_t mode);
+AU_EXTERN AU_EXPORT AuVPage* AuVmmngrGetPage(uint64_t virt_addr, uint8_t flags, uint8_t mode);
 
 /**
  * @brief AuMapPage -- Maps a virtual page to physical frame
@@ -202,7 +203,8 @@ AU_EXTERN AU_EXPORT bool AuMapPage(uint64_t phys_addr, uint64_t virt_addr, uint8
 * @param attrib -- Page attributes
 * @return 1 on success, 0 on failure
 */
-AU_EXTERN AU_EXPORT bool AuMapPageEx(uint64_t *pml4i, uint64_t phys_addr, uint64_t virt_addr, uint8_t attrib);
+AU_EXTERN AU_EXPORT bool
+AuMapPageEx(uint64_t* pml4i, uint64_t phys_addr, uint64_t virt_addr, uint8_t attrib);
 
 /**
  * @brief AuMapMMIO -- Maps Memory Mapped I/O addresses
@@ -289,6 +291,14 @@ extern void AuVmmngrBootFree();
 * @param destcr3 -- destination cr3
 * @param srccr3 -- source cr3
 */
-extern void AuVmmngrCloneAddressSpace(uint64_t *destcr3, uint64_t* srccr3);
+extern void AuVmmngrCloneAddressSpace(uint64_t* destcr3, uint64_t* srccr3);
+
+/**
+ * @brief AuVMmngrUserWalk -- user memory pte check function
+ * @param va -- virtual address
+ * @param write -- write bit
+ * @param span -- bytes from va to the end of mappings
+ */
+extern bool AuVmmngrUserWalk(uint64_t va, bool write, uint64_t* span);
 
 #endif

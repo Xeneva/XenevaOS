@@ -114,4 +114,8 @@ void list_clear_all(list_t* list) {
 		current = de;
 		list->pointer--;
 	}
+	/* head pointed at the freed first node; a list_add after a clear
+	 * walked freed memory */
+	list->entry_current = nullptr;
+	list->pointer = 0;
 }

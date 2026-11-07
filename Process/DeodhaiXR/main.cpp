@@ -572,6 +572,22 @@ void DeodhaiWindowMakeTop(Window* win) {
 	DeodhaiRemoveWindow(win);
 	DeodhaiAddWindow(win);
 
+	/* A window's popups must stay stacked above it. Without this, clicking
+	 * the main window (or any focus change to it) put it over its own
+	 * menus, so a re-shown menu was drawn underneath the main window and
+	 * the pointer went to the main window instead of the menu. Popups are
+	 * re-appended in their existing order; nothing is allocated. */
+	if (!(win->flags & WINDOW_FLAG_POPUP)) {
+		for (Window* w = rootWin; w != NULL && w != win;) {
+			Window* next = w->next;
+			if ((w->flags & WINDOW_FLAG_POPUP) && w->parent == win) {
+				DeodhaiRemoveWindow(w);
+				DeodhaiAddWindow(w);
+			}
+			w = next;
+		}
+	}
+
 #ifdef SHADOW_ENABLE
 	/* add a back dirty rect to behind windows, because of
 	* its shadows to be undrawn
@@ -598,12 +614,59 @@ void DeodhaiWindowMakeTop(Window* win) {
 }
 
 /**
+ * @brief DeodhaiPopupHide -- hide a popup window. Unlike
+ * DeodhaiWindowHide this is not a toggle: hiding an already hidden
+ * popup does nothing but repaint its area. The client flips
+ * info->hide itself before it asks, so a toggle here re-showed the menu.
+ * @param win -- Pointer to popup window
+ */
+void DeodhaiPopupHide(Window* win) {
+	WinSharedInfo* info = (WinSharedInfo*)win->sharedInfo;
+	info->hide = true;
+	BackDirtyAdd(info->x - SHADOW_SIZE,
+				 info->y - SHADOW_SIZE,
+				 info->width + SHADOW_SIZE * 2,
+				 info->height + SHADOW_SIZE * 2);
+	if (focusedWin == win) {
+		/* give focus back to the window the popup belongs to, without
+		 * restacking: it is already directly below its popups */
+		focusedWin = NULL;
+		if (win->parent && !((WinSharedInfo*)win->parent->sharedInfo)->hide)
+			focusedWin = win->parent;
+	}
+	_window_update_all_ = true;
+	_always_on_top_update = true;
+	_shadow_update = true;
+}
+
+/**
+ * @brief DeodhaiHideForeignPopups -- when focus moves to another
+ * window, close every popup that does not belong to it. Otherwise an
+ * app's menu stayed open on screen after the user clicked a different
+ * window, because only the owning app ever closed its menus.
+ * @param newFocus -- window that is getting focus
+ */
+static void DeodhaiHideForeignPopups(Window* newFocus) {
+	Window* owner = (newFocus->flags & WINDOW_FLAG_POPUP) ? newFocus->parent : newFocus;
+	for (Window* w = rootWin; w != NULL; w = w->next) {
+		if (!(w->flags & WINDOW_FLAG_POPUP) || w == newFocus)
+			continue;
+		if (owner && w->parent == owner)
+			continue;
+		if (((WinSharedInfo*)w->sharedInfo)->hide)
+			continue;
+		DeodhaiPopupHide(w);
+	}
+}
+
+/**
  * @brief DeodhaiWindowSetFocused -- cast focus to a new window
  */
 void DeodhaiWindowSetFocused(Window* win, bool notify) {
 	if (focusedWin == win)
 		return;
 	focusedWin = win;
+	DeodhaiHideForeignPopups(win);
 	_KePrint("[DeodhaiXR]: Focused window set to : %s \r\n", focusedWin->title);
 	_shadow_update = true;
 	WinSharedInfo* info = (WinSharedInfo*)focusedWin->sharedInfo;
@@ -760,7 +823,8 @@ void DeodhaiWindowCheckDraggable(int x, int y, int button) {
 		if (info->zoomed)
 			continue; // zoomed windows fill the screen; not draggable
 		//_KePrint("INFO->x %d, mx -> %d \r\n", info->x, x);
-		if (!(x >= (info->x + 10) && x < (info->x + info->width - 74) && y >= info->y &&
+		if (!(x >= (info->x + DeodhaiDragZoneX0(win->flags)) &&
+			  x < (info->x + DeodhaiDragZoneX1(win->flags, info->width)) && y >= info->y &&
 			  y < (info->y + info->height)))
 			continue;
 
@@ -1424,6 +1488,18 @@ void DeodhaiCloseWindow(Window* win) {
 	int wasZoomed = info->zoomed ? 1 : 0;
 	_KePrint("[Deodhai]:CloseWindow : %s \r\n", win->title);
 
+	/* Popups live in rootWin with a parent pointer, and the client closes
+	 * them only after this window. Until then they pointed at freed
+	 * memory (3D compose derives popup poses from parent). Detach and
+	 * hide them now; their own close request frees them. */
+	for (Window* w = rootWin; w != NULL; w = w->next) {
+		if (w->parent != win)
+			continue;
+		w->parent = NULL;
+		if (!((WinSharedInfo*)w->sharedInfo)->hide)
+			DeodhaiPopupHide(w);
+	}
+
 	/* iterate all popup window and close them */
 	for (Window* popup = win->firstPopupWin; popup != NULL;) {
 		Window* next = popup->next;
@@ -1899,14 +1975,73 @@ int main(int argc, char* argv[]) {
 				}
 			}
 
+			/* a window still held for its intro animation: admit it
+			 * first so it can be hidden. This used to pass NULL to
+			 * DeodhaiIntroAdmit, which then appended NULL to the window
+			 * list -- any hide for an unknown handle crashed Deodhai. */
 			if (!hideable_win) {
-				DeodhaiIntroAdmit(hideable_win, false);
-				if (hideable_win)
-					DeodhaiIntroAdmit(hideable_win, false);
+				Window* held = DeodhaiIntroFind(handle);
+				if (held) {
+					DeodhaiIntroAdmit(held, false);
+					hideable_win = held;
+				}
 			}
 
-			if (hideable_win)
-				DeodhaiWindowHide(hideable_win);
+			if (hideable_win) {
+				if (hideable_win->flags & WINDOW_FLAG_POPUP)
+					DeodhaiPopupHide(hideable_win);
+				else
+					DeodhaiWindowHide(hideable_win);
+			}
+			memset(&event, 0, sizeof(PostEvent));
+		}
+
+		/* sent by ChWindowSetFocused -- used to be dropped. A popup menu
+		 * that is shown again sends this so it is raised above its
+		 * window and gets the pointer. */
+		if (event.type == DEODHAI_MESSAGE_WINDOW_BRING_FRONT) {
+			uint32_t handle = event.dword2;
+			Window* front = NULL;
+			for (Window* win = rootWin; win != NULL; win = win->next) {
+				if (win->handle == handle) {
+					front = win;
+					break;
+				}
+			}
+			if (front && focusedWin != front) {
+				WinSharedInfo* info = (WinSharedInfo*)front->sharedInfo;
+				DeodhaiWindowSetFocused(front, false);
+				if (front->flags & WINDOW_FLAG_POPUP) {
+					/* only the popup itself needs recomposing */
+					WinSharedFlagStore(&info->updateEntireWindow, true);
+				} else {
+					_window_update_all_ = true;
+					_shadow_update = true;
+				}
+			} else if (front && (front->flags & WINDOW_FLAG_POPUP)) {
+				/* already focused, e.g. a menu re-shown right away */
+				DeodhaiWindowMakeTop(front);
+				WinSharedFlagStore(&((WinSharedInfo*)front->sharedInfo)->updateEntireWindow, true);
+			}
+			memset(&event, 0, sizeof(PostEvent));
+		}
+
+		/* the app switched its chrome style (ChWindowSetStyle): keep the
+		 * compositor's copy of the style bits in step, the drag zone reads it */
+		if (event.type == DEODHAI_MESSAGE_SET_FLAGS) {
+			uint32_t handle = event.dword;
+			uint16_t ownerId = event.from_id;
+			for (int list = 0; list < 2; list++) {
+				for (Window* win = list ? alwaysOnTop : rootWin; win != NULL; win = win->next) {
+					if (win->handle == handle && win->ownerId == ownerId) {
+						/* only the chrome style bits: the compositor's own
+						 * flags (blocked, glass, ...) stay as they are */
+						win->flags = (uint16_t)((win->flags & ~(3u << 13)) | (event.dword2 & (3u << 13)));
+						list = 2;
+						break;
+					}
+				}
+			}
 			memset(&event, 0, sizeof(PostEvent));
 		}
 

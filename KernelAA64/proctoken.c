@@ -64,6 +64,8 @@ char* _token_id_to_string(uint8_t category) {
 		return "PROCESS_TOKEN_DEV";
 	case PROCESS_TOKEN_NETSERVER:
 		return "PROCESS_TOKEN_NETSERVER";
+	case PROCESS_TOKEN_LAUNCHER:
+		return "PROCESS_TOKEN_LAUNCHER";
 	default:
 		return "unknown";
 	}

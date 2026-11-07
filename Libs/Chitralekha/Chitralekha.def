@@ -322,6 +322,8 @@ ListViewAddItem
 ListViewClear
 ListViewRemoveItem
 ListViewSetItemIcon
+ListViewGetSelectedItem
+ListViewSetActionHandler
 __real@0000000042c80000
 __real@0000000100000002
 __real@0000000800000010

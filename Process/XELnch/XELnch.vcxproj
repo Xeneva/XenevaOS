@@ -27,24 +27,22 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="AppGrid.cpp" />
-    <ClCompile Include="button.cpp" />
+    <ClCompile Include="anim.cpp" />
+    <ClCompile Include="applist.cpp" />
+    <ClCompile Include="bento.cpp" />
+    <ClCompile Include="cards.cpp" />
+    <ClCompile Include="gamusa.cpp" />
     <ClCompile Include="lconfig.cpp" />
+    <ClCompile Include="livetile.cpp" />
+    <ClCompile Include="luitflow.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="pagebutton.cpp" />
-    <ClCompile Include="pwbutton.cpp" />
-    <ClCompile Include="rrect.cpp" />
-    <ClCompile Include="search.cpp" />
-    <ClCompile Include="searchbar.cpp" />
+    <ClCompile Include="text.cpp" />
+    <ClCompile Include="xlicon.cpp" />
+    <ClCompile Include="xlui.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="appgrid.h" />
-    <ClInclude Include="button.h" />
     <ClInclude Include="launcher.h" />
-    <ClInclude Include="pagebutton.h" />
-    <ClInclude Include="pwbutton.h" />
-    <ClInclude Include="search.h" />
-    <ClInclude Include="searchbar.h" />
+    <ClInclude Include="unikernel_syms.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{400E59EB-6E4C-461A-91B2-202F85F33D41}</ProjectGuid>

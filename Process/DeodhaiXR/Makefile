@@ -42,8 +42,8 @@ S_OBJS = $(patsubst %.s,$(OBJDIR)/%.o,$(S_SRCS))
 OBJS = $(CPP_OBJS) $(S_OBJS)
 
 ifeq ($(UNIKERNEL),1)
-UK_XE_SRCS = AppGrid.cpp button.cpp lconfig.cpp main.cpp pagebutton.cpp pwbutton.cpp \
-             rrect.cpp search.cpp searchbar.cpp
+UK_XE_SRCS = anim.cpp applist.cpp bento.cpp cards.cpp gamusa.cpp lconfig.cpp livetile.cpp \
+             luitflow.cpp main.cpp text.cpp xlicon.cpp xlui.cpp
 UK_NM_SRCS = NamdaphaButton.cpp _gettime.cpp gomenu.cpp namdapha.cpp nmGoButton.cpp section.cpp
 UK_XE_OBJS = $(patsubst %.cpp,$(OBJDIR)/uk_xe_%.o,$(UK_XE_SRCS))
 UK_NM_OBJS = $(patsubst %.cpp,$(OBJDIR)/uk_nm_%.o,$(UK_NM_SRCS))

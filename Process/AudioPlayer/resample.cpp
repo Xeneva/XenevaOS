@@ -67,7 +67,8 @@ size_t AccentResamplerProcess(AccentResampler* r, const int16_t* in, size_t n, i
 		for (int c = 0; c < 2; c++) {
 			int32_t a = (i == 0) ? r->prev[c] : in[(i - 1) * 2 + c];
 			int32_t b = in[i * 2 + c];
-			out[o * 2 + c] = (int16_t)(a + (((b - a) * f) >> 16));
+			/* 64-bit: (b - a) * f overflows int32 once |b - a| > 32767 */
+			out[o * 2 + c] = (int16_t)(a + (int32_t)(((int64_t)(b - a) * f) >> 16));
 		}
 		o++;
 		r->pos += r->step;

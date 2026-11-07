@@ -8,16 +8,18 @@
     ],
     "[c]": {
         "editor.formatOnSave": true,
-        "editor.defaultFormatter": "ms-vscode.cpptools"
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
     },
     "[c++]": {
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
     },
     "C_Cpp.clang_format_fallbackSearch": true,
-
     "python.analysis.extraPaths": [
         "/home/axiss/.vscode/extensions/benpaddlejones.pico-bridge-2.3.46/emulator/mock/typings",
         "/home/axiss/.vscode/extensions/benpaddlejones.pico-bridge-2.3.46/emulator/mock/micropython"
-    ]
+    ],
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+    "editor.formatOnPaste": true
 }

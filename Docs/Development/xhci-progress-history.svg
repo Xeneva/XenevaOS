@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 300" width="900" height="300" role="img" aria-label="Green, partial, and tracked xHCI features over time" font-family="sans-serif" font-size="12" fill="#c9d1d9">
+<style>.hit{fill:#fff;fill-opacity:0}.hit:hover{fill-opacity:0.06}</style>
+<rect width="900" height="300" rx="6" fill="#0d1117"/>
+<text x="64" y="20" font-size="13" font-weight="bold">xHCI/USB features</text>
+<line x1="64" x2="720" y1="230.0" y2="230.0" stroke="#30363d"/>
+<text x="58" y="234.0" text-anchor="end" fill="#8b949e">0</text>
+<line x1="64" x2="720" y1="181.0" y2="181.0" stroke="#30363d"/>
+<text x="58" y="185.0" text-anchor="end" fill="#8b949e">25</text>
+<line x1="64" x2="720" y1="132.0" y2="132.0" stroke="#30363d"/>
+<text x="58" y="136.0" text-anchor="end" fill="#8b949e">50</text>
+<line x1="64" x2="720" y1="83.0" y2="83.0" stroke="#30363d"/>
+<text x="58" y="87.0" text-anchor="end" fill="#8b949e">75</text>
+<line x1="64" x2="720" y1="34.0" y2="34.0" stroke="#30363d"/>
+<text x="58" y="38.0" text-anchor="end" fill="#8b949e">100</text>
+<line x1="64.0" x2="64.0" y1="34" y2="230" stroke="#30363d" stroke-width="0.5"/>
+<text x="64.0" y="248" text-anchor="middle" font-size="11" fill="#8b949e">Nov 4</text>
+<line x1="720.0" x2="720.0" y1="34" y2="230" stroke="#30363d" stroke-width="0.5"/>
+<text x="720.0" y="248" text-anchor="middle" font-size="11" fill="#8b949e">Nov 5</text>
+<polygon points="64,230 64.0,184.9 720.0,183.0 720,230" fill="#d29922" opacity="0.12"/>
+<polygon points="64,230 64.0,122.2 720.0,118.3 720,230" fill="#2ea043" opacity="0.18"/>
+<polyline points="64.0,53.6 720.0,47.7" fill="none" stroke="#8b949e" stroke-width="2" stroke-dasharray="6 4"/>
+<polyline points="64.0,184.9 720.0,183.0" fill="none" stroke="#d29922" stroke-width="2"/>
+<polyline points="64.0,122.2 720.0,118.3" fill="none" stroke="#2ea043" stroke-width="2"/>
+<circle cx="64.0" cy="184.9" r="3.5" fill="#d29922"/>
+<circle cx="64.0" cy="122.2" r="3.5" fill="#2ea043"/>
+<circle cx="720.0" cy="183.0" r="3.5" fill="#d29922"/>
+<circle cx="720.0" cy="118.3" r="3.5" fill="#2ea043"/>
+<rect class="hit" x="64.0" y="34" width="328.0" height="196"><title>2026-11-04
+Green 55, partial 23, missing 12 of 90 tracked</title></rect>
+<rect class="hit" x="392.0" y="34" width="328.0" height="196"><title>2026-11-05
+Green 57, partial 24, missing 12 of 93 tracked</title></rect>
+<text x="728" y="46" fill="#8b949e">Tracked 93</text>
+<text x="728" y="64" fill="#c9d1d9" font-weight="bold"><tspan fill="#2ea043">●</tspan> Green 57 (61.3%)</text>
+<text x="728" y="82" fill="#c9d1d9" font-weight="bold"><tspan fill="#d29922">●</tspan> Partial 24</text>
+<text x="728" y="100" fill="#c9d1d9" font-weight="bold"><tspan fill="#6e7681">●</tspan> Missing 12</text>
+</svg>

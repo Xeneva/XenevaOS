@@ -60,9 +60,14 @@ static void scan_single_dir(const char* dir_path, GlimpseScanCallback cb, void* 
 	XEDirectoryEntry dirent;
 	memset(&dirent, 0, sizeof(dirent));
 
-	while (1) {
+	int prev_index = -1;
+	int loop_guard = 0;
+	while (loop_guard++ < 4096) {
 		if (dirent.index == -1) break;
+		prev_index = dirent.index;
 		int code = _KeReadDir(dirfd, &dirent);
+		if (dirent.index == -1) break;
+		if (code == -1 && dirent.index == prev_index) break;
 		if (code != -1) {
 			if (dirent.flags & FILE_GENERAL) {
 				if (strcmp(dirent.filename, ".") != 0 && strcmp(dirent.filename, "..") != 0) {

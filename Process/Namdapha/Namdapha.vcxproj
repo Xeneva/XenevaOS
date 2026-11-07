@@ -31,11 +31,13 @@
     <ClCompile Include="namdapha.cpp" />
     <ClCompile Include="NamdaphaButton.cpp" />
     <ClCompile Include="nmGoButton.cpp" />
+    <ClCompile Include="nmgamusa.cpp" />
     <ClCompile Include="section.cpp" />
     <ClCompile Include="_gettime.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="nmdapha.h" />
+    <ClInclude Include="nmgamusa.h" />
     <ClInclude Include="section.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

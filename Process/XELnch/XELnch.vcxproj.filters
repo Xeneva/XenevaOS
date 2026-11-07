@@ -1,23 +1,21 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="button.cpp" />
-    <ClCompile Include="AppGrid.cpp" />
+    <ClCompile Include="anim.cpp" />
+    <ClCompile Include="applist.cpp" />
+    <ClCompile Include="bento.cpp" />
+    <ClCompile Include="cards.cpp" />
+    <ClCompile Include="gamusa.cpp" />
     <ClCompile Include="lconfig.cpp" />
-    <ClCompile Include="searchbar.cpp" />
-    <ClCompile Include="rrect.cpp" />
-    <ClCompile Include="search.cpp" />
-    <ClCompile Include="pagebutton.cpp" />
-    <ClCompile Include="pwbutton.cpp" />
+    <ClCompile Include="livetile.cpp" />
+    <ClCompile Include="luitflow.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="text.cpp" />
+    <ClCompile Include="xlicon.cpp" />
+    <ClCompile Include="xlui.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="button.h" />
-    <ClInclude Include="appgrid.h" />
     <ClInclude Include="launcher.h" />
-    <ClInclude Include="searchbar.h" />
-    <ClInclude Include="search.h" />
-    <ClInclude Include="pagebutton.h" />
-    <ClInclude Include="pwbutton.h" />
+    <ClInclude Include="unikernel_syms.h" />
   </ItemGroup>
 </Project>

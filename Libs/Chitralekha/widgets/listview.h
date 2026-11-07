@@ -97,6 +97,9 @@ XE_EXTERN {
 		int prev_scroll_y;
 		int prev_scroll_x;
 		bool force_full_redraw;
+		void (*onItemAction)(struct _List_View_* lv, int index, ListItem* item);
+		size_t last_click_tick;
+		int last_click_row;
 	} ListView;
 
 	/**
@@ -132,6 +135,9 @@ XE_EXTERN {
 	XE_EXPORT void ListViewAddColumn(ListView * lv, const char* header, int width, int minWidth);
 	XE_EXPORT void ListViewRemoveItem(ListView * lv, int index);
 	XE_EXPORT void ListViewClear(ListView * lv);
+	XE_EXPORT ListItem* ListViewGetSelectedItem(ListView* lv);
+	XE_EXPORT void ListViewSetActionHandler(
+		ListView* lv, void (*handler)(ListView* lv, int index, ListItem* item));
 
 #ifdef __cplusplus
 }

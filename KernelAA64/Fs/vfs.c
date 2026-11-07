@@ -44,6 +44,8 @@
 #include <Hal/AA64/aa64lowlevel.h>
 #include <Mm/mmfile.h>
 #include <Serv/sysserv.h>
+#include <bordoisila_ptr.h>
+#include <process.h>
 
 AuVFSContainer* __RootContainer;
 AuVFSNode* __RootFS;
@@ -137,6 +139,25 @@ AU_EXTERN AU_EXPORT void AuVFSAddFileSystem(AuVFSNode* node) {
 			return;
 	}
 	list_add(__RootContainer->childs, node);
+}
+
+/**
+ * @brief AuVFSRemoveFileSystem -- detaches a file system from the
+ * VFS list without freeing it
+ * @param node -- file system node to remove
+ * @return 0 on success, -1 when the node is not in the list
+ */
+AU_EXTERN AU_EXPORT int AuVFSRemoveFileSystem(AuVFSNode* node) {
+	if (!node || !__RootContainer || !__RootContainer->childs)
+		return -1;
+	for (int i = 0; i < __RootContainer->childs->pointer; i++) {
+		AuVFSNode* node_ = (AuVFSNode*)list_get_at(__RootContainer->childs, i);
+		if (node_ != node)
+			continue;
+		list_remove(__RootContainer->childs, (unsigned int)i);
+		return 0;
+	}
+	return -1;
 }
 
 /**
@@ -380,33 +401,6 @@ AU_EXTERN AU_EXPORT void AuVFSNodeClose(AuVFSNode* node, AuVFSNode* file) {
 }
 
 /**
- * @brief AuVFSRemoveFileSystem -- removes a file system
- * @param node -- file system node to remove
- */
-AU_EXTERN AU_EXPORT int AuVFSRemoveFileSystem(AuVFSNode* node) {
-	if (!node)
-		return -1;
-	int index = -1;
-	for (unsigned int i = 0; i < __RootContainer->childs->pointer; i++) {
-		AuVFSNode* _node = (AuVFSNode*)list_get_at(__RootContainer->childs, i);
-		if (_node == node) {
-			index = (int)i;
-			break;
-		}
-	}
-
-	if (index < 0)
-		return -1;
-	list_remove(__RootContainer->childs, (unsigned int)index);
-	if (node->close)
-		return node->close(node, NULL);
-	else {
-		kfree(node);
-		return 0;
-	}
-}
-
-/**
 * @brief AuVFSGetBlockFor -- returns a block number for
 * certain byte offset of file
 * @param node -- file system node
@@ -449,4 +443,58 @@ AU_EXTERN AU_EXPORT int AuVFSPoll(AuVFSNode* file, AuPollTable* pt) {
 		return -1;
 	if (file->poll)
 		return file->poll(file, file, pt);
+}
+
+/**
+ * @brief AuVFSOwnFsys -- give the capability to root process, to
+ * own the file system for specific user id and group id
+ * @param path -- file system path
+ * @param uid -- User ID value
+ * @param gid -- Group ID value
+ */
+AU_EXTERN AU_EXPORT int AuVFSOwnFsys(char* path, UID_NUM uid, GID_NUM gid) {
+	if (!path)
+		return -1;
+
+	if (!__BORDOISILA_UPTR_VALIDATE(path))
+		return -1;
+
+	AuProcess* proc = AuProcessCurrent();
+	/** should also check process capabilities , but skipping for now*/
+
+	/** check if the setting process is root than only proceed */
+	if (!(proc->proc_id == 0 && proc->creds.uid == 0 && proc->creds.gid == 0)) {
+		UARTDebugOut("[AuVFSOwnFsys]: system call only valid for root user, your uid : %d \r\n",
+					 proc->creds.uid);
+		return -1;
+	}
+
+	/** also should check the effective user id, if user account got a priviledge mode */
+
+	int max_len = 4096;
+	char* kpath = (char*)kmalloc(max_len);
+	long n = _bordoisila_strncpy_from_user(kpath, path, max_len);
+	if (n < 0) {
+		kfree(kpath);
+		return -1;
+	} else if (n == 0) {
+		kfree(kpath);
+		return -1;
+	}
+
+	AuVFSNode* fsys = AuVFSFind(kpath);
+	if (!fsys) {
+		UARTDebugOut("[AuVFSOwnFsys]: no file system found for path : %s \r\n", kpath);
+		kfree(kpath);
+		return -1;
+	}
+
+	fsys->uid = uid;
+	fsys->gid = gid;
+	UARTDebugOut(
+		"[AuVFSOwnFsys]: file system successfully owned by user id : %d, group id : %d \r\n",
+		uid,
+		gid);
+	kfree(kpath);
+	return 0;
 }

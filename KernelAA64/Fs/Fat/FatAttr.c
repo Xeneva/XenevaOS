@@ -87,7 +87,9 @@ int FatSetAttribute(AuVFSNode* fsys, AuVFSNode* file) {
 	uint32_t guard = 0;
 
 	while (cluster >= 2 && cluster < 0x0FFFFFF8 && guard++ < 65536) {
-		uint16_t first_sector = FatClusterToSector32(fs, cluster);
+		/* was uint16_t: any LBA past 65535 (a volume over ~32 MB) was
+		 * truncated and the wrong sector searched */
+		uint64_t first_sector = FatClusterToSector32(fs, cluster);
 
 		for (uint32_t s = 0; s < fs->__SectorPerCluster; s++) {
 			uint64_t lba = first_sector + s;
@@ -103,7 +105,7 @@ int FatSetAttribute(AuVFSNode* fsys, AuVFSNode* file) {
 					continue;
 				if ((d->attrib & FAT_ATTRIBUTE_LONG_NAME) == FAT_ATTRIBUTE_LONG_NAME)
 					continue;
-				if (strncmp(d->filename, dosname, 11) != 0)
+				if (strncmp((char*)d->filename, dosname, 11) != 0)
 					continue;
 
 				uint32_t fc = ((uint32_t)d->first_cluster_hi_bytes << 16) | d->first_cluster;
@@ -120,6 +122,8 @@ int FatSetAttribute(AuVFSNode* fsys, AuVFSNode* file) {
 				if (attr != d->attrib) {
 					d->attrib = attr;
 					aa64_data_cache_clean_range(buf, PAGE_SIZE);
+					if (fs->__DirCacheValid && fs->__DirCacheLBA == lba)
+						fs->__DirCacheValid = false;
 					if (AuVDiskWrite(vdisk, lba, 1, (uint64_t*)buf) == 0) {
 						UARTDebugOut("[fat-setattribute]: failed to write attribute : %x \r\n",
 									 attr);
@@ -142,4 +146,6 @@ done:
 		UARTDebugOut("[fat-setaatribute]: attribute : %x written successfully \r\n", file->mode);
 
 	AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
+	/* used to return 0 even when no entry was found or the write failed */
+	return ret;
 }

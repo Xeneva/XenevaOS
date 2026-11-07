@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XenevaOS xHCI/USB progress</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1280px;margin:auto;padding:24px;background:#f6f8fa;color:#1f2328}
+img{width:100%;height:auto;border:1px solid #30363d;border-radius:6px;background:#0d1117}
+table{border-collapse:collapse;margin:12px 0 24px}
+th,td{border:1px solid #d0d7de;padding:4px 10px}
+th{background:#eaeef2}td+td,th+th{text-align:right}
+tr.total th{background:#d8dee4}
+.muted{color:#57606a}code{font-size:90%}
+.tag{display:inline-block;min-width:54px;padding:0 5px;border-radius:3px;font-size:85%;text-align:center;color:#fff}
+.tag.done{background:#2ea043}.tag.partial{background:#d29922}.tag.todo{background:#6e7681}
+.needrow{display:grid;grid-template-columns:190px minmax(120px,1fr) 54px;gap:8px;align-items:center;margin:4px 0}
+.needlabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.neednum{text-align:right;font-variant-numeric:tabular-nums}
+.bar{display:flex;height:14px;background:#6e7681;border-radius:2px;overflow:hidden}
+.bar i{display:block;background:#2ea043;height:14px}.bar b{display:block;background:#d29922;height:14px}
+.bar .rest{display:block;background:#6e7681;height:14px}
+.needlist{margin:4px 0 14px 0}.needlist li{margin:2px 0}
+details{margin:8px 0 18px}summary{cursor:pointer;font-weight:600}
+@media(max-width:900px){.needrow{grid-template-columns:1fr}}
+</style></head><body>
+<h1>XenevaOS xHCI/USB readiness</h1>
+<p class="muted">Generated 2026-11-05 from <a href="../../KernelAA64/Usb/xhci.c"><code>KernelAA64/Usb/xhci.c</code></a>, <a href="../../KernelAA64/Fs/vdisk.c"><code>KernelAA64/Fs/vdisk.c</code></a>, <a href="../../KernelAA64/Fs/Fat/FatDir.c"><code>KernelAA64/Fs/Fat/FatDir.c</code></a>, and <a href="../../Tests/dcl_test_all.sh"><code>Tests/dcl_test_all.sh</code></a>. <strong>61.3% green</strong> (57/93): 24 partial and 12 missing. Green means implemented and exercised by the DCL xHCI gate; amber means implemented but untested or only conditionally tested; gray means absent. One cell is a curated capability, not a line of code, so the percentage is a readiness summary rather than an automated coverage number.</p>
+<img src="xhci-progress.svg" alt="xHCI controller, transport, and device-class readiness treemaps">
+<table>
+<tr><th>Panel</th><th>Group</th><th>Green</th><th>Partial</th><th>Missing</th><th>Total</th><th>Green share</th></tr>
+<tr><td>Controller and transport</td><td>Bringup</td><td>5</td><td>4</td><td>1</td><td>10</td><td>50%</td></tr>
+<tr><td>Controller and transport</td><td>Ports and hubs</td><td>5</td><td>2</td><td>0</td><td>7</td><td>71%</td></tr>
+<tr><td>Controller and transport</td><td>Enumeration</td><td>8</td><td>2</td><td>0</td><td>10</td><td>80%</td></tr>
+<tr><td>Controller and transport</td><td>Transfers and recovery</td><td>4</td><td>4</td><td>1</td><td>9</td><td>44%</td></tr>
+<tr><td>Controller and transport</td><td>Lifecycle</td><td>4</td><td>1</td><td>0</td><td>5</td><td>80%</td></tr>
+<tr><td>Controller and transport</td><td>Power management</td><td>0</td><td>0</td><td>3</td><td>3</td><td>0%</td></tr>
+<tr><td>Device classes and verification</td><td>HID and input</td><td>8</td><td>2</td><td>1</td><td>11</td><td>73%</td></tr>
+<tr><td>Device classes and verification</td><td>Bulk-Only storage</td><td>12</td><td>2</td><td>1</td><td>15</td><td>80%</td></tr>
+<tr><td>Device classes and verification</td><td>UAS storage</td><td>9</td><td>0</td><td>0</td><td>9</td><td>100%</td></tr>
+<tr><td>Device classes and verification</td><td>Serial</td><td>2</td><td>2</td><td>1</td><td>5</td><td>40%</td></tr>
+<tr><td>Device classes and verification</td><td>Bluetooth</td><td>0</td><td>5</td><td>0</td><td>5</td><td>0%</td></tr>
+<tr><td>Device classes and verification</td><td>Other USB classes</td><td>0</td><td>0</td><td>4</td><td>4</td><td>0%</td></tr>
+<tr class="total"><th>All</th><th>Total</th><th>57</th><th>24</th><th>12</th><th>93</th><th>61%</th></tr>
+</table>
+<h2>Still needed</h2>
+<h3>Controller and transport</h3>
+<div class="needrow"><span class="needlabel">Bringup</span><span class="bar"><i style="width:50.0%"></i><b style="width:40.0%"></b><span class="rest" style="width:10.0%"></span></span><span class="neednum">5/10</span></div>
+<ul class="needlist">
+<li><strong>32-bit DMA ceiling</strong> <span class="tag partial">partial</span> — Implemented, but QEMU advertises 64-bit addressing, so the low-4-GiB path never runs.</li>
+<li><strong>Controller page size</strong> <span class="tag partial">partial</span> — Implemented, but every test boots with 4 KiB controller pages.</li>
+<li><strong>Scratchpad buffers</strong> <span class="tag partial">partial</span> — QEMU reports zero scratchpads; allocating a non-zero scratchpad array is not exercised.</li>
+<li><strong>BIOS legacy handoff</strong> <span class="tag partial">partial</span> — Implemented; QEMU exposes no legacy capability, so BIOS handoff never runs.</li>
+<li><strong>Debug capability</strong> <span class="tag todo">missing</span> — The xHCI debug capability is not implemented.</li>
+</ul>
+<div class="needrow"><span class="needlabel">Ports and hubs</span><span class="bar"><i style="width:71.4%"></i><b style="width:28.6%"></b><span class="rest" style="width:0.0%"></span></span><span class="neednum">5/7</span></div>
+<ul class="needlist">
+<li><strong>USB 3.0 hub</strong> <span class="tag partial">partial</span> — The SuperSpeed hub path exists, but the gate attaches only a USB 2.0 usb-hub.</li>
+<li><strong>Overcurrent recovery</strong> <span class="tag partial">partial</span> — Overcurrent changes are cleared and logged; no test injects an overcurrent event.</li>
+</ul>
+<div class="needrow"><span class="needlabel">Enumeration</span><span class="bar"><i style="width:80.0%"></i><b style="width:20.0%"></b><span class="rest" style="width:0.0%"></span></span><span class="neednum">8/10</span></div>
+<ul class="needlist">
+<li><strong>Transaction translator for low/full speed</strong> <span class="tag partial">partial</span> — TT fields exist for low/full-speed children behind a high-speed hub; the gate&#x27;s hub is full speed, so the path is unused.</li>
+<li><strong>Large configuration descriptors</strong> <span class="tag partial">partial</span> — The big-config boot is skipped unless QEMU provides the test-only usb-storage-bigcfg model.</li>
+</ul>
+<div class="needrow"><span class="needlabel">Transfers and recovery</span><span class="bar"><i style="width:44.4%"></i><b style="width:44.4%"></b><span class="rest" style="width:11.1%"></span></span><span class="neednum">4/9</span></div>
+<ul class="needlist">
+<li><strong>Transfer timeout handling</strong> <span class="tag partial">partial</span> — Timeouts are logged and the command ring can recover, but no test forces a timed-out transfer.</li>
+<li><strong>Endpoint halt recovery</strong> <span class="tag partial">partial</span> — Stop/Reset/Set-Dequeue recovery exists, but no test halts an endpoint.</li>
+<li><strong>Command ring abort and restart</strong> <span class="tag partial">partial</span> — Ring abort and restart are implemented for stuck commands; no test forces a command timeout.</li>
+<li><strong>Isochronous OUT</strong> <span class="tag partial">partial</span> — Wired for USB Bluetooth SCO; no test adapter emits isochronous traffic.</li>
+<li><strong>Isochronous IN</strong> <span class="tag todo">missing</span> — Only isochronous OUT exists; there is no isochronous IN ring.</li>
+</ul>
+<div class="needrow"><span class="needlabel">Lifecycle</span><span class="bar"><i style="width:80.0%"></i><b style="width:20.0%"></b><span class="rest" style="width:0.0%"></span></span><span class="neednum">4/5</span></div>
+<ul class="needlist">
+<li><strong>Surprise-unplug volume detach</strong> <span class="tag partial">partial</span> — QEMU device_del detaches /b and a replug reattaches it; the gate checks vdisk reuse but does not assert the detach itself.</li>
+</ul>
+<div class="needrow"><span class="needlabel">Power management</span><span class="bar"><i style="width:0.0%"></i><b style="width:0.0%"></b><span class="rest" style="width:100.0%"></span></span><span class="neednum">0/3</span></div>
+<ul class="needlist">
+<li><strong>Suspend and resume</strong> <span class="tag todo">missing</span> — Port suspend/resume and U3 transitions are not implemented.</li>
+<li><strong>USB link power management</strong> <span class="tag todo">missing</span> — USB link power management (LPM) is not implemented.</li>
+<li><strong>ACPI power transitions</strong> <span class="tag todo">missing</span> — There is no ACPI power-transition handling for the controller.</li>
+</ul>
+<h3>Device classes and verification</h3>
+<div class="needrow"><span class="needlabel">HID and input</span><span class="bar"><i style="width:72.7%"></i><b style="width:18.2%"></b><span class="rest" style="width:9.1%"></span></span><span class="neednum">8/11</span></div>
+<ul class="needlist">
+<li><strong>Relative pointer and wheel</strong> <span class="tag partial">partial</span> — Relative motion and wheel fields are decoded, but the gate&#x27;s tablet is absolute and has no wheel.</li>
+<li><strong>Composite HID interfaces</strong> <span class="tag partial">partial</span> — Multiple HID interfaces per device are collected and armed; the gate devices are single-interface.</li>
+<li><strong>Gamepad and consumer controls</strong> <span class="tag todo">missing</span> — No gamepad, consumer-control, or other HID usage maps to the input API.</li>
+</ul>
+<div class="needrow"><span class="needlabel">Bulk-Only storage</span><span class="bar"><i style="width:80.0%"></i><b style="width:13.3%"></b><span class="rest" style="width:6.7%"></span></span><span class="neednum">12/15</span></div>
+<ul class="needlist">
+<li><strong>BOT reset recovery</strong> <span class="tag partial">partial</span> — Reset recovery exists, but no test forces a transport or phase error.</li>
+<li><strong>SYNCHRONIZE CACHE</strong> <span class="tag partial">partial</span> — SYNCHRONIZE CACHE runs after writes and on vdisk flush, but no gate assertion checks the flush result.</li>
+<li><strong>SCSI UNMAP/TRIM</strong> <span class="tag todo">missing</span> — SCSI UNMAP/TRIM is not implemented.</li>
+</ul>
+<div class="needrow"><span class="needlabel">UAS storage</span><span class="bar"><i style="width:100.0%"></i><b style="width:0.0%"></b><span class="rest" style="width:0.0%"></span></span><span class="neednum">9/9</span></div>
+<div class="needrow"><span class="needlabel">Serial</span><span class="bar"><i style="width:40.0%"></i><b style="width:40.0%"></b><span class="rest" style="width:20.0%"></span></span><span class="neednum">2/5</span></div>
+<ul class="needlist">
+<li><strong>CDC ACM probe and line coding</strong> <span class="tag partial">partial</span> — CDC ACM parsing and line coding exist; the gate only attaches QEMU&#x27;s FTDI clone.</li>
+<li><strong>Serial read/write path</strong> <span class="tag partial">partial</span> — The VFS read/write callbacks exist, but no test opens /dev/ttyUSB and moves bytes.</li>
+<li><strong>CDC notifications and flow control</strong> <span class="tag todo">missing</span> — The CDC notification pipe is configured but never polled; flow control is not implemented.</li>
+</ul>
+<div class="needrow"><span class="needlabel">Bluetooth</span><span class="bar"><i style="width:0.0%"></i><b style="width:100.0%"></b><span class="rest" style="width:0.0%"></span></span><span class="neednum">0/5</span></div>
+<ul class="needlist">
+<li><strong>USB HCI class probe</strong> <span class="tag partial">partial</span> — USB HCI class probing exists; no gate test attaches a Bluetooth adapter.</li>
+<li><strong>HCI event and bulk pipes</strong> <span class="tag partial">partial</span> — Event and bulk pipes are wired for HCI; untested without a USB adapter.</li>
+<li><strong>SCO isochronous pipes</strong> <span class="tag partial">partial</span> — Isochronous OUT is wired for SCO; isochronous IN is missing and no adapter is tested.</li>
+<li><strong>Kernel Bluetooth bridge</strong> <span class="tag partial">partial</span> — The bridge to the kernel Bluetooth stack exists; no USB adapter is tested.</li>
+<li><strong>USB BT hotplug attach/detach</strong> <span class="tag partial">partial</span> — Attach/detach hooks exist; no USB Bluetooth hotplug test.</li>
+</ul>
+<div class="needrow"><span class="needlabel">Other USB classes</span><span class="bar"><i style="width:0.0%"></i><b style="width:0.0%"></b><span class="rest" style="width:100.0%"></span></span><span class="neednum">0/4</span></div>
+<ul class="needlist">
+<li><strong>USB audio class</strong> <span class="tag todo">missing</span> — No USB audio class driver.</li>
+<li><strong>USB network (CDC ECM/NCM)</strong> <span class="tag todo">missing</span> — No CDC ECM/NCM network class driver.</li>
+<li><strong>USB video class</strong> <span class="tag todo">missing</span> — No USB video class driver.</li>
+<li><strong>USB printer class</strong> <span class="tag todo">missing</span> — No USB printer class driver.</li>
+</ul>
+<details><summary>Green features and evidence (57)</summary><ul><li><strong>PCIe discovery and BAR mapping</strong> <span class="muted">(Controller and transport / Bringup)</span> — exercised by every gate boot</li><li><strong>Controller reset and start</strong> <span class="muted">(Controller and transport / Bringup)</span> — exercised by every gate boot</li><li><strong>Command and event rings</strong> <span class="muted">(Controller and transport / Bringup)</span> — exercised by every gate boot</li><li><strong>MSI-X interrupt handling</strong> <span class="muted">(Controller and transport / Bringup)</span> — gate assertion <code>[xhci]: irq delivered</code></li><li><strong>Extended capabilities and protocols</strong> <span class="muted">(Controller and transport / Bringup)</span> — gate assertion <code>[xhci]: ext cap 2 protocol</code></li><li><strong>Root-port power and reset</strong> <span class="muted">(Controller and transport / Ports and hubs)</span> — exercised by every gate boot</li><li><strong>Root-port hotplug</strong> <span class="muted">(Controller and transport / Ports and hubs)</span> — gate assertion <code>[xhci-hotplug]: enumerated port</code></li><li><strong>USB 2.0 hub</strong> <span class="muted">(Controller and transport / Ports and hubs)</span> — gate assertion <code>[xhci]: hub ready on port</code></li><li><strong>Multi-tier hub scan</strong> <span class="muted">(Controller and transport / Ports and hubs)</span> — gate assertion <code>[xhci-hub]: child enumerated on port 8.8.1</code></li><li><strong>Hub port power and reset</strong> <span class="muted">(Controller and transport / Ports and hubs)</span> — gate assertion <code>[xhci-hub]: child enumerated on port</code></li><li><strong>Device descriptor</strong> <span class="muted">(Controller and transport / Enumeration)</span> — exercised by every gate boot</li><li><strong>Configuration descriptor</strong> <span class="muted">(Controller and transport / Enumeration)</span> — exercised by every gate boot</li><li><strong>String descriptors</strong> <span class="muted">(Controller and transport / Enumeration)</span> — gate assertion <code>[xhci]: product QEMU USB Keyboard</code></li><li><strong>Set configuration</strong> <span class="muted">(Controller and transport / Enumeration)</span> — exercised by every gate boot</li><li><strong>Class-driver dispatch</strong> <span class="muted">(Controller and transport / Enumeration)</span> — gate assertion <code>[xhci]: HID keyboard ready on port</code></li><li><strong>Unsupported class handling</strong> <span class="muted">(Controller and transport / Enumeration)</span> — host helper check <code>has no supported interface</code></li><li><strong>SuperSpeed companion descriptors</strong> <span class="muted">(Controller and transport / Enumeration)</span> — gate assertion <code>[xhci]: ss companion ep</code></li><li><strong>EP0 max packet update</strong> <span class="muted">(Controller and transport / Enumeration)</span> — gate assertion <code>[xhci]: ep0 max packet 64</code></li><li><strong>Control transfers</strong> <span class="muted">(Controller and transport / Transfers and recovery)</span> — exercised by every gate boot</li><li><strong>Interrupt IN transfers</strong> <span class="muted">(Controller and transport / Transfers and recovery)</span> — gate assertion <code>[xhci-hid]: poll thread running</code></li><li><strong>Bulk IN transfers</strong> <span class="muted">(Controller and transport / Transfers and recovery)</span> — gate assertion <code>[xhci-msc]: read lba0</code></li><li><strong>Bulk OUT transfers</strong> <span class="muted">(Controller and transport / Transfers and recovery)</span> — gate assertion <code>[xhci-msc]: write lba0 ok</code></li><li><strong>Slot allocation and addressing</strong> <span class="muted">(Controller and transport / Lifecycle)</span> — exercised by every gate boot</li><li><strong>Disconnect and release</strong> <span class="muted">(Controller and transport / Lifecycle)</span> — gate assertion <code>[xhci-hotplug]: disconnect on port</code></li><li><strong>DMA reclaim and replug reuse</strong> <span class="muted">(Controller and transport / Lifecycle)</span> — host helper check <code>[xhci-msc]: vdisk reuse slot</code></li><li><strong>Hotplug while HID polling</strong> <span class="muted">(Controller and transport / Lifecycle)</span> — host helper check <code>[xhci-hid]: key 30 down</code></li><li><strong>Boot keyboard</strong> <span class="muted">(Device classes and verification / HID and input)</span> — gate assertion <code>[xhci]: HID keyboard ready on port</code></li><li><strong>Boot pointer/tablet</strong> <span class="muted">(Device classes and verification / HID and input)</span> — gate assertion <code>[xhci]: HID pointer ready on port</code></li><li><strong>HID report descriptor parser</strong> <span class="muted">(Device classes and verification / HID and input)</span> — gate assertion <code>[xhci-hid]: report iface</code></li><li><strong>Report ID support</strong> <span class="muted">(Device classes and verification / HID and input)</span> — gate assertion <code>[xhci-hid]: report iface 0 len 110 fields 4 kind pointer ids 1</code></li><li><strong>Generic keyboard decoder</strong> <span class="muted">(Device classes and verification / HID and input)</span> — gate assertion <code>[xhci-hid]: key 1E down</code></li><li><strong>Generic absolute pointer decoder</strong> <span class="muted">(Device classes and verification / HID and input)</span> — host helper check <code>[xhci-hid]: pointer</code></li><li><strong>Keyboard LED output</strong> <span class="muted">(Device classes and verification / HID and input)</span> — host helper check <code>[xhci-hid]: leds 2</code></li><li><strong>HID poll thread</strong> <span class="muted">(Device classes and verification / HID and input)</span> — gate assertion <code>[xhci-hid]: poll thread running</code></li><li><strong>Bulk-Only CBW/CSW transport</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[xhci-msc]: inquiry</code></li><li><strong>SCSI INQUIRY</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[xhci-msc]: inquiry</code></li><li><strong>READ CAPACITY (10/16)</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[xhci-msc]: capacity 3145728 MB x 512 bytes</code></li><li><strong>READ/WRITE (10/16)</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[xhci-msc]: read lba0 58 45 4E 45</code></li><li><strong>64-bit LBA access</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[xhci-msc]: read last lba ok</code></li><li><strong>REQUEST SENSE / CHECK CONDITION</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[xhci-msc]: sense status 1 key 7 asc 27</code></li><li><strong>REPORT LUNS and multi-LUN</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[xhci-msc]: report luns 1</code></li><li><strong>Vdisk reuse across replug</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — host helper check <code>[xhci-msc]: vdisk reuse slot</code></li><li><strong>GPT partition scan</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[vdisk]: USB QEMU HARDDISK gpt partition 1 lba 2048</code></li><li><strong>FAT32 mount</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[fat]: USB QEMU HARDDISK mounted at</code></li><li><strong>FAT directory enumeration</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[dcltest] PASS vfs usb dir lists entries (1)</code></li><li><strong>Runtime unmount and remount</strong> <span class="muted">(Device classes and verification / Bulk-Only storage)</span> — gate assertion <code>[dcltest] PASS vfs unmounts usb volume (1)</code></li><li><strong>UAS endpoint discovery</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — gate assertion <code>[xhci-uas]: inquiry QEMU HARDDISK</code></li><li><strong>Stream context arrays</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — gate assertion <code>[xhci]: primary stream arrays</code></li><li><strong>Streams enabled</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — gate assertion <code>[xhci-uas]: streams enabled</code></li><li><strong>No-stream shared rings</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — gate assertion <code>[xhci-uas]: streams off, shared rings</code></li><li><strong>Command and status IUs</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — gate assertion <code>[xhci-uas]: read lba0 58 45 4E 45</code></li><li><strong>Data IUs</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — gate assertion <code>[xhci-uas]: write lba0 ok</code></li><li><strong>Multi-LUN discovery</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — gate assertion <code>[xhci-uas]: report luns 1</code></li><li><strong>UAS sense handling</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — gate assertion <code>[xhci-uas]: capacity</code></li><li><strong>Stream release on replug</strong> <span class="muted">(Device classes and verification / UAS storage)</span> — host helper check <code>[xhci-uas]: vdisk reuse slot</code></li><li><strong>FTDI probe and init</strong> <span class="muted">(Device classes and verification / Serial)</span> — gate assertion <code>[xhci-serial]: FTDI ready</code></li><li><strong>ttyUSB VFS node</strong> <span class="muted">(Device classes and verification / Serial)</span> — gate assertion <code>[xhci-serial]: /dev/ttyUSB</code></li></ul></details>
+<p><a href="xhci-progress-history.html">Progress history</a> · <a href="xhci-progress.json">Raw JSON</a></p>
+<p class="muted">Edit the feature matrix in <code>Tools/xhci-progress.py</code>, then rerun <code>python3 Tools/xhci-progress.py</code>. The generator fails if a declared code or test marker disappears.</p>
+</body></html>

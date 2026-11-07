@@ -49,6 +49,20 @@
 #define WINDOW_FLAG_ANIMATION_FADE_OUT (1 << 10)
 #define WINDOW_FLAG_POPUP			   (1 << 11)
 
+/* Title bar drag zone, in pixels from the window's left edge. The classic
+ * chrome keeps its controls in the right 74 px. A Chitralekha chrome
+ * style rides in window flag bits 13-14 (WINDOW_STYLE_MASK in
+ * widgets/window.h); style 1, the knot, keeps its controls in the left
+ * 68 px instead, so presses there must reach the app, not start a drag. */
+#define WINDOW_STYLE_OF_FLAGS(f) (((f) >> 13) & 3)
+#define WINDOW_STYLE_KNOT_ID	 1
+static inline int DeodhaiDragZoneX0(uint16_t flags) {
+	return WINDOW_STYLE_OF_FLAGS(flags) == WINDOW_STYLE_KNOT_ID ? 68 : 10;
+}
+static inline int DeodhaiDragZoneX1(uint16_t flags, int width) {
+	return WINDOW_STYLE_OF_FLAGS(flags) == WINDOW_STYLE_KNOT_ID ? width - 8 : width - 74;
+}
+
 #ifdef SHADOW_ENABLED
 #define SHADOW_SIZE	 11
 #define SHADOW_COLOR 0xFF827474

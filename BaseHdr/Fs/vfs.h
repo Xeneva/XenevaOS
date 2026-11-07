@@ -235,6 +235,15 @@ AU_EXTERN AU_EXPORT int AuVFSNodeIOControl(AuVFSNode* node, int code, void* arg)
 AU_EXTERN AU_EXPORT void AuVFSAddFileSystem(AuVFSNode* node);
 
 /**
+ * @brief AuVFSRemoveFileSystem -- detaches a file system from the
+ * VFS list without freeing the node.  Used by unmount and surprise
+ * unplug, where the filesystem may still be referenced by open files.
+ * @param node -- file system node to remove
+ * @return 0 on success, -1 when the node is not in the list
+ */
+AU_EXTERN AU_EXPORT int AuVFSRemoveFileSystem(AuVFSNode* node);
+
+/**
  * @brief AuVFSRegisterRoot -- register the root file
  * system
  * @param fs -- fsnode to add
@@ -345,5 +354,14 @@ AU_EXTERN AU_EXPORT int AuVFSSetCred(AuVFSNode* node, UID_NUM uid, GID_NUM gid);
  * @param pt -- Pointer to PollTable holding information about caller
  */
 AU_EXTERN AU_EXPORT int AuVFSPoll(AuVFSNode* file, AuPollTable* pt);
+
+/**
+ * @brief AuVFSOwnFsys -- give the capability to root process, to
+ * own the file system for specific user id and group id
+ * @param path -- file system path
+ * @param uid -- User ID value
+ * @param gid -- Group ID value
+ */
+AU_EXTERN AU_EXPORT int AuVFSOwnFsys(char* path, UID_NUM uid, GID_NUM gid);
 
 #endif

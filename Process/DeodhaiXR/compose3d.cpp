@@ -2829,7 +2829,8 @@ bool Deodhai3DHandleMouse(ChCanvas* canvas, int x, int y, int button) {
 			/* torn: the application gets nothing; the page itself can
 			 * still be moved around by its titlebar */
 			if (pressed && !hit->popup && !(hit->win->flags & WINDOW_FLAG_STATIC) &&
-				v < DEODHAI3D_TITLEBAR && u >= 10.0f && u < (float)(hit->w - 74)) {
+				v < DEODHAI3D_TITLEBAR && u >= (float)DeodhaiDragZoneX0(hit->win->flags) &&
+				u < (float)DeodhaiDragZoneX1(hit->win->flags, hit->w)) {
 				Vec3 U, V, N;
 				_compose3d_axes(hit->facing, &U, &V, &N);
 				Vec3 p = _compose3d_madd(&hit->center, u - hit->w * 0.5f, &U);
@@ -2854,7 +2855,8 @@ bool Deodhai3DHandleMouse(ChCanvas* canvas, int x, int y, int button) {
 					if (_get_focused_window() != w)
 						DeodhaiWindowSetFocused(w, true);
 					if (!hit->popup && !(w->flags & WINDOW_FLAG_STATIC) &&
-						v < DEODHAI3D_TITLEBAR && u >= 10.0f && u < (float)(hit->w - 74)) {
+						v < DEODHAI3D_TITLEBAR && u >= (float)DeodhaiDragZoneX0(w->flags) &&
+						u < (float)DeodhaiDragZoneX1(w->flags, hit->w)) {
 						Vec3 U, V, N;
 						_compose3d_axes(hit->facing, &U, &V, &N);
 						Vec3 p = _compose3d_madd(&hit->center, u - hit->w * 0.5f, &U);

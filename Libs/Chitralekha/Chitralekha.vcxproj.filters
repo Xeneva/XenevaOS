@@ -15,6 +15,18 @@
     <ClInclude Include="widgets\window.h">
       <Filter>widgets</Filter>
     </ClInclude>
+    <ClInclude Include="widgets\winstyle.h">
+      <Filter>widgets</Filter>
+    </ClInclude>
+    <ClInclude Include="widgets\gmstyle.h">
+      <Filter>widgets</Filter>
+    </ClInclude>
+    <ClInclude Include="calevt.h">
+      <Filter>widgets</Filter>
+    </ClInclude>
+    <ClInclude Include="livetile.h">
+      <Filter>widgets</Filter>
+    </ClInclude>
     <ClInclude Include="widgets\list.h">
       <Filter>widgets</Filter>
     </ClInclude>
@@ -87,6 +99,21 @@
       <Filter>widgets</Filter>
     </ClCompile>
     <ClCompile Include="widgets\window.cpp">
+      <Filter>widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="widgets\winstyle.cpp">
+      <Filter>widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="widgets\knotwindow.cpp">
+      <Filter>widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="widgets\gmstyle.cpp">
+      <Filter>widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="widgets\flatbutton.cpp">
+      <Filter>widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="widgets\flatsidebar.cpp">
       <Filter>widgets</Filter>
     </ClCompile>
     <ClCompile Include="widgets\defaultwindow.cpp">

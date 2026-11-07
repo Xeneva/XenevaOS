@@ -59,6 +59,7 @@
 #include <bordoisila_ptr.h>
 #include <Sync/poll.h>
 #include <Sync/futex.h>
+#include <Fs/vfsmod.h>
 
 AA64Registers* svcCurrentRegs;
 
@@ -187,6 +188,8 @@ static void* syscalls[AURORA_MAX_SYSCALL] = {
 	[SYS_RECVFROM] = NetRecvFrom,
 	[SYS_IF_NAMETOINDEX] = NetIfNameToIndex,
 	[SYS_GETIFADDRS] = NetGetIfAddrs,
+	[SYS_VFS_MOUNT] = VFSMount,
+	[SYS_VFS_UNMOUNT] = VFSUnmount,
 	[SYS_CREATE_PIPE] = AuCreatePipe,
 	[SYS_GET_VDISK_INFO] = AuGetVDiskInfo,
 	[SYS_GET_VDISK_PARTITION_INFO] = AuGetVDiskPartitionInfo,
@@ -217,6 +220,8 @@ static void* syscalls[AURORA_MAX_SYSCALL] = {
 	[SYS_THREAD_WAIT_FOR_TERMINATION] = AuThreadWaitForTermination,
 	[SYS_KERNEL_UNAME] = ExecUname,
 	[SYS_FILE_POLL] = AuPoll,
+	[SYS_FILE_CHMOD] = Chmod,
+	[SYS_FILE_FSYS_OWN] = AuVFSOwnFsys,
 	[SYS_FUTEX] = AuFutexSyscall,
 };
 
@@ -288,6 +293,8 @@ static char* syscall_name[AURORA_MAX_SYSCALL] = {
 	[SYS_RECVFROM] = "NetRecvFrom",
 	[SYS_IF_NAMETOINDEX] = "NetIfNameToIndex",
 	[SYS_GETIFADDRS] = "NetGetIfAddrs",
+	[SYS_VFS_MOUNT] = "VFSMount",
+	[SYS_VFS_UNMOUNT] = "VFSUnmount",
 	[SYS_CREATE_PIPE] = "AuCreatePipe",
 	[SYS_GET_VDISK_INFO] = "AuGetVDiskInfo",
 	[SYS_GET_VDISK_PARTITION_INFO] = "AuGetVDiskPartitionInfo",

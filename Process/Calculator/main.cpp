@@ -579,8 +579,13 @@ int main(int argc, char* argv[]) {
 		printf("Calculator v1.0 for Xeneva OS \n");*/
 
 	app = ChitralekhaStartApp(argc, argv);
-	mainWin =
-		ChCreateWindow(app, WINDOW_FLAG_MOVABLE, "Calculator", 400, 480 / 2 - 400 / 2, 380, 400);
+	mainWin = ChCreateWindow(app,
+							 WINDOW_FLAG_MOVABLE | WINDOW_FLAG_STYLE_KNOT,
+							 "Calculator",
+							 400,
+							 480 / 2 - 400 / 2,
+							 380,
+							 400);
 	mainWin->color = CALCULATOR_BACK_COLOR;
 	for (int i = 0; i < mainWin->GlobalControls->pointer; i++) {
 		ChWinGlobalControl* ctl = (ChWinGlobalControl*)list_get_at(mainWin->GlobalControls, i);

@@ -429,6 +429,12 @@ extern "C" void main(int argc, char* argv[]) {
 
 	int proc = 0;
 
+	int fsys_own = _KeOwnFsys("/", UAC_NORMAL_USER, UAC_NORMAL_USER);
+	if (fsys_own == -1) {
+		_KePrint("[init]: failed to own root file system for normal user : %d, continuing \r\n",
+				 UAC_NORMAL_USER);
+	}
+
 	/* DCL self-test on every boot. Runs only while dcltest.exe is in the
 	 * image, so the binary itself is the opt-out -- same absence rule as
 	 * deoaud.exe below: a removed component stays absent and init does not
@@ -452,6 +458,20 @@ extern "C" void main(int argc, char* argv[]) {
 		_KeProcessLoadExec(proc, "/dcltest.exe", 0, NULL);
 	} else {
 		_KePrint("[init]: dcltest.exe absent, skipping DCL self-test\r\n");
+	}
+
+	/* bttest: /dev/bt0 end-to-end test. Same opt-in-by-presence rule as
+	 * dcltest.exe -- production images do not carry the binary. It gets
+	 * the world-group credentials the device node expects, and is spawned
+	 * without a console fd; results go to /dev/kmsg on the serial log. */
+	int btest = _KeOpenFile("/bttest.exe", FILE_OPEN_READ_ONLY);
+	if (btest != -1) {
+		_KeCloseFile(btest);
+		proc = _KeCreateProcess(0, "bttest");
+		_KeSetUID(proc, UAC_NORMAL_USER);
+		_KeSetGID(proc, UAC_NORMAL_USER);
+		_KeCredAddSGroup(proc, ggid_misc_world);
+		_KeProcessLoadExec(proc, "/bttest.exe", 0, NULL);
 	}
 
 	/* hwtest: user-space driver access test for /dev/hwdev. Only present when

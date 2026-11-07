@@ -68,6 +68,18 @@
  * the client paint code (content). */
 #define WINDOW_FLAG_GLASS (1 << 12)
 
+/* Window chrome style, bits 13-14 of the flags. Each value selects a
+ * painter module; 0 is the classic chrome (defaultwindow.cpp), which is
+ * left exactly as it was. Bit 15 stays free.
+ *   ChCreateWindow(app, WINDOW_FLAG_MOVABLE | WINDOW_FLAG_STYLE_KNOT, ...)
+ * or switch later with ChWindowSetStyle(win, WINDOW_STYLE_KNOT). */
+#define WINDOW_STYLE_SHIFT			13
+#define WINDOW_STYLE_MASK			(3 << WINDOW_STYLE_SHIFT)
+#define WINDOW_STYLE_DEFAULT		0
+#define WINDOW_STYLE_KNOT			1 /* knotwindow.cpp: embroidered knot controls */
+#define WINDOW_FLAG_STYLE_KNOT		(WINDOW_STYLE_KNOT << WINDOW_STYLE_SHIFT)
+#define CH_WINDOW_STYLE_OF(flags)	(((flags) & WINDOW_STYLE_MASK) >> WINDOW_STYLE_SHIFT)
+
 #define CHITRALEKHA_WIDGET_TYPE_CONTROL (1 << 1)
 #define CHITRALEKHA_WIDGET_TYPE_POPUP	(1 << 2)
 
@@ -125,6 +137,9 @@ typedef struct _chwin_ {
 	jmp_buf jump;
 	void (*ChWinPaint)(struct _chwin_* win);
 	void (*ChCloseWin)(struct _chwin_* win);
+	/* chrome style module state (e.g. knot tied / untied); kept last so
+	 * the offsets of every field above stay what apps were built with */
+	uint8_t styleState;
 } ChWindow;
 
 typedef struct _ChWidget_ {
@@ -258,6 +273,22 @@ XE_EXTERN {
 	* @param win -- Pointer to window structure
 	*/
 	XE_LIB void ChWindowHide(ChWindow * win);
+
+	/**
+	 * @brief ChWindowSetStyle -- switch the window chrome module
+	 * @param win -- Pointer to window
+	 * @param style -- WINDOW_STYLE_DEFAULT, WINDOW_STYLE_KNOT
+	 */
+	XE_LIB void ChWindowSetStyle(ChWindow * win, uint8_t style);
+
+	XE_LIB uint8_t ChWindowGetStyle(ChWindow * win);
+
+	/**
+	 * @brief ChWindowHandleMouseLeave -- the pointer left the window
+	 * (DEODHAI_REPLY_MOUSE_LEAVE): clears hover on global controls and
+	 * widgets so nothing stays highlighted
+	 */
+	XE_LIB void ChWindowHandleMouseLeave(ChWindow * win);
 
 	/*
 	* ChGetWindowHandle -- get a specific window handle from
