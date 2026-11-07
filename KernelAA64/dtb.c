@@ -282,6 +282,68 @@ uint32_t AuDeviceTreeGetU32Property(uint32_t* node, const char* property, uint32
 }
 
 /**
+ * @brief AuDeviceTreeGetStringProperty -- returns the string value of
+ * a property, or NULL if the node doesnt have it
+ * @param node -- Pointer to node
+ * @param property -- Property name
+ */
+const char* AuDeviceTreeGetStringProperty(uint32_t* node, const char* property) {
+	if (!node)
+		return NULL;
+	uint32_t* prop = AuDeviceTreeFindProperty(node, property);
+	if (!prop)
+		return NULL;
+	if (AuDTBSwap32(prop[0]) == 0)
+		return NULL;
+	return (const char*)&prop[2];
+}
+
+/**
+ * @brief AuDeviceTreeGetChildNode -- returns the index-th direct child
+ * of a node, grand children are skipped
+ * @param node -- Pointer to parent node (as returned by AuDeviceTreeGetNode)
+ * @param index -- zero based child index
+ */
+uint32_t* AuDeviceTreeGetChildNode(uint32_t* node, uint32_t index) {
+	if (!dtbAddress || !node)
+		return NULL;
+
+	uint32_t depth = 0;
+	uint32_t count = 0;
+
+	/* skip the parent's own name */
+	node += (strlen((char*)node) + 4) / 4;
+
+	while (1) {
+		uint32_t tag = AuDTBSwap32(*node);
+		if (tag == FDT_NOP) {
+			node++;
+		} else if (tag == FDT_PROP) {
+			uint32_t len = AuDTBSwap32(node[1]);
+			node += 3;
+			node += (len + 3) / 4;
+		} else if (tag == FDT_BEGIN_NODE) {
+			node++;
+			if (depth == 0) {
+				if (count == index)
+					return node;
+				count++;
+			}
+			depth++;
+			node += (strlen((char*)node) + 4) / 4;
+		} else if (tag == FDT_END_NODE) {
+			/* end of the parent itself */
+			if (depth == 0)
+				return NULL;
+			depth--;
+			node++;
+		} else {
+			return NULL;
+		}
+	}
+}
+
+/**
  * @brief AuDeviceTreeInitialize -- initialize the device tree
  * @param fdt_address -- device tree address passed by
  * bootloader
