@@ -44,12 +44,14 @@
 extern AuVFSNode* FatCreateFile(AuVFSNode* fsys, char* filename);
 
 /*
-* FatFileWriteContent -- write contents to fat file (4kib)
+* FatFileWriteContent -- write one cluster of content to a fat file
 * @param fsys -- Pointer to file system node
-* @param first_cluster -- first cluster of the file
+* @param file -- Pointer to file
 * @param buffer -- buffer to write
+* @param length -- bytes of buffer to write, at most one cluster
+* @return true when the cluster was written
 */
-extern void FatFileWriteContent(AuVFSNode* fsys, AuVFSNode* file, uint64_t* buffer);
+extern bool FatFileWriteContent(AuVFSNode* fsys, AuVFSNode* file, uint8_t* buffer, size_t length);
 
 
 /*

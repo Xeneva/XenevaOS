@@ -217,7 +217,11 @@ int FileSetOffset(int fd, size_t offset) {
 	if (!((file->flags & FS_FLAG_FILE_SYSTEM) || (file->flags & FS_FLAG_DEVICE) ||
 		  (file->flags & FS_FLAG_PIPE) || (file->flags & FS_FLAG_DIRECTORY) ||
 		  (file->flags & FS_FLAG_TTY))) {
-		AuVFSNode* fsys = AuVFSFind("/");
+		/* the file's own volume: always using "/" resolved a seek on a
+		 * USB volume with the root disk's cluster size and FAT */
+		AuVFSNode* fsys = (AuVFSNode*)file->device;
+		if (!fsys)
+			fsys = AuVFSFind("/");
 		if (!fsys)
 			return -1;
 		size_t block = AuVFSGetBlockFor(fsys, file, offset);
@@ -373,20 +377,23 @@ size_t WriteFile(int fd, void* buffer, size_t length) {
 		 * correctly across the loop --axiss */
 		size_t remaining = length;
 		uint8_t* src = aligned_buffer;
+		/* one staging page for the whole write, not one per 4K chunk */
+		uint64_t* buff = (uint64_t*)P2V((size_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
 		while (remaining > 0) {
 			size_t chunk = remaining > PAGE_SIZE ? PAGE_SIZE : remaining;
-			uint64_t* buff = (uint64_t*)P2V((size_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
 			memset(buff, 0, PAGE_SIZE);
-			//memcpy(buff, src, chunk);
-			if (__bordoisila_copy_from_user(buff, aligned_buffer, chunk) != 0) {
+			/* copy from src: this copied from aligned_buffer every time,
+			 * so each 4K chunk of a longer write repeated the first one */
+			if (__bordoisila_copy_from_user(buff, src, chunk) != 0) {
 				AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
-				return remaining;
+				/* bytes actually written, not the bytes left over */
+				return length - remaining;
 			}
 			AuVFSNodeWrite(fsys, file, buff, chunk);
-			AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 			src += chunk;
 			remaining -= chunk;
 		}
+		AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 		return length;
 	}
 

@@ -191,6 +191,8 @@ static AuVDisk* vdisk_by_mount_name(const char* name) {
 static void vdisk_attach(AuVDisk* vdisk) {
 	if (!vdisk->fsys || vdisk->mounted)
 		return;
+	/* a re-plug may carry a different or changed volume */
+	FatInvalidateCaches(vdisk->fsys);
 	AuVFSAddFileSystem(vdisk->fsys);
 	vdisk->mounted = 1;
 }
@@ -200,6 +202,7 @@ static void vdisk_detach(AuVDisk* vdisk) {
 	if (!vdisk->fsys || !vdisk->mounted)
 		return;
 	AuVFSRemoveFileSystem(vdisk->fsys);
+	FatInvalidateCaches(vdisk->fsys);
 	vdisk->mounted = 0;
 }
 

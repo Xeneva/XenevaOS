@@ -83,7 +83,9 @@ AuVFSNode* FatCreateDir(AuVFSNode* fsys, char* filename) {
 	memset(extract, 0, 16);
 	while (p) {
 		int i = 0;
-		for (i = 0; i < 16; i++) {
+		/* at most 15 chars: a 16-char component left extract without a
+		 * terminator and the strcpy below ran off the end */
+		for (i = 0; i < 15; i++) {
 			if (p[i] == '/' || p[i] == '\0')
 				break;
 			extract[i] = p[i];
@@ -139,11 +141,14 @@ create_dir_slot:
 			FatDir* dirent = (FatDir*)buff;
 			for (int i = 0; i < 16; i++) {
 				if (dirent->filename[0] == 0x00 || dirent->filename[0] == 0xE5) {
+					/* allocate a new cluster for dir; on a full volume this
+					 * used to write an entry pointing at cluster 0 */
+					uint32_t cluster = FatFindFreeCluster(fsys);
+					if (!cluster)
+						goto create_failed;
+
 					/* fill this direntry*/
 					memcpy(dirent->filename, fname, 11);
-
-					/* allocate a new cluster for dir*/
-					uint32_t cluster = FatFindFreeCluster(fsys);
 					FatAllocCluster(fsys, cluster, FAT_EOC_MARK);
 					FatClearCluster(fsys, cluster);
 
@@ -153,7 +158,7 @@ create_dir_slot:
 					dirent->date_created = FatFormatDate();
 					dirent->time_created = FatFormatTime();
 					dirent->last_wrt_date = dirent->date_created;
-					dirent->last_wrt_time = dirent->last_wrt_time;
+					dirent->last_wrt_time = dirent->time_created;
 					dirent->date_last_accessed = 0;
 					dirent->file_size = 0;
 
@@ -195,13 +200,8 @@ create_dir_slot:
 					dotdot->last_wrt_date = dirent->last_wrt_date;
 					dotdot->last_wrt_time = dirent->last_wrt_time;
 
-					aa64_data_cache_clean_range(entrybuf, PAGE_SIZE);
-
-					AuVDiskWrite(
-						_fs->vdisk, FatClusterToSector32(_fs, cluster), 1, (uint64_t*)entrybuf);
-
-					aa64_data_cache_clean_range(buff, PAGE_SIZE);
-					AuVDiskWrite(_fs->vdisk, FatClusterToSector32(_fs, parent_clust) + j, 1, buff);
+					FatWriteDirSector(_fs, FatClusterToSector32(_fs, cluster), entrybuf);
+					FatWriteDirSector(_fs, FatClusterToSector32(_fs, parent_clust) + j, buff);
 
 					AuPmmngrReleasePage((uint64_t)V2P((size_t)entrybuf));
 					AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
@@ -225,10 +225,11 @@ create_dir_slot:
 		}
 
 		parent_clust = FatReadFAT(fsys, parent_clust);
-		if (FAT_IS_EOC(parent_clust))
+		if (FAT_IS_EOC(parent_clust) || parent_clust < 2)
 			break;
 	}
 
+create_failed:
 	AuPmmngrReleasePage((uint64_t)V2P((size_t)buff));
 	kfree(parent);
 	kfree(file);
@@ -361,39 +362,53 @@ int FatDirectoryRead(AuVFSNode* fs, AuVFSNode* dir, AuDirectoryEntry* dirent) {
 		return -1;
 	memset(dirent->filename, 0, 32);
 	FatFS* fatfs = (FatFS*)fs->device;
-	AuVDisk* vdisk = (AuVDisk*)fatfs->vdisk;
-
-	uint64_t* buf = (uint64_t*)P2V((uint64_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
-	if (!buf)
-		return -1;
 
 	uint32_t spc = fatfs->__SectorPerCluster ? fatfs->__SectorPerCluster : 1;
+	uint32_t per_sector = fatfs->__BytesPerSector / sizeof(FatDir);
+	if (!per_sector)
+		per_sector = 16;
 
-	/* Deleted entries, volume labels, long-name fragments and the hidden
-	 * bits are not directory entries a caller can list.  Walk past them
-	 * here instead of returning -1: callers treat -1 as end-of-directory,
-	 * so a skip at index 0 used to hide every later entry. */
+	/* Each call used to allocate a page, walk the cluster chain from the
+	 * directory's first cluster and read the entry's sector -- and do all
+	 * of it again for every skipped entry. Now the cluster position is
+	 * cached in the directory node (the same last_resolved_* pair
+	 * FatGetClusterFor uses for file offsets) and sectors come from the
+	 * directory sector cache, so a listing reads each sector once. */
 	for (;;) {
 		int index = dirent->index;
 		if (index < 0)
 			goto at_end;
-		uint32_t total_sector = (uint32_t)index / 16;
+		uint32_t total_sector = (uint32_t)index / per_sector;
 		uint32_t cluster_offset = total_sector / spc;
 		uint32_t sector_in_cluster = total_sector % spc;
 
-		uint32_t current_cluster = dir->first_block ? dir->first_block : dir->current;
-		if (current_cluster < 2)
+		uint32_t first_cluster = dir->first_block ? dir->first_block : dir->current;
+		if (first_cluster < 2)
 			goto at_end;
-		for (uint32_t c = 0; c < cluster_offset; c++) {
+
+		uint32_t current_cluster;
+		uint32_t walked;
+		if (dir->last_resolved_cluster >= 2 && cluster_offset >= dir->last_resolved_index) {
+			current_cluster = dir->last_resolved_cluster;
+			walked = (uint32_t)dir->last_resolved_index;
+		} else {
+			/* rewound (a new listing starts at index 0) */
+			current_cluster = first_cluster;
+			walked = 0;
+		}
+		for (; walked < cluster_offset; walked++) {
 			current_cluster = FatReadFAT(fs, current_cluster);
 			if (FAT_IS_EOC(current_cluster) || current_cluster < 2)
 				goto at_end;
 		}
+		dir->last_resolved_index = cluster_offset;
+		dir->last_resolved_cluster = current_cluster;
 
-		memset(buf, 0, PAGE_SIZE);
-		AuVDiskRead(vdisk, FatClusterToSector32(fatfs, current_cluster) + sector_in_cluster,
-					1, buf);
-		FatDir* dir_ = (FatDir*)((uint8_t*)buf + ((index % 16) * sizeof(FatDir)));
+		uint8_t* sector = FatDirSector(
+			fatfs, FatClusterToSector32(fatfs, current_cluster) + sector_in_cluster);
+		if (!sector)
+			goto at_end;
+		FatDir* dir_ = (FatDir*)(sector + ((index % per_sector) * sizeof(FatDir)));
 
 		if (dir_->filename[0] == 0x00)
 			goto at_end;
@@ -419,12 +434,10 @@ int FatDirectoryRead(AuVFSNode* fs, AuVFSNode* dir, AuDirectoryEntry* dirent) {
 		dirent->flags = (dir_->attrib & FAT_ATTRIBUTE_DIRECTORY) ?
 			FS_FLAG_DIRECTORY : FS_FLAG_GENERAL;
 		dirent->index = index + 1;
-		AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
 		return 0;
 	}
 
 at_end:
 	dirent->index = -1;
-	AuPmmngrReleasePage((uint64_t)V2P((size_t)buf));
 	return -1;
 }
