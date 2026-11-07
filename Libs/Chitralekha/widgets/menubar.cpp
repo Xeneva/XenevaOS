@@ -65,36 +65,28 @@ void ChMenubarMouseEvent(ChWidget* wid, ChWindow* win, int x, int y, int button)
 	bool _need_repaint_ = false;
 	ChMenubar* mb = (ChMenubar*)wid;
 	ChMenuButton* clickedButton = NULL;
+	/* open on the press edge only. The old check (same x/y as the
+	 * previous event) dropped clicks whose press arrived together with a
+	 * small move, and re-opened the menu on every event while the
+	 * button was held still. mb->wid.clicked holds last event's button. */
+	bool pressed = button && !mb->wid.clicked;
 	if (mb->allpainted) {
 		for (int i = 0; i < mb->menubuttons->pointer; i++) {
 			ChMenuButton* mbut = (ChMenuButton*)list_get_at(mb->menubuttons, i);
-			if (mbut->hover) {
-				mbut->hover = false;
-				_need_repaint_ = 1;
+			bool inside = (x >= (win->info->x + mbut->wid.x) &&
+						   x < (win->info->x + mbut->wid.x + mbut->wid.w)) &&
+						  (y >= (win->info->y + mbut->wid.y) &&
+						   y < (win->info->y + mbut->wid.y + mbut->wid.h));
+			bool clicked = inside && pressed;
+			/* repaint only when a button's look changes, not on every
+			 * mouse move over the menubar */
+			if (mbut->hover != inside || mbut->clicked != clicked) {
+				mbut->hover = inside;
+				mbut->clicked = clicked;
+				_need_repaint_ = true;
 			}
-			if (mbut->clicked) {
-				mbut->clicked = false;
-				_need_repaint_ = 1;
-			}
-			if ((x > (win->info->x + mbut->wid.x) &&
-				 x < (win->info->x + mbut->wid.x + mbut->wid.w)) &&
-				(y > (win->info->y + mbut->wid.y) &&
-				 y < (win->info->y + mbut->wid.y + mbut->wid.h))) {
-				mbut->hover = true;
-				if (button && mb->wid.lastMouseX == x && mb->wid.lastMouseY == y) {
-					clickedButton = mbut;
-					mbut->clicked = true;
-				}
-				_need_repaint_ = 1;
-			}
-		}
-	}
-
-	if (clickedButton) {
-		ChPopupMenu* pm = clickedButton->popupMenu;
-		if (pm) {
-			ChMenuShow(pm, clickedButton->wid.x, clickedButton->wid.y + 26);
-			_KePrint("Popup menu availabled \r\n");
+			if (clicked)
+				clickedButton = mbut;
 		}
 	}
 
@@ -103,8 +95,16 @@ void ChMenubarMouseEvent(ChWidget* wid, ChWindow* win, int x, int y, int button)
 		ChWindowUpdate(win, wid->x, wid->y, wid->w - 1, wid->h, false, true);
 	}
 
+	mb->wid.clicked = button ? true : false;
 	mb->wid.lastMouseX = x;
 	mb->wid.lastMouseY = y;
+
+	/* show last: ChMenuShow sends compositor messages and the menu may
+	 * take pointer focus, so finish this widget's own update first */
+	if (clickedButton && clickedButton->popupMenu) {
+		ChMenuShow(clickedButton->popupMenu, clickedButton->wid.x, clickedButton->wid.y + 26);
+		mb->lastActiveMenu = clickedButton->popupMenu;
+	}
 }
 /*
  * ChCreateMenubar -- create a new menubar

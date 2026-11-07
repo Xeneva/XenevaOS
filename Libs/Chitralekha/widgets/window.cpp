@@ -527,7 +527,7 @@ XE_EXTERN XE_EXPORT void ChWindowHandleMouse(ChWindow* win, int x, int y, int bu
 				/* ChWindowHide flips info->hide in shared memory, which
 				 * the compositor reads directly every frame (60fps) --
 				 * no IPC round-trip to wait out here --axiss */
-				ChWindowHide(popup);
+				ChPopupWindowHide(popup, win);
 				_popup_was_active = true;
 			}
 		}
@@ -657,7 +657,7 @@ XE_EXTERN XE_EXPORT void ChWindowHandleTouch(ChWindow* win, int x, int y, int bu
 				/* ChWindowHide flips info->hide in shared memory, which
 				 * the compositor reads directly every frame (60fps) --
 				 * no IPC round-trip to wait out here --axiss */
-				ChWindowHide(popup);
+				ChPopupWindowHide(popup, win);
 				_popup_was_active = true;
 			}
 		}
@@ -1164,7 +1164,23 @@ XE_EXTERN XE_EXPORT void ChPopupWindowUpdateLocation(ChWindow* pwin, ChWindow* w
  * @param parent -- Root window
  */
 XE_EXTERN XE_EXPORT void ChPopupWindowHide(ChWindow* pw, ChWindow* parent) {
+	if (!pw || pw->info->hide)
+		return;
+	/* Flip the shared flag first, so client code that checks info->hide
+	 * (dismiss on outside click, a held mouse button) sees the popup as
+	 * hidden immediately and never asks for a second hide. Then tell
+	 * Deodhai, which repaints what was under the popup and hands focus
+	 * back to the parent. For popups the hide message is a plain hide,
+	 * not a toggle. */
 	pw->info->hide = true;
+	PostEvent e;
+	memset(&e, 0, sizeof(PostEvent));
+	e.type = DEODHAI_MESSAGE_WINDOW_HIDE;
+	e.dword = pw->app->currentID;
+	e.dword2 = pw->handle;
+	e.to_id = POSTBOX_ROOT_ID;
+	e.from_id = pw->app->currentID;
+	_KeFileIoControl(pw->app->postboxfd, POSTBOX_PUT_EVENT, &e);
 }
 
 /*
