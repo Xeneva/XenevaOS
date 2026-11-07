@@ -121,8 +121,10 @@ struct VirtioInputEvent {
 #define OFFSETOF(s,m) ((size_t)&(((s*)0)->m))
 
 #define VIRTIO_NET_F_CSUM (1ULL << 0)
-#define VIRTIO_NET_F_GUEST_CSUM (1ULL << 2)
+#define VIRTIO_NET_F_GUEST_CSUM (1ULL << 1)
 #define VIRTIO_NET_F_MAC (1ULL << 5)
+#define VIRTIO_NET_F_GUEST_TSO4 (1ULL << 7)
+#define VIRTIO_NET_F_HOST_TSO4 (1ULL << 11)
 #define VIRTIO_NET_F_CTRL_VQ (1ULL << 17)
 #define VIRTIO_NET_HDR_GSO_NONE 0
 

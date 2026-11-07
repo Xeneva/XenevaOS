@@ -136,12 +136,13 @@ void AuExitSubThread(AuProcess* proc, AA64Thread* thread, int thread_id) {
 			continue;
 		if (thr->thread_id == thread_id && thr == thread) {
 			/* we cannot directly kill thread here, freeing up the running
-			   stack will immediately stall the kernel, so better mark it as
-			   killable and move it to trash from scheduler ready queue,
-			   process reaper will automatically cleanup all allocated 
-			   resources by the thread and reap it
+			   stack will immediately stall the kernel, so better let
+			   AuThreadMoveToTrash mark it killable and remove it from the
+			   scheduler queues. Setting THREAD_STATE_KILLABLE here first
+			   makes MoveToTrash take its early return and leaves the dead
+			   thread in the ready list, where a later pthread_join finds it
+			   and blocks forever.
 			*/
-			thr->state = THREAD_STATE_KILLABLE;
 			AuProcessFreeKeResource(thr);
 			AuThreadMoveToTrash(thr);
 			break;

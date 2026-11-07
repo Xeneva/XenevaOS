@@ -54,7 +54,7 @@
 
 #define PROCESS_USER_STACK_SZ 512 * 1024
 
-#define MAX_THREADS_PER_PROCESS 60
+#define MAX_THREADS_PER_PROCESS 512
 #define FILE_DESC_PER_PROCESS	60
 
 #define PROCESS_STATE_NOT_READY (1 << 0)
@@ -152,7 +152,7 @@ typedef struct _au_proc_ {
 	AA64Thread* main_thread;
 #endif // Maybe RISC-V?
 
-	uint8_t num_thread;
+	uint16_t num_thread;
 	entry entry_point;
 
 #ifdef ARCH_X64

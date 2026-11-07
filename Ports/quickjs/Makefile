@@ -3,13 +3,14 @@
 # Builds quickjs.c + siblings (vendored under src/) into libquickjs.a with the
 # same LLVM flags as the other PE/COFF ports (CssLibs, mbedtls). Port glue:
 #  - port/port.c (built here) replaces the original hand-built os.o with
-#    compiled equivalents: _msize via dlmalloc, clock_gettime, a full UTC
-#    gmtime/localtime and no-op pthread_cond_* (single JS thread).
-#  - port/libm.c is the double-precision gap (acos..trunc). The makefile
-#    compiles it, so deleting the object does not lose the functions.
-#  - port/int128.o is still the checked-in 128-bit division helper.
-# Port shims for libc headers quickjs.c needs (fenv, math, time, pthread)
-# live in port/*.h and shadow the XEClib ones for this library only.
+#    compiled equivalents: _msize via dlmalloc, clock_gettime and a full
+#    UTC gmtime/localtime.
+#  - QuickJS math now resolves to XEClib's musl libm (double and float);
+#    the old port/libm.c gap-filler and port/math.h shim are gone.
+#  - 128-bit division helpers now come from Ports/compiler-rt; the old
+#    checked-in port/int128.o workaround is gone.
+# Port shims for libc headers quickjs.c needs (time) live in port/*.h and
+# shadow the XEClib ones for this library only.
 
 LLVM_TARGET = -target aarch64-unknown-windows
 CROSS_COMPILE ?= aarch64-linux-gnu-
@@ -40,9 +41,8 @@ endif
 AR = llvm-ar
 RANLIB = llvm-ranlib
 
-SRCS = src/quickjs.c src/cutils.c src/dtoa.c src/libregexp.c src/libunicode.c port/port.c port/libm.c
-OBJS = obj/quickjs.o obj/cutils.o obj/dtoa.o obj/libregexp.o obj/libunicode.o obj/port.o obj/libm.o
-PORT_OBJS = port/int128.o
+SRCS = src/quickjs.c src/cutils.c src/dtoa.c src/libregexp.c src/libunicode.c port/port.c
+OBJS = obj/quickjs.o obj/cutils.o obj/dtoa.o obj/libregexp.o obj/libunicode.o obj/port.o
 
 TARGET = libquickjs.a
 
@@ -60,12 +60,8 @@ obj/port.o: port/port.c
 	@mkdir -p $(dir $@)
 	clang $(CFLAGS) -Wno-unused-command-line-argument -c $< -o $@
 
-obj/libm.o: port/libm.c
-	@mkdir -p $(dir $@)
-	clang $(CFLAGS) -Wno-unused-command-line-argument -c $< -o $@
-
-$(TARGET): $(OBJS) $(PORT_OBJS)
-	$(AR) rcs $@ $(OBJS) $(PORT_OBJS)
+$(TARGET): $(OBJS)
+	$(AR) rcs $@ $(OBJS)
 	@echo "linked $@" && llvm-nm $@ | head -0
 
 clean:

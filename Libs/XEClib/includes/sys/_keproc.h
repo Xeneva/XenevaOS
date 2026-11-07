@@ -78,7 +78,7 @@ XE_EXTERN {
 	 * @brief _KeGetThreadID -- get currently running
 	 * thread id
 	 */
-	XE_LIB uint16_t _KeGetThreadID();
+	XE_LIB uint64_t _KeGetThreadID();
 
 	/**
 	 * @brief _KeGetProcessID -- get currently running
@@ -154,6 +154,24 @@ XE_EXTERN {
 	 * inside current process slot
 	 */
 	XE_LIB int _KeCreateThread(void (*entry)(), char* name);
+
+	/**
+	 * @brief _KeCreateThreadArg -- creates a new thread with one
+	 * argument delivered in x0 of the entry point
+	 */
+	XE_LIB int _KeCreateThreadArg(void (*entry)(), char* name, void* arg);
+
+	/**
+	 * @brief _KeFutex -- native futex wait/wake/requeue
+	 * @param uaddr -- user address of the 32-bit futex word
+	 * @param op -- futex command, optionally ORed with PRIVATE_FLAG
+	 * @param val -- expected value for wait, count for wake
+	 * @param timeout -- relative timespec for wait operations, or NULL
+	 * @param uaddr2 -- destination address for requeue
+	 * @param val3 -- bitset or compare value
+	 */
+	XE_LIB int _KeFutex(uint32_t* uaddr, int op, uint32_t val, const void* timeout,
+						uint32_t* uaddr2, uint32_t val3);
 
 	/**
 	* @brief _KeSetFileToProcess -- copies a file from one process

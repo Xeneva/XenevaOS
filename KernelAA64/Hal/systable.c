@@ -58,6 +58,7 @@
 #include <timer.h>
 #include <bordoisila_ptr.h>
 #include <Sync/poll.h>
+#include <Sync/futex.h>
 #include <Fs/vfsmod.h>
 
 AA64Registers* svcCurrentRegs;
@@ -221,6 +222,7 @@ static void* syscalls[AURORA_MAX_SYSCALL] = {
 	[SYS_FILE_POLL] = AuPoll,
 	[SYS_FILE_CHMOD] = Chmod,
 	[SYS_FILE_FSYS_OWN] = AuVFSOwnFsys,
+	[SYS_FUTEX] = AuFutexSyscall,
 };
 
 #ifdef __KERNEL_PROFILER_ON__
@@ -318,6 +320,7 @@ static char* syscall_name[AURORA_MAX_SYSCALL] = {
 	[SYS_PROCESS_FETCH] = "AuProcessFetch",
 	[SYS_SET_WALLTIME] = "AuSetWalltime",
 	[SYS_GET_WALLTIME] = "AuGetWalltime",
+	[SYS_FUTEX] = "AuFutexSyscall",
 };
 #endif
 
