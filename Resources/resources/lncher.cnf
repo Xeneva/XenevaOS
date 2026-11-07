@@ -152,6 +152,16 @@
 [Kicker]TALLY|
 [Deck]rows and sums}
 
+{[Title]Phulbari|
+[Icon]/icons/xeabtl.bmp|
+[Param]Null|
+[App]/phlbari.exe|
+[Size]M|
+[Color]red|
+[Name]phulbari|
+[Kicker]WATCH|
+[Deck]a garden, woven}
+
 {[Title]Solitaire|
 [Icon]/icons/solitrl.bmp|
 [Param]Null|

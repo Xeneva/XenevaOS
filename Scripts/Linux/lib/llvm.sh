@@ -51,7 +51,7 @@ if [ "${BUILD_USER_APPS:-0}" -eq 1 ]; then
         APPS=(
             Init DeodhaiXR Terminal Namdapha XELnch
             Calender Calculator Files Control XEShell btctl XENotes XEPaints XESheets
-            Clipd dcltest
+            Clipd dcltest Phulbari
         )
         # hwtest unloads the in-kernel sound driver and claims its PCI function from
         # user space, so it is only built and packed when explicitly requested:
@@ -129,6 +129,7 @@ if [ "${BUILD_USER_APPS:-0}" -eq 1 ]; then
     if [ -z "${USER_APPS:-}" ]; then
         [ -f ../../Process/Calender/calendr.exe ]      && cp -f ../../Process/Calender/calendr.exe      ../../Resources/resources/
         [ -f ../../Process/Calculator/calc.exe ]       && cp -f ../../Process/Calculator/calc.exe       ../../Resources/resources/
+        [ -f ../../Process/Phulbari/phlbari.exe ]     && cp -f ../../Process/Phulbari/phlbari.exe     ../../Resources/resources/
         [ -f ../../Process/Files/file.exe ]            && cp -f ../../Process/Files/file.exe            ../../Resources/resources/
         [ -f ../../Process/Control/ctrl.exe ]          && cp -f ../../Process/Control/ctrl.exe          ../../Resources/resources/
         [ -f ../../Process/btctl/btctl.exe ]           && cp -f ../../Process/btctl/btctl.exe           ../../Resources/resources/
