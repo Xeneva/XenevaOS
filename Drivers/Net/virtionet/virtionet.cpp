@@ -47,12 +47,13 @@
 #include <Net/ethernet.h>
 #include <string.h>
 
-/* Deep enough to absorb a slirp burst without dropping frames or stalling
- * the TX ring. 64 * 2 KiB = 128 KiB per direction. */
-#define RX_BUFFER_COUNT 64
+/* A real virtio device, once GUEST_TSO4 is negotiated, may deliver one
+ * IPv4 packet up to 65535 bytes. Sixteen such buffers is 1 MiB. Slirp
+ * still sends 1460-byte frames; vhost and hardware fill the buffer. */
+#define RX_BUFFER_COUNT 16
 #define TX_BUFFER_COUNT 64
 #define TX_BUFFER_SIZE	2048
-#define RX_BUFFER_SIZE	2048
+#define RX_BUFFER_SIZE	65536
 #define MAKE_IP(a, b, c, d)                                                                        \
 	((uint32_t)(d) << 24 | (uint32_t)(c) << 16 | (uint32_t)(b) << 8 | (uint32_t)(a))
 
@@ -189,7 +190,7 @@ static void AuVirtioNetRxinitialize(void) {
 		AU_NET_LOG("[aurora]: virtio-net RX queue setup failed\r\n");
 		return;
 	}
-	rx_nbuf = rx_qsize;
+	rx_nbuf = rx_qsize > RX_BUFFER_COUNT ? RX_BUFFER_COUNT : rx_qsize;
 	AU_NET_LOG("[aurora]: rx queue size : %d nbuf=%d\r\n", rx_qsize, rx_nbuf);
 
 	pages = (rx_nbuf * RX_BUFFER_SIZE + 4095) / 4096;
@@ -409,7 +410,10 @@ void AuVirtioNetInitialize(uint64_t device, int bus, int dev, int func) {
 	rx_index = 0;
 	tx_done = 0;
 
-	if (!AuVirtioPCIInit(device, bus, dev, func, (uint32_t)VIRTIO_NET_F_MAC, &netDev)) {
+	if (!AuVirtioPCIInit(device, bus, dev, func,
+			(uint32_t)(VIRTIO_NET_F_MAC | VIRTIO_NET_F_CSUM | VIRTIO_NET_F_GUEST_CSUM |
+				VIRTIO_NET_F_GUEST_TSO4 | VIRTIO_NET_F_HOST_TSO4),
+			&netDev)) {
 		AU_NET_LOG("[aurora]: virtio-net PCI init failed\r\n");
 		return;
 	}
