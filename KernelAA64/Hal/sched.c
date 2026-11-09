@@ -34,6 +34,7 @@
 #include <Hal/AA64/sched.h>
 #include <Hal/AA64/aa64percpu.h>
 #include <Sync/bkl.h>
+#include <Sync/ticketlock.h>
 #include <Mm/pmmngr.h>
 #include <Mm/kmalloc.h>
 #include <Mm/vmmngr.h>
@@ -191,7 +192,8 @@ static void schedKick(AA64Thread* t) {
  * unrelated critical section on the same core. */
 extern void aa64_spinlock_acquire(uint32_t* lock);
 extern void aa64_spinlock_release(uint32_t* lock);
-static uint32_t s_sched_lock_word;
+/* FIFO, every core's tick contends for it */
+static AuTicketLock s_sched_lock_word __attribute__((aligned(8)));
 static volatile uint32_t s_sched_owner; /* owning cpu_num + 1, 0 when free */
 static uint32_t s_sched_depth;
 static bool s_sched_lock_ready;
@@ -209,7 +211,7 @@ uint64_t AuSchedLock(void) {
 		s_sched_depth++;
 		return d;
 	}
-	aa64_spinlock_acquire(&s_sched_lock_word);
+	AuTicketLockAcquire(&s_sched_lock_word);
 	s_sched_owner = me;
 	s_sched_depth = 1;
 	return d;
@@ -225,14 +227,82 @@ void AuSchedUnlock(uint64_t d) {
 	}
 	if (--s_sched_depth == 0) {
 		s_sched_owner = 0;
-		aa64_spinlock_release(&s_sched_lock_word);
+		AuTicketLockRelease(&s_sched_lock_word);
 	}
 	restore_daif(d);
 }
 
 /* Unlocked cores: caller must hold the sched lock (or run masked in
  * the tick path, which is atomic against masked thread-side holders). */
+/* Every thread records which list it is linked on. schedUnlink only
+ * patches the head/tail of the list it is handed: unlinking a thread from
+ * a list it is not on leaves that list's head pointing at it and cuts off
+ * the rest of the list it really is on (a whole run queue can vanish).
+ * Mismatches are reported and redirected to the right list. */
+#define SCHED_LIST_NONE	   0
+#define SCHED_LIST_READY   1
+#define SCHED_LIST_BLOCKED 2
+#define SCHED_LIST_SLEEP   3
+#define SCHED_LIST_TRASH   4
+
+static uint32_t schedListId(AA64Thread** head) {
+	if (head == &thread_list_head)
+		return SCHED_LIST_READY;
+	if (head == &blocked_thr_head)
+		return SCHED_LIST_BLOCKED;
+	if (head == &sleep_thr_head)
+		return SCHED_LIST_SLEEP;
+	if (head == &trash_thr_head)
+		return SCHED_LIST_TRASH;
+	return SCHED_LIST_NONE;
+}
+
+static void schedListPtrs(uint32_t id, AA64Thread*** head, AA64Thread*** last) {
+	switch (id) {
+	case SCHED_LIST_READY:
+		*head = &thread_list_head;
+		*last = &thread_list_last;
+		break;
+	case SCHED_LIST_BLOCKED:
+		*head = &blocked_thr_head;
+		*last = &blocked_thr_last;
+		break;
+	case SCHED_LIST_SLEEP:
+		*head = &sleep_thr_head;
+		*last = &sleep_thr_last;
+		break;
+	case SCHED_LIST_TRASH:
+		*head = &trash_thr_head;
+		*last = &trash_thr_last;
+		break;
+	default:
+		*head = NULL;
+		*last = NULL;
+		break;
+	}
+}
+
+static uint32_t s_sched_list_reports;
+static void schedListReport(const char* what, AA64Thread* t, uint32_t want, void* caller) {
+	if (s_sched_list_reports >= 32)
+		return;
+	s_sched_list_reports++;
+	UARTDebugOut("[sched]: %s %s state %d: list %d, but it is on %d (cpu %d, caller %x)\r\n",
+				 what, t->name, (int)t->state, want, t->sched_list, AA64GetCPUNum(), caller);
+}
+
+static void schedUnlinkRaw(AA64Thread** head, AA64Thread** last, AA64Thread* thread);
+
 static void schedLink(AA64Thread** head, AA64Thread** last, AA64Thread* t) {
+	uint32_t id = schedListId(head);
+	if (t->sched_list != SCHED_LIST_NONE) {
+		/* already linked: a second link would corrupt both lists */
+		schedListReport("link", t, id, __builtin_return_address(0));
+		AA64Thread **h, **l;
+		schedListPtrs(t->sched_list, &h, &l);
+		if (h)
+			schedUnlinkRaw(h, l, t);
+	}
 	t->next = NULL;
 	t->prev = NULL;
 	if (*head == NULL) {
@@ -243,10 +313,25 @@ static void schedLink(AA64Thread** head, AA64Thread** last, AA64Thread* t) {
 		t->prev = *last;
 	}
 	*last = t;
+	t->sched_list = id;
 }
 
 static void schedUnlink(AA64Thread** head, AA64Thread** last, AA64Thread* thread) {
-	if (!thread || !head || !last || *head == NULL)
+	if (!thread || !head || !last)
+		return;
+	uint32_t id = schedListId(head);
+	if (thread->sched_list != id) {
+		if (thread->sched_list == SCHED_LIST_NONE)
+			return; /* on no list: nothing to take it off */
+		schedListReport("unlink", thread, id, __builtin_return_address(0));
+		schedListPtrs(thread->sched_list, &head, &last);
+	}
+	schedUnlinkRaw(head, last, thread);
+}
+
+static void schedUnlinkRaw(AA64Thread** head, AA64Thread** last, AA64Thread* thread) {
+	thread->sched_list = SCHED_LIST_NONE;
+	if (*head == NULL)
 		return;
 	if (thread->prev)
 		thread->prev->next = thread->next;
@@ -332,12 +417,20 @@ void AA64NextThread() {
 	 * AuScheduleThread): resuming SLEEP/BLOCKED/KILLABLE threads here
 	 * breaks whatever parked them. The walk is bounded so a cyclic list
 	 * can never wedge the tick; with nothing runnable we park on idle. --axiss */
-	AA64Thread* start =
-		(current_thread && current_thread->next) ? current_thread->next : thread_list_head;
+	/* Continue the round-robin after the current thread only while it is
+	 * still on the ready list. A thread that just went to sleep or blocked
+	 * sits on another list and its next pointer walks that list: the old
+	 * code then picked a parked LEFT_IN_KERNEL sleeper straight off the
+	 * sleep list, resumed it early while still linked there, and its next
+	 * AuSleepThread unlinked it from the ready list it was not on, cutting
+	 * the run queue (every thread behind it stopped being scheduled). */
+	AA64Thread* cur = current_thread;
+	AA64Thread* start = (cur && cur->sched_list == SCHED_LIST_READY && cur->next) ? cur->next
+																			   : thread_list_head;
 
 	AA64Thread* cursor = start; //current_thread ? current_thread->next : NULL;
 	for (int i = 0; i < SCHED_VALIDATE_STEPS && cursor; i++) {
-		if (cursor != _idle_thr &&
+		if (cursor != _idle_thr && cursor->sched_list == SCHED_LIST_READY &&
 			(cursor->state == THREAD_STATE_READY || cursor->state == THREAD_STATE_LEFT_IN_KERNEL) &&
 			AuSchedCanRunHere(cursor)) {
 			current_thread = cursor;
@@ -1010,8 +1103,54 @@ void AuThreadMakeReady(AA64Thread* thread) {
 		schedUnlink(&sleep_thr_head, &sleep_thr_last, thread);
 		schedLinkReady(thread);
 		thread->state = THREAD_STATE_READY;
-	} else if (thread->state == THREAD_STATE_BLOCKED)
+	} else if (thread->state == THREAD_STATE_BLOCKED) {
 		AuUnblockThread(thread);
+	} else if (thread->state != THREAD_STATE_KILLABLE) {
+		/* running (maybe on another core) on its way to a pause: do not
+		 * lose this wakeup, see AuThreadPark */
+		thread->wake_pending = 1;
+	}
+	AuSchedUnlock(d);
+}
+
+/**
+ * @brief AuThreadPark -- block the calling thread for PauseThread, unless
+ * a wakeup already arrived for it.
+ *
+ * User space waits in two syscalls: look for an event (postbox get), then
+ * pause if there was none. A waker that runs in between, on another core,
+ * finds the thread still running and used to drop the wakeup, leaving it
+ * blocked with its event already queued. Wakers now leave a token instead
+ * (AuThreadUnpark, AuThreadMakeReady) and the pause consumes it.
+ * @param thread -- the calling thread
+ * @return true if it blocked (the caller reschedules), false if a wakeup
+ * was pending and it should return at once
+ */
+bool AuThreadPark(AA64Thread* thread) {
+	uint64_t d = AuSchedLock();
+	if (thread->wake_pending) {
+		thread->wake_pending = 0;
+		AuSchedUnlock(d);
+		return false;
+	}
+	thread->state = THREAD_STATE_BLOCKED;
+	schedUnlink(&thread_list_head, &thread_list_last, thread);
+	schedLink(&blocked_thr_head, &blocked_thr_last, thread);
+	AuSchedUnlock(d);
+	return true;
+}
+
+/**
+ * @brief AuThreadUnpark -- wake a paused thread, or leave it a wakeup
+ * token if it is not blocked right now (see AuThreadPark)
+ * @param thread -- thread to wake
+ */
+void AuThreadUnpark(AA64Thread* thread) {
+	uint64_t d = AuSchedLock();
+	if (thread->state == THREAD_STATE_BLOCKED)
+		AuUnblockThread(thread);
+	else if (thread->state != THREAD_STATE_KILLABLE)
+		thread->wake_pending = 1;
 	AuSchedUnlock(d);
 }
 /**

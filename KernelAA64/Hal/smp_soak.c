@@ -58,12 +58,15 @@
 #include <Drivers/uart.h>
 #include <Serv/syscall.h>
 #include <Sync/bkl.h>
+#include <signal.h>
 
 /* hard coded in Hal/aa64smpsoak.s */
 _Static_assert(SYS_GET_THREAD_ID == 3, "smp soak syscall numbers");
 _Static_assert(SYS_PROCESS_SLEEP == 23, "smp soak syscall numbers");
 _Static_assert(SYS_GET_CURRENT_US == 70, "smp soak syscall numbers");
 _Static_assert(SYS_GET_NUM_PROCESS_COUNT == 75, "smp soak syscall numbers");
+_Static_assert(SYS_PAUSE_THREAD == 2, "smp soak syscall numbers");
+_Static_assert(SYS_SEND_SIGNAL_TO_THREAD == 80, "smp soak syscall numbers");
 
 #define SMPSOAK_SPACES	  3
 #define SMPSOAK_PER_SPACE 2
@@ -89,11 +92,26 @@ typedef struct {
 	SoakSlot* kslot; /* kernel alias of the slot */
 	uint64_t slot_va;
 	uint64_t stack_top;
+	uint64_t entry_va;
 } SoakWorker;
 
-static SoakWorker s_workers[SMPSOAK_WORKERS];
+/* the pause/wake pair (aa64_smp_soak_waiter/_waker) */
+typedef struct {
+	volatile uint64_t flag;
+	volatile uint64_t handoffs;
+	volatile uint64_t wakes;
+	volatile uint64_t pauses;
+	volatile uint64_t waiter_tid;
+	volatile uint64_t signum;
+} SoakPair;
+
+#define SMPSOAK_PAIR_WORKERS 2
+static SoakWorker s_workers[SMPSOAK_WORKERS + SMPSOAK_PAIR_WORKERS];
+static SoakPair* s_pair;
 
 extern uint8_t aa64_smp_soak_user[];
+extern uint8_t aa64_smp_soak_waiter[];
+extern uint8_t aa64_smp_soak_waker[];
 extern uint8_t aa64_smp_soak_user_end[];
 
 static uint64_t soakMapPage(uint64_t* pd, uint64_t va, uint8_t attr) {
@@ -119,7 +137,7 @@ static void AuSMPSoakWorkerEntry(uint64_t ctx) {
 	mask_irqs();
 	AA64Thread* self = AuGetCurrentThread();
 	SoakWorker* w = NULL;
-	for (int i = 0; i < SMPSOAK_WORKERS; i++)
+	for (int i = 0; i < SMPSOAK_WORKERS + SMPSOAK_PAIR_WORKERS; i++)
 		if (s_workers[i].thr == self)
 			w = &s_workers[i];
 	if (!w) {
@@ -129,7 +147,7 @@ static void AuSMPSoakWorkerEntry(uint64_t ctx) {
 	}
 	/* leaving the kernel for EL0 */
 	AuBKLReleaseAll();
-	aa64_enter_user(w->stack_top, SMPSOAK_CODE_VA, w->slot_va);
+	aa64_enter_user(w->stack_top, w->entry_va, w->slot_va);
 	for (;;)
 		;
 }
@@ -153,6 +171,7 @@ static void AuSMPSoakReporter(uint64_t ctx) {
 	(void)ctx;
 	SoakCpuSnap prev[AA64_SMP_MAX_CPUS], now[AA64_SMP_MAX_CPUS];
 	uint64_t prev_iters[SMPSOAK_WORKERS] = {0};
+	uint64_t prev_handoffs = 0;
 	bool ok = true;
 	uint32_t min_busy_ap = 100;
 	soakSnapCpus(prev);
@@ -171,6 +190,14 @@ static void AuSMPSoakReporter(uint64_t ctx) {
 			if (it == prev_iters[i])
 				ok = false; /* starved or stuck */
 			prev_iters[i] = it;
+		}
+		if (s_pair) {
+			uint64_t h = s_pair->handoffs;
+			UARTDebugOut("[smpsoak]:  pause/wake pair handoffs %d (+%d) wakes %d pauses %d \r\n",
+						 h, h - prev_handoffs, s_pair->wakes, s_pair->pauses);
+			if (h == prev_handoffs)
+				ok = false; /* a lost wakeup left the pair stuck */
+			prev_handoffs = h;
 		}
 		for (int c = 0; c < AA64_SMP_MAX_CPUS; c++) {
 			AA64PerCPU* p = &_aa64_percpu[c];
@@ -224,11 +251,45 @@ void AuSMPSoakStart(void) {
 			w->kslot->id = 0x1000 + (uint64_t)i * 0x10 + (uint64_t)sp;
 			w->slot_va = SMPSOAK_DATA_VA + (uint64_t)j * sizeof(SoakSlot);
 			w->stack_top = stack_va + PAGE_SIZE;
+			w->entry_va = SMPSOAK_CODE_VA;
 			char name[8] = {'u', 's', 'o', 'a', 'k', (char)('0' + i), 0, 0};
 			w->thr = AuCreateKthread(AuSMPSoakWorkerEntry, pd, name);
 			w->thr->threadType = THREAD_LEVEL_USER | THREAD_LEVEL_NOPROC;
 		}
 	}
+	/* pause/wake pair in an address space of its own */
+	{
+		uint64_t* pd = AuCreateVirtualAddressSpace();
+		uint64_t code = soakMapPage(pd, SMPSOAK_CODE_VA, PTE_USER_EXECUTABLE | PTE_NORMAL_MEM | PTE_AP_RW_USER);
+		uint64_t data = soakMapPage(pd, SMPSOAK_DATA_VA, PTE_NORMAL_MEM | PTE_AP_RW_USER);
+		if (!pd || !code || !data) {
+			UARTDebugOut("[smpsoak]: pair setup failed \r\n");
+			return;
+		}
+		memcpy((void*)P2V(code), aa64_smp_soak_user, code_len);
+		soakSyncCode((void*)P2V(code), code_len);
+		s_pair = (SoakPair*)P2V(data);
+		s_pair->signum = SIGUSR1;
+		for (int j = 0; j < SMPSOAK_PAIR_WORKERS; j++) {
+			int i = SMPSOAK_WORKERS + j;
+			uint64_t stack_va = SMPSOAK_STACK_VA + (uint64_t)i * 0x2000;
+			if (!soakMapPage(pd, stack_va, PTE_NORMAL_MEM | PTE_AP_RW_USER)) {
+				UARTDebugOut("[smpsoak]: pair stack setup failed \r\n");
+				return;
+			}
+			SoakWorker* w = &s_workers[i];
+			w->slot_va = SMPSOAK_DATA_VA;
+			w->stack_top = stack_va + PAGE_SIZE;
+			uint8_t* entry = j == 0 ? aa64_smp_soak_waiter : aa64_smp_soak_waker;
+			w->entry_va = SMPSOAK_CODE_VA + (uint64_t)(entry - aa64_smp_soak_user);
+			char name[8] = {'u', 'p', 'a', 'i', 'r', (char)('0' + j), 0, 0};
+			w->thr = AuCreateKthread(AuSMPSoakWorkerEntry, pd, name);
+			w->thr->threadType = THREAD_LEVEL_USER | THREAD_LEVEL_NOPROC;
+			if (j == 0)
+				s_pair->waiter_tid = w->thr->thread_id;
+		}
+	}
+
 	AuCreateKthread(AuSMPSoakReporter, AuCreateVirtualAddressSpace(), "smpsoak");
 	UARTDebugOut("[smpsoak]: %d user workers in %d address spaces \r\n", SMPSOAK_WORKERS,
 				 SMPSOAK_SPACES);

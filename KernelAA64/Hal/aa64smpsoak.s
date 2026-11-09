@@ -40,6 +40,8 @@
 
 .global aa64_smp_soak_user
 .global aa64_smp_soak_user_end
+.global aa64_smp_soak_waiter
+.global aa64_smp_soak_waker
 .balign 16
 aa64_smp_soak_user:
     mov x20, x0
@@ -160,4 +162,45 @@ aa64_smp_soak_user:
     add x10, x10, #1
     str x10, [x20, #8]
     b 1b
+
+// Pause/wake pair (lost wakeup test). x0 = shared pair page:
+//   [0] flag  [8] handoffs  [16] waiter wakes  [24] waiter pauses
+//   [32] waiter thread id  [40] signal number
+// The waker raises the flag, wakes the waiter and waits for it to take
+// the flag. The waiter takes it, or pauses (SYS_PAUSE_THREAD) when it is
+// clear. A wakeup lost between the waiter's check and its pause leaves
+// both stuck for good: the reporter sees the handoff count stop.
+aa64_smp_soak_waiter:
+    mov x20, x0
+11: ldar x1, [x20]
+    cbz x1, 12f
+    stlr xzr, [x20]
+    ldr x2, [x20, #16]
+    add x2, x2, #1
+    str x2, [x20, #16]
+    b 11b
+12: ldr x2, [x20, #24]
+    add x2, x2, #1
+    str x2, [x20, #24]
+    mov x16, #2             // SYS_PAUSE_THREAD
+    svc #0
+    b 11b
+
+aa64_smp_soak_waker:
+    mov x20, x0
+21: mov x1, #1
+    stlr x1, [x20]
+    ldr x0, [x20, #32]
+    ldr x1, [x20, #40]
+    mov x16, #80            // SYS_SEND_SIGNAL_TO_THREAD
+    svc #0
+22: ldar x1, [x20]          // wait for the waiter to take it
+    cbnz x1, 22b
+    ldr x2, [x20, #8]
+    add x2, x2, #1
+    str x2, [x20, #8]
+    mov x9, #20000          // breathe, vary the phase a little
+23: subs x9, x9, #1
+    b.ne 23b
+    b 21b
 aa64_smp_soak_user_end:

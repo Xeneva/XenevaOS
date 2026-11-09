@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <Sync/bkl.h>
+#include <Sync/ticketlock.h>
 #include <Hal/AA64/aa64lowlevel.h>
 #include <Hal/AA64/aa64percpu.h>
 
@@ -41,7 +42,8 @@ extern void aa64_spinlock_acquire(uint32_t* lock);
 extern void aa64_spinlock_release(uint32_t* lock);
 extern int aa64_spinlock_try_acquire(uint32_t* lock);
 
-static uint32_t s_bkl_word;
+/* FIFO: a busy kernel thread re-taking it cannot starve syscalls */
+static AuTicketLock s_bkl_word __attribute__((aligned(8)));
 /* owning cpu_num + 1, 0 when free. Only the owner writes its own id and
  * it clears it before releasing, so reading our own id means we own it */
 static volatile uint32_t s_bkl_owner;
@@ -58,7 +60,7 @@ void AuBKLLock(void) {
 	if (s_bkl_owner == me) {
 		s_bkl_depth++;
 	} else {
-		aa64_spinlock_acquire(&s_bkl_word);
+		AuTicketLockAcquire(&s_bkl_word);
 		s_bkl_owner = me;
 		s_bkl_depth = 1;
 	}
@@ -71,7 +73,7 @@ void AuBKLUnlock(void) {
 	if (s_bkl_owner == bklMe() && s_bkl_depth) {
 		if (--s_bkl_depth == 0) {
 			s_bkl_owner = 0;
-			aa64_spinlock_release(&s_bkl_word);
+			AuTicketLockRelease(&s_bkl_word);
 		}
 	}
 	restore_daif(d);
@@ -85,7 +87,7 @@ uint32_t AuBKLReleaseAll(void) {
 		depth = s_bkl_depth;
 		s_bkl_depth = 0;
 		s_bkl_owner = 0;
-		aa64_spinlock_release(&s_bkl_word);
+		AuTicketLockRelease(&s_bkl_word);
 	}
 	restore_daif(d);
 	return depth;
@@ -100,7 +102,7 @@ void AuBKLAcquireDepth(uint32_t depth) {
 	if (s_bkl_owner == me) {
 		s_bkl_depth += depth;
 	} else {
-		aa64_spinlock_acquire(&s_bkl_word);
+		AuTicketLockAcquire(&s_bkl_word);
 		s_bkl_owner = me;
 		s_bkl_depth = depth;
 	}
@@ -119,7 +121,7 @@ bool AuBKLTryLock(void) {
 	if (s_bkl_owner == me) {
 		s_bkl_depth++;
 		ok = true;
-	} else if (aa64_spinlock_try_acquire(&s_bkl_word)) {
+	} else if (AuTicketLockTryAcquire(&s_bkl_word)) {
 		s_bkl_owner = me;
 		s_bkl_depth = 1;
 		ok = true;

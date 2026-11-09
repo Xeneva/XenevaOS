@@ -176,6 +176,12 @@ typedef struct _aa64_task_ {
 	/* exception frame of the syscall this thread is executing, see
 	 * AA64GetCurrentRegCtx. Per thread: syscalls run on several cores */
 	AA64Registers* syscall_regs;
+	/* a wakeup arrived while the thread was not blocked; its next pause
+	 * returns at once instead of losing it (AuThreadPark) */
+	volatile uint32_t wake_pending;
+	/* scheduler list the thread is linked on (sched.c SCHED_LIST_*),
+	 * 0 when on none; guards against unlinking it from the wrong list */
+	uint32_t sched_list;
 } AA64Thread;
 
 //#pragma pack(pop)
@@ -339,6 +345,19 @@ extern void AuSchedEnterAPIdle(void) __attribute__((noreturn));
  * Call with the scheduler lock held.
  */
 extern bool AuSchedCanRunHere(AA64Thread* thread);
+
+/**
+ * @brief AuThreadPark -- block the calling thread for a pause unless a
+ * wakeup is already pending for it
+ * @return true if it blocked (caller reschedules), false otherwise
+ */
+extern bool AuThreadPark(AA64Thread* thread);
+
+/**
+ * @brief AuThreadUnpark -- wake a paused thread, or leave it a wakeup
+ * token so its next pause returns at once
+ */
+extern void AuThreadUnpark(AA64Thread* thread);
 
 /**
  * @brief AuThreadWaitOffCPU -- wait until no core executes on the
