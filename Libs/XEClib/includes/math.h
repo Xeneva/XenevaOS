@@ -38,6 +38,9 @@
 XE_EXTERN {
 #endif
 
+typedef double double_t;
+typedef float float_t;
+
 #define M_E		   2.7182818284590452354  // e
 #define M_LOG2E	   1.4426950408889634074  // log_2 e
 #define M_LOG10E   0.43429448190325182765 // log_10 e
@@ -51,6 +54,14 @@ XE_EXTERN {
 #define M_2_SQRTPI 1.12837916709551257390 // 2/sqrt(pi)
 #define M_SQRT2	   1.41421356237309504880 // sqrt(2)
 #define M_SQRT1_2  0.70710678118654752440 // 1/sqrt(2)
+
+#define HUGE_VAL   (__builtin_huge_val())
+#define HUGE_VALF  (__builtin_huge_valf())
+#define INFINITY   (__builtin_inff())
+#define NAN	       (__builtin_nanf(""))
+
+#define FP_ILOGB0   (-1 - 0x7fffffff)
+#define FP_ILOGBNAN (-1 - 0x7fffffff)
 
 	typedef union {
 		float f;
@@ -127,6 +138,8 @@ XE_EXTERN {
 		(d) = asfloat(w);                                                                          \
 	} while (0)
 
+#define signbit(x) ((asuint64((double)(x)) >> 63) != 0)
+
 	enum { FP_NAN, FP_INFINITE, FP_ZERO, FP_SUBNORMAL, FP_NORMAL };
 
 	static INLINE void fp_force_evalf(float x) {
@@ -160,31 +173,135 @@ XE_EXTERN {
 			fp_force_evall(x);                                                                     \
 	} while (0)
 
-	XE_LIB double ceil(double);
-	XE_LIB float ceilf(float x);
-	XE_LIB double cos(double);
-	XE_LIB float acosf(float x);
-	XE_LIB float cosf(float);
+	/* --- absolute value, rounding, decomposition ------------------------- */
 	XE_LIB double fabs(double);
 	XE_LIB float fabsf(float);
 	XE_LIB double floor(double);
 	XE_LIB float floorf(float);
+	XE_LIB double ceil(double);
+	XE_LIB float ceilf(float);
+	XE_LIB double trunc(double);
+	XE_LIB float truncf(float);
+	XE_LIB double round(double);
+	XE_LIB float roundf(float);
+	XE_LIB double rint(double);
+	XE_LIB double nearbyint(double);
+	XE_LIB long lround(double);
+	XE_LIB long long llround(double);
+	XE_LIB double copysign(double, double);
+	XE_LIB float copysignf(float, float);
 	XE_LIB double fmod(double, double);
-	XE_LIB double modf(double, double*);
 	XE_LIB float fmodf(float x, float y);
+	XE_LIB double modf(double, double*);
+	XE_LIB float modff(float, float*);
+	XE_LIB double frexp(double x, int* exp);
+	XE_LIB float frexpf(float x, int* exp);
+	XE_LIB double ldexp(double x, int exp);
+	XE_LIB float ldexpf(float x, int exp);
+	XE_LIB double scalbn(double x, int exp);
+	XE_LIB float scalbnf(float x, int exp);
+
+	/* --- exponential and logarithmic ------------------------------------- */
+	XE_LIB double exp(double);
+	XE_LIB float expf(float);
+	XE_LIB double exp2(double);
+	XE_LIB float exp2f(float);
+	XE_LIB double log(double);
+	XE_LIB float logf(float);
+	XE_LIB double log2(double);
+	XE_LIB float log2f(float);
+	XE_LIB double log10(double);
+	XE_LIB float log10f(float);
 	XE_LIB double pow(double, double);
-	XE_LIB double sin(double);
-	XE_LIB float sinf(float);
+	XE_LIB float powf(float, float);
 	XE_LIB double sqrt(double);
 	XE_LIB float sqrtf(float x);
+	XE_LIB double cbrt(double);
+	XE_LIB float cbrtf(float);
+	XE_LIB double hypot(double, double);
+	XE_LIB float hypotf(float, float);
+	XE_LIB double expm1(double);
+	XE_LIB float expm1f(float);
+	XE_LIB double log1p(double);
+	XE_LIB float log1pf(float);
+
+	/* --- hyperbolic ------------------------------------------------------- */
+	XE_LIB double sinh(double);
+	XE_LIB float sinhf(float);
+	XE_LIB double cosh(double);
+	XE_LIB float coshf(float);
+	XE_LIB double tanh(double);
+	XE_LIB float tanhf(float);
+	XE_LIB double asinh(double);
+	XE_LIB float asinhf(float);
+	XE_LIB double acosh(double);
+	XE_LIB float acoshf(float);
+	XE_LIB double atanh(double);
+	XE_LIB float atanhf(float);
+
+	/* --- error function, gamma function ---------------------------------- */
+	XE_LIB double erf(double);
+	XE_LIB float erff(float);
+	XE_LIB double erfc(double);
+	XE_LIB float erfcf(float);
+	XE_LIB double tgamma(double);
+	XE_LIB float tgammaf(float);
+	XE_LIB double lgamma(double);
+	XE_LIB float lgammaf(float);
+	XE_LIB double lgamma_r(double, int*);
+	XE_LIB float lgammaf_r(float, int*);
+	extern int __signgam;
+#define signgam __signgam
+
+	/* --- IEEE remainder, neighbours, fused multiply-add ------------------- */
+	XE_LIB double remainder(double, double);
+	XE_LIB float remainderf(float, float);
+	XE_LIB double remquo(double, double, int*);
+	XE_LIB float remquof(float, float, int*);
+	XE_LIB double nextafter(double, double);
+	XE_LIB float nextafterf(float, float);
+	XE_LIB double fma(double, double, double);
+	XE_LIB float fmaf(float, float, float);
+
+	/* --- exponent extraction, long conversions ---------------------------- */
+	XE_LIB double logb(double);
+	XE_LIB float logbf(float);
+	XE_LIB int ilogb(double);
+	XE_LIB int ilogbf(float);
+	XE_LIB long lrint(double);
+	XE_LIB long long llrint(double);
+	XE_LIB long lrintf(float);
+	XE_LIB long long llrintf(float);
+	XE_LIB long lroundf(float);
+	XE_LIB long long llroundf(float);
+	XE_LIB double scalbln(double, long);
+	XE_LIB float scalblnf(float, long);
+	XE_LIB double nan(const char*);
+	XE_LIB float nanf(const char*);
+
+	/* --- trigonometric ---------------------------------------------------- */
+	XE_LIB double sin(double);
+	XE_LIB float sinf(float);
+	XE_LIB double cos(double);
+	XE_LIB float cosf(float);
 	XE_LIB double tan(double);
 	XE_LIB float tanf(float);
+	XE_LIB double asin(double);
+	XE_LIB float asinf(float x);
+	XE_LIB double acos(double);
+	XE_LIB float acosf(float x);
+	XE_LIB double atan(double);
 	XE_LIB float atanf(float x);
+	XE_LIB double atan2(double y, double x);
 	XE_LIB float atan2f(float y, float x);
-	XE_LIB double frexp(double x, int* exp);
-	XE_LIB float roundf(float x);
+
+	/* --- min/max ----------------------------------------------------------- */
+	XE_LIB double fmax(double, double);
 	XE_LIB float fmaxf(float a, float b);
+	XE_LIB double fmin(double, double);
 	XE_LIB float fminf(float a, float b);
+	XE_LIB double fdim(double, double);
+	XE_LIB float fdimf(float, float);
 
 #ifdef __cplusplus
 }

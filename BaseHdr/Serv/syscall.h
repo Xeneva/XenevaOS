@@ -91,9 +91,10 @@
 #define SYS_CPU_SET_ISOLATED			87
 #define SYS_CPU_GET_ISOLATED			88
 #define SYS_THREAD_SET_AFFINITY			89
+#define SYS_FUTEX						94
 
-/* Extended native socket ABI. 84..178 stay reserved so older binaries
- * keep their numbers stable. */
+/* Extended native socket ABI. 90..93 and 95..178 stay reserved so older
+ * binaries keep their numbers stable. */
 #define SYS_SOCKETPAIR	   179
 #define SYS_GETSOCKOPT	   180
 #define SYS_GETSOCKNAME	   181

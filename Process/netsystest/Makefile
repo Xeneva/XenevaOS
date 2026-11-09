@@ -15,7 +15,8 @@
 TOOLCHAIN ?= gcc
 TARGET = netsock.exe
 INCLUDES = -I../../Libs/XEClib/includes -I../../Libs/XEClib/includes/c++ -I../../BaseHdr \
-           -I../../Ports/mbedtls/port
+           -I../../Ports/mbedtls/port -I../../Ports/mbedtls/include \
+           -I../../Ports/zlib -I../../Ports/brotli/c/include
 OBJDIR = obj
 CPP_OBJS = $(OBJDIR)/main.o
 S_OBJS = $(OBJDIR)/crt0_arm64.o
@@ -29,6 +30,9 @@ ifeq ($(TOOLCHAIN), llvm)
     CXXFLAGS = -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check -fno-strict-aliasing \
                -O2 -fno-exceptions -fno-rtti $(LLVM_TARGET) \
                -DARCH_ARM64 -D__TARGET_BOARD_QEMU_VIRT__ -D_USE_DLMALLOC -D__STDC_LIMIT_MACROS \
+               -DMBEDTLS_CONFIG_FILE=\"xeneva_mbedtls_config.h\" \
+               -DMBEDTLS_PSA_CRYPTO_CONFIG_FILE=\"xeneva_psa_config.h\" \
+               -U_WIN32 -U_WIN64 -U__WIN32__ -U_MSC_VER \
                -Wno-error=incompatible-pointer-types -Wno-error=int-conversion \
                -Wno-implicit-function-declaration -Wno-c++11-narrowing \
                $(INCLUDES)
@@ -38,6 +42,7 @@ endif
 MBEDLIB = ../../Ports/mbedtls/libmbedtls.a
 ZLIB = ../../Ports/zlib/libz.a
 BROTLILIB = ../../Ports/brotli/libbrotlidec.a
+CRTLIB = ../../Ports/compiler-rt/libclang_rt.builtins-aarch64.a
 
 .PHONY: all clean llvm
 llvm:
@@ -54,10 +59,13 @@ $(ZLIB):
 $(BROTLILIB):
 	$(MAKE) -C ../../Ports/brotli llvm
 
+$(CRTLIB):
+	$(MAKE) -C ../../Ports/compiler-rt llvm
+
 ifeq ($(TOOLCHAIN), llvm)
-$(TARGET): $(OBJS) $(MBEDLIB) $(ZLIB) $(BROTLILIB)
+$(TARGET): $(OBJS) $(MBEDLIB) $(ZLIB) $(BROTLILIB) $(CRTLIB)
 	$(LD) $(LDFLAGS) $(OBJS) $(MBEDLIB) $(ZLIB) $(BROTLILIB) \
-		../../Libs/XEClib/libXEClib.a -o $@
+		../../Libs/XEClib/libXEClib.a $(CRTLIB) -o $@
 endif
 
 $(OBJDIR)/main.o: main.cpp

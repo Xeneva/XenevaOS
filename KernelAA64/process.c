@@ -317,6 +317,11 @@ int AuProcessGetFileDesc(AuProcess* proc) {
 *  @param priority -- (currently unused) thread's priority
 */
 int AuCreateUserthread(AuProcess* proc, void (*entry)(), char* name, uint64_t arg) {
+	/* Check before allocating: a rejected thread used to leak its kernel
+	 * stack, user stack and uentry, and the old `>` test allowed one slot
+	 * past the array. */
+	if (!proc || proc->num_thread >= MAX_THREADS_PER_PROCESS)
+		return -1;
 	UARTDebugOut("[aurora]: user thread creating kmapping : %s \r\n", proc->name);
 	uint64_t stack = AuCreateKernelStack(proc->cr3);
 	uint64_t kstack = stack;
@@ -335,12 +340,6 @@ int AuCreateUserthread(AuProcess* proc, void (*entry)(), char* name, uint64_t ar
 	uentry->rsp = (uint64_t)CreateSubUserStack(proc, proc->cr3);
 	uentry->stackBase = uentry->rsp;
 	thr->uentry = uentry;
-	if (proc->num_thread > MAX_THREADS_PER_PROCESS) {
-		//free kstack
-		//free up sub kthread
-		kfree(uentry);
-		return -1;
-	}
 	proc->threads[proc->num_thread] = thr;
 	proc->num_thread += 1;
 	return thr->thread_id;
