@@ -88,6 +88,9 @@
 #define SYS_FILE_CHMOD					84
 #define SYS_FILE_FSYS_OWN				85
 #define SYS_GET_CPU_STATS				86
+#define SYS_CPU_SET_ISOLATED			87
+#define SYS_CPU_GET_ISOLATED			88
+#define SYS_THREAD_SET_AFFINITY			89
 
 /* Extended native socket ABI. 84..178 stay reserved so older binaries
  * keep their numbers stable. */

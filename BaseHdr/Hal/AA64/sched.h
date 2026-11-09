@@ -182,6 +182,9 @@ typedef struct _aa64_task_ {
 	/* scheduler list the thread is linked on (sched.c SCHED_LIST_*),
 	 * 0 when on none; guards against unlinking it from the wrong list */
 	uint32_t sched_list;
+	/* core the thread is bound to, + 1; 0 = may run on any general core.
+	 * Bound threads are the only ones an isolated core runs */
+	uint32_t cpu_bind;
 } AA64Thread;
 
 //#pragma pack(pop)
@@ -358,6 +361,34 @@ extern bool AuThreadPark(AA64Thread* thread);
  * token so its next pause returns at once
  */
 extern void AuThreadUnpark(AA64Thread* thread);
+
+/*
+ * Core reservation (isolation). Two modes:
+ *  - all cores general (mask 0, the default): ordinary SMP scheduling;
+ *  - some cores isolated: an isolated core runs only threads bound to it
+ *    (AuThreadSetAffinity), gets no general work, no wake-up IPIs except
+ *    for its own threads, and stops its timer while a single bound thread
+ *    owns it, so that thread is never preempted. Meant for latency
+ *    critical workloads: LLM inference workers, HFT event loops, RT tasks.
+ * Core 0 stays general: it takes device interrupts and the system tick.
+ */
+
+/**
+ * @brief AuCpuSetIsolatedMask -- set the isolated cores (bit n = core n),
+ * 0 returns every core to general use
+ * @return 0, -1 if the mask names core 0, -2 if it names an offline core
+ */
+extern int AuCpuSetIsolatedMask(uint32_t mask);
+
+/** @brief AuCpuGetIsolatedMask -- currently isolated cores */
+extern uint32_t AuCpuGetIsolatedMask(void);
+
+/**
+ * @brief AuThreadSetAffinity -- bind a thread to one core, -1 unbinds.
+ * The thread moves there at its next reschedule
+ * @return 0, -1 for a bad or offline core
+ */
+extern int AuThreadSetAffinity(AA64Thread* thread, int cpu);
 
 /**
  * @brief AuThreadWaitOffCPU -- wait until no core executes on the

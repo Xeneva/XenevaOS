@@ -243,6 +243,29 @@ XE_EXTERN {
 	 */
 	XE_LIB int _KeGetCPUStats(XECpuStats * stats, int max_cpus);
 
+	/* XECpuStats::online flags */
+#define XE_CPU_ONLINE	(1u << 0) /* core schedules threads */
+#define XE_CPU_ISOLATED (1u << 1) /* reserved for bound threads */
+#define XE_CPU_NOTICK	(1u << 2) /* scheduler timer stopped */
+
+	/**
+	 * @brief _KeCpuSetIsolated -- reserve cores for bound threads (root)
+	 * @param mask -- bit n isolates core n, 0 = use all cores normally.
+	 * Core 0 can not be isolated
+	 * @return 0, -1 core 0 in mask, -2 offline core, -3 not permitted
+	 */
+	XE_LIB int _KeCpuSetIsolated(uint32_t mask);
+
+	/** @brief _KeCpuGetIsolated -- mask of isolated cores */
+	XE_LIB uint32_t _KeCpuGetIsolated();
+
+	/**
+	 * @brief _KeThreadSetAffinity -- bind the calling thread to a core
+	 * (isolated or not), -1 unbinds. Returns once running there
+	 * @return 0, -1 bad/offline core
+	 */
+	XE_LIB int _KeThreadSetAffinity(int cpu);
+
 	XE_LIB int _KeExitSubThread(int thread_id);
 
 	XE_LIB int _KeThreadWaitForTermination(int thread_id);

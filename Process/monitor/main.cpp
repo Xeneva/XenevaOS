@@ -116,7 +116,7 @@ static int RenderCpus() {
 		uint32_t x10 = UsageX10(busy, idle);
 
 		printf(CLR_YELLOW "%-4u " CLR_RESET, c->cpu);
-		if (!c->online) {
+		if (!(c->online & XE_CPU_ONLINE)) {
 			printf(CLR_RED "offline" CLR_RESET CLR_EOL "\n");
 			continue;
 		}
@@ -126,7 +126,11 @@ static int RenderCpus() {
 		PrintBar(x10);
 		printf(" ");
 		PrintPercent(x10);
-		printf("  " CLR_WHITE "%-10u %-8s" CLR_RESET CLR_EOL "\n", sw_rate, c->current);
+		printf("  " CLR_WHITE "%-10u %-8s" CLR_RESET, sw_rate, c->current);
+		/* reserved core, and whether its tick is off */
+		if (c->online & XE_CPU_ISOLATED)
+			printf(CLR_CYAN " iso%s" CLR_RESET, (c->online & XE_CPU_NOTICK) ? ",notick" : "");
+		printf(CLR_EOL "\n");
 	}
 
 	uint32_t all_x10 = UsageX10(all_busy, all_idle);

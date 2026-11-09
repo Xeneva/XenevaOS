@@ -147,6 +147,14 @@ static bool schedResumesInKernel(AA64Thread* t) {
  * anywhere. Pure kernel threads stay on the boot core for now: drivers
  * there still assume the core that set up their interrupt */
 static bool schedCanRunOn(AA64Thread* t, uint32_t cpu) {
+	/* a bound thread runs on its core only, whatever it is (an explicit
+	 * binding opts kernel threads in too: interrupt work they wait for is
+	 * deferred to the BKL owner core) */
+	if (t->cpu_bind)
+		return t->cpu_bind == cpu + 1;
+	/* isolated cores take bound threads only */
+	if (cpu < AA64_SMP_MAX_CPUS && _aa64_percpu[cpu].isolated)
+		return false;
 	if (cpu == 0 || !schedResumesInKernel(t))
 		return true;
 	return (t->threadType & THREAD_LEVEL_USER) != 0;
@@ -163,6 +171,17 @@ bool AuSchedCanRunHere(AA64Thread* t) {
 static void schedKick(AA64Thread* t) {
 	if (!_scheduler_initialized)
 		return;
+	if (t->cpu_bind) {
+		/* only its own core can run it, and that core may be tickless:
+		 * always poke it, busy or idle */
+		uint32_t cpu = t->cpu_bind - 1;
+		AA64PerCPU* p = &_aa64_percpu[cpu];
+		if (cpu < AA64_SMP_MAX_CPUS && p->magic == AA64_PERCPU_MAGIC &&
+			p->state == AA64_CPU_STATE_ONLINE && (cpu == 0 || p->sched_release) &&
+			!__atomic_exchange_n(&p->ipi_pending, 1, __ATOMIC_ACQ_REL))
+			GICSendSGI(cpu, AA64_IPI_RESCHED);
+		return;
+	}
 	uint32_t self = AA64GetCPUNum();
 	for (uint32_t k = 1; k <= AA64_SMP_MAX_CPUS; k++) {
 		uint32_t cpu = (self + k) % AA64_SMP_MAX_CPUS;
@@ -401,6 +420,23 @@ void AuThreadDeleteSleep(AA64Thread* thread) {
 	uint64_t d = AuSchedLock();
 	schedUnlink(&sleep_thr_head, &sleep_thr_last, thread);
 	AuSchedUnlock(d);
+}
+
+/* an isolated core needs its timer only while two or more bound threads
+ * have to share it, or while one is runnable but could not be picked yet
+ * (still leaving the core it ran on): then retry on the next tick.
+ * Scheduler lock held */
+static bool schedCoreWantsTick(AA64PerCPU* p, uint32_t cpu, AA64Thread* next) {
+	if (!p->isolated)
+		return true;
+	int n = 0;
+	for (AA64Thread* t = thread_list_head; t && n < 2; t = t->next) {
+		if (t->sched_list == SCHED_LIST_READY && t->cpu_bind == cpu + 1 &&
+			(t->state == THREAD_STATE_READY || t->state == THREAD_STATE_RUNNING ||
+			 t->state == THREAD_STATE_LEFT_IN_KERNEL))
+			n++;
+	}
+	return n > 1 || (n == 1 && schedIsIdle(next));
 }
 
 void AA64NextThread() {
@@ -784,6 +820,19 @@ void AuScheduleThread(AA64Registers* regs) {
 	else if (left_in_kernel)
 		next->state = THREAD_STATE_READY;
 
+	/* reserved (isolated) cores drop their tick while one bound thread
+	 * owns them; foreign_runs proves nothing else ever lands there */
+	uint32_t this_num = AA64GetCPUNum();
+	bool want_tick = schedCoreWantsTick(this_cpu, this_num, next);
+	/* runThr stays runnable but may not run here any more (it was just
+	 * bound elsewhere, or this core got isolated): wake a core that may */
+	if (next != runThr && runThr->sched_list == SCHED_LIST_READY &&
+		(runThr->state == THREAD_STATE_READY || runThr->state == THREAD_STATE_LEFT_IN_KERNEL) &&
+		!schedIsIdle(runThr) && !schedCanRunOn(runThr, this_num))
+		schedKick(runThr);
+	if (this_cpu->isolated && !schedIsIdle(next) && next->cpu_bind != this_num + 1)
+		this_cpu->foreign_runs++;
+
 	AuSchedUnlock(sched_daif);
 
 	/* per core statistics, read by debuggers, the heartbeat and
@@ -793,6 +842,19 @@ void AuScheduleThread(AA64Registers* regs) {
 		this_cpu->context_switches++;
 	if (schedIsIdle(next))
 		this_cpu->idle_tick++;
+
+#ifndef __TARGET_BOARD_RPI3__
+	/* the virtual timer is banked per core */
+	if (!want_tick && !this_cpu->tick_stopped) {
+		suspendTimer();
+		this_cpu->tick_stopped = 1;
+	} else if (want_tick && this_cpu->tick_stopped) {
+		setupTimerIRQ();
+		this_cpu->tick_stopped = 0;
+	}
+#else
+	(void)want_tick;
+#endif
 
 	/* BKL hand over, outside the scheduler lock (order is BKL -> sched).
 	 * runThr keeps the depth it held for its next resume; next gets back
@@ -1492,4 +1554,74 @@ void AuThreadWaitOffCPU(AA64Thread* t) {
 	while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE))
 		__asm__ volatile("yield");
 	AuBKLAcquireDepth(depth);
+}
+
+/* ---------------------------------------------------------------------
+ * Core reservation (see sched.h)
+ * --------------------------------------------------------------------- */
+static volatile uint32_t s_isolated_mask;
+
+static bool schedCpuUsable(uint32_t cpu) {
+	if (cpu >= AA64_SMP_MAX_CPUS)
+		return false;
+	AA64PerCPU* p = &_aa64_percpu[cpu];
+	return p->magic == AA64_PERCPU_MAGIC && p->state == AA64_CPU_STATE_ONLINE &&
+		   (cpu == 0 || p->sched_release);
+}
+
+static void schedPokeCpu(uint32_t cpu) {
+	AA64PerCPU* p = &_aa64_percpu[cpu];
+	if (!__atomic_exchange_n(&p->ipi_pending, 1, __ATOMIC_ACQ_REL))
+		GICSendSGI(cpu, AA64_IPI_RESCHED);
+}
+
+/**
+ * @brief AuCpuSetIsolatedMask -- set the isolated cores (bit n = core n),
+ * 0 returns every core to general use
+ * @return 0, -1 if the mask names core 0, -2 if it names an offline core
+ */
+int AuCpuSetIsolatedMask(uint32_t mask) {
+	if (mask & 1u)
+		return -1; /* core 0 keeps device interrupts and the system tick */
+	for (uint32_t c = 1; c < 32; c++)
+		if ((mask & (1u << c)) && !schedCpuUsable(c))
+			return -2;
+
+	uint64_t d = AuSchedLock();
+	uint32_t changed = s_isolated_mask ^ mask;
+	s_isolated_mask = mask;
+	for (uint32_t c = 1; c < AA64_SMP_MAX_CPUS; c++)
+		_aa64_percpu[c].isolated = (mask >> c) & 1u;
+	AuSchedUnlock(d);
+
+	/* newly isolated cores push their general thread out, released ones
+	 * restart their tick: both happen at their next reschedule */
+	for (uint32_t c = 1; c < AA64_SMP_MAX_CPUS; c++)
+		if ((changed & (1u << c)) && schedCpuUsable(c))
+			schedPokeCpu(c);
+	UARTDebugOut("[sched]: isolated cores mask %x \r\n", (uint64_t)mask);
+	return 0;
+}
+
+/** @brief AuCpuGetIsolatedMask -- currently isolated cores */
+uint32_t AuCpuGetIsolatedMask(void) {
+	return s_isolated_mask;
+}
+
+/**
+ * @brief AuThreadSetAffinity -- bind a thread to one core, -1 unbinds.
+ * The thread moves there at its next reschedule
+ * @return 0, -1 for a bad or offline core
+ */
+int AuThreadSetAffinity(AA64Thread* thread, int cpu) {
+	if (!thread)
+		return -1;
+	if (cpu >= 0 && !schedCpuUsable((uint32_t)cpu))
+		return -1;
+	uint64_t d = AuSchedLock();
+	thread->cpu_bind = (cpu < 0) ? 0 : (uint32_t)cpu + 1;
+	if (thread->sched_list == SCHED_LIST_READY && thread->on_cpu == 0)
+		schedKick(thread);
+	AuSchedUnlock(d);
+	return 0;
 }

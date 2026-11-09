@@ -34,6 +34,10 @@ SMPSOAK ?= 0
 ifeq ($(SMPSOAK),1)
     SMPSOAK_FLAGS = -D__XENEVA_SMP_SOAK__
 endif
+# SMPSOAK=2: the same plus core reservation (isolated cores, latency probes)
+ifeq ($(SMPSOAK),2)
+    SMPSOAK_FLAGS = -D__XENEVA_SMP_SOAK__ -D__XENEVA_SMP_SOAK_ISO__
+endif
 
 # Stage 1 always allocates owner accounting; Stages 2-3 (redzones,
 # poisoning, caller tracking, leak dump, frame-table owner scan) compile

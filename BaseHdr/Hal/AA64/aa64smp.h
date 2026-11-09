@@ -123,7 +123,7 @@ extern void AA64SMPIPILocalInit();
  */
 typedef struct _aa64_cpu_stats_ {
 	uint32_t cpu;				/* logical cpu number */
-	uint32_t online;			/* 1 once the core schedules threads */
+	uint32_t online;			/* AA64_CPU_STAT_* flags */
 	uint64_t mpidr;				/* affinity */
 	uint64_t busy_ticks;		/* time running a thread other than idle */
 	uint64_t idle_ticks;		/* time in its idle thread */
@@ -132,6 +132,11 @@ typedef struct _aa64_cpu_stats_ {
 	uint64_t counter_freq;		/* CNTFRQ_EL0 */
 	char current[8];			/* thread it switched to last */
 } AA64CPUStats;
+
+/* AA64CPUStats::online flags */
+#define AA64_CPU_STAT_ONLINE   (1u << 0) /* core schedules threads */
+#define AA64_CPU_STAT_ISOLATED (1u << 1) /* reserved for bound threads */
+#define AA64_CPU_STAT_NOTICK   (1u << 2) /* scheduler timer stopped */
 
 /**
  * @brief AA64SMPGetCPUStats -- fill one AA64CPUStats per known core
