@@ -763,6 +763,71 @@ static void TCPQueueAccept(AuSocket* listener, AuSocket* child) {
 	}
 }
 
+static int TCPWriteRx(TCPControlBlock* pcb, const uint8_t* data, size_t len);
+
+/* The other end of a 127.0.0.1 connection. Ports are mirrored: our remote
+ * port is their local port. */
+static AuSocket* TCPLoopbackPeer(AuSocket* sock) {
+	TCPControlBlock* pcb = TCPGetPCB(sock);
+	AuNetworkDevice* ndev;
+	int i;
+
+	if (!pcb || pcb->is_ipv6 || !pcb->nic || !pcb->nic->device || !tcpSocketList)
+		return NULL;
+	ndev = (AuNetworkDevice*)pcb->nic->device;
+	if (ndev->type != NETDEV_TYPE_LOOPBACK)
+		return NULL;
+	for (i = 0; i < (int)tcpSocketList->pointer; i++) {
+		AuSocket* other = (AuSocket*)list_get_at(tcpSocketList, i);
+		TCPControlBlock* op;
+
+		if (!other || other == sock)
+			continue;
+		op = TCPGetPCB(other);
+		if (!op || op->is_ipv6)
+			continue;
+		if (other->sessionPort != pcb->remote_port || op->remote_port != sock->sessionPort)
+			continue;
+		if (op->remote_ip != pcb->remote_ip)
+			continue;
+		if (op->state != TCP_STATE_ESTABLISHED && op->state != TCP_STATE_CLOSE_WAIT)
+			continue;
+		return other;
+	}
+	return NULL;
+}
+
+/* Copy straight into the peer receive buffer. One memcpy, no header, no
+ * checksum, no virtio. The bytes are already delivered, so they are acked. */
+static size_t TCPLoopbackPush(AuSocket* sock, const uint8_t* data, size_t len) {
+	AuSocket* peer;
+	TCPControlBlock* pcb;
+	TCPControlBlock* pp;
+	size_t room;
+	size_t n;
+	int wrote;
+
+	peer = TCPLoopbackPeer(sock);
+	if (!peer)
+		return (size_t)-1;
+	pcb = TCPGetPCB(sock);
+	pp = TCPGetPCB(peer);
+	room = TCPRxFree(pp);
+	if (!room)
+		return 0;
+	n = len < room ? len : room;
+	wrote = TCPWriteRx(pp, data, n);
+	if (wrote <= 0)
+		return 0;
+	n = (size_t)wrote;
+	pcb->snd_nxt += (uint32_t)n;
+	pcb->snd_una = pcb->snd_nxt;
+	pp->rcv_nxt += (uint32_t)n;
+	pp->ack_pending = 0;
+	AuSocketWakeRx(peer);
+	return n;
+}
+
 static int TCPWriteRx(TCPControlBlock* pcb, const uint8_t* data, size_t len) {
 	CircBuffer* buf;
 
@@ -922,6 +987,12 @@ int AuTCPReceive(AuSocket* sock, msghdr* msg, int flags) {
 					got += AuCircBufRead(buf, base, len);
 			}
 
+			if (got > 0 && !(flags & MSG_PEEK)) {
+				AuSocket* peer = TCPLoopbackPeer(sock);
+
+				if (peer)
+					AuSocketWakeTx(peer);
+			}
 			if (got > 0 && !(flags & MSG_PEEK) &&
 				(pcb->state == TCP_STATE_ESTABLISHED ||
 					pcb->state == TCP_STATE_CLOSE_WAIT)) {
@@ -1027,6 +1098,32 @@ int AuTCPSend(AuSocket* sock, msghdr* msg, int flags) {
 				chunk = pcb->mss;
 			if (chunk > win)
 				chunk = win;
+			{
+				AuNetworkDevice* ndev = (AuNetworkDevice*)pcb->nic->device;
+				size_t pushed;
+
+				if (ndev && ndev->type == NETDEV_TYPE_LOOPBACK) {
+					pushed = TCPLoopbackPush(sock, base + off, chunk);
+					if (pushed != (size_t)-1) {
+						if (pushed == 0) {
+							if (sock->nonblock || (flags & MSG_DONTWAIT)) {
+								if (sent)
+									return (int)sent;
+								return -AU_ERR_EAGAIN;
+							}
+							if (AuGetCurrentUS() >= deadline) {
+								timedout = 1;
+								break;
+							}
+							AuSocketWaitSlice(&sock->tx_wait, AU_SOCKET_WAIT_SLICE_MS);
+							continue;
+						}
+						sent += pushed;
+						off += pushed;
+						continue;
+					}
+				}
+			}
 			if (TCPSendSegment(sock, TCP_FLAGS_ACK | TCP_FLAGS_PSH,
 				base + off, chunk) != 0) {
 				if (sent)

@@ -25,6 +25,7 @@
 #include <Cap/capability.h>
 #include <Drivers/uart.h>
 #include <timer.h>
+#include <Sync/futex.h>
 
 #define LNX_ENOSYS 38
 #define LNX_EAGAIN 11
@@ -45,12 +46,6 @@
 #define LNX_F_DUPFD 0
 #define LNX_F_DUPFD_CLOEXEC 1030
 #define LNX_STATX_BASIC (1u | 2u | 0x200u)
-
-#define LNX_FUTEX_WAIT 0
-#define LNX_FUTEX_WAKE 1
-#define LNX_FUTEX_WAIT_BITSET 9
-#define LNX_FUTEX_WAKE_BITSET 10
-#define LNX_FUTEX_CMD_MASK 127
 
 #define LNX_CLONE_VM 0x00000100
 #define LNX_CLONE_SETTLS 0x00080000
@@ -245,83 +240,54 @@ static void linux_fill_stat(void* buf, AuVFSNode* node) {
 	memcpy(buf, raw, sizeof(raw));
 }
 
-static int futex_wake(AuProcess* proc, uint32_t* uaddr, int nwake, uint32_t bitset) {
-	if (!proc || nwake <= 0)
-		return 0;
-	AA64Thread* list[MAX_THREADS_PER_PROCESS + 1];
-	int n = 0;
-	if (proc->main_thread)
-		list[n++] = proc->main_thread;
-	for (int i = 0; i < proc->num_thread && n < MAX_THREADS_PER_PROCESS + 1; i++) {
-		if (proc->threads[i])
-			list[n++] = proc->threads[i];
-	}
-	int woke = 0;
-	for (int i = 0; i < n && woke < nwake; i++) {
-		AA64Thread* thr = list[i];
-		if (!thr->futex_waiting || thr->futex_uaddr != (uint64_t)uaddr)
-			continue;
-		if ((thr->futex_bitset & bitset) == 0)
-			continue;
-		if (thr->state != THREAD_STATE_BLOCKED && thr->state != THREAD_STATE_SLEEP) {
-			thr->futex_waiting = 0;
-			continue;
-		}
-		thr->futex_waiting = 0;
-		AuThreadMakeReady(thr);
-		woke++;
-	}
-	return woke;
-}
-
-static int64_t linux_futex(uint32_t* uaddr, int op, uint32_t val, void* timeout, uint32_t bitset) {
+static int64_t linux_futex(uint32_t* uaddr, int op, uint32_t val, void* timeout,
+						   uint32_t* uaddr2, uint32_t val3) {
 	AuProcess* proc = linux_current();
 	AA64Thread* thr = AuGetCurrentThread();
 	if (!proc || !thr || !uaddr || ((uint64_t)uaddr & 3))
 		return -LNX_EINVAL;
-	int cmd = op & LNX_FUTEX_CMD_MASK;
-	if (cmd == LNX_FUTEX_WAKE || cmd == LNX_FUTEX_WAKE_BITSET) {
-		uint32_t bits = cmd == LNX_FUTEX_WAKE ? 0xffffffffu : bitset;
-		if (cmd == LNX_FUTEX_WAKE_BITSET && bitset == 0)
+	int cmd = op & AU_FUTEX_CMD_MASK;
+
+	if (cmd == AU_FUTEX_WAKE || cmd == AU_FUTEX_WAKE_BITSET) {
+		uint32_t bits = cmd == AU_FUTEX_WAKE ? 0xffffffffu : val3;
+		if (cmd == AU_FUTEX_WAKE_BITSET && bits == 0)
 			return -LNX_EINVAL;
-		return futex_wake(proc, uaddr, (int)val, bits);
+		return AuFutexWake(proc, uaddr, (int)val, bits);
 	}
-	if (cmd != LNX_FUTEX_WAIT && cmd != LNX_FUTEX_WAIT_BITSET)
+
+	if (cmd == AU_FUTEX_REQUEUE || cmd == AU_FUTEX_CMP_REQUEUE) {
+		int nrequeue = (int)(int64_t)timeout;
+		return AuFutexRequeue(proc, uaddr, (int)val, nrequeue, uaddr2,
+							  val3, cmd == AU_FUTEX_CMP_REQUEUE);
+	}
+
+	if (cmd != AU_FUTEX_WAIT && cmd != AU_FUTEX_WAIT_BITSET)
 		return -LNX_ENOSYS;
-	if (cmd == LNX_FUTEX_WAIT_BITSET) {
-		if (bitset == 0)
-			return -LNX_EINVAL;
-	} else
-		bitset = 0xffffffffu;
-	if (*uaddr != val)
-		return -LNX_EAGAIN;
+
+	uint32_t bitset = cmd == AU_FUTEX_WAIT ? 0xffffffffu : val3;
+	if (cmd == AU_FUTEX_WAIT_BITSET && bitset == 0)
+		return -LNX_EINVAL;
 
 	uint64_t ms = 0;
 	int timed = 0;
 	if (timeout) {
 		int64_t sec = ((int64_t*)timeout)[0];
 		int64_t nsec = ((int64_t*)timeout)[1];
-		if (sec < 0 || nsec < 0)
+		if (sec < 0 || nsec < 0 || nsec >= 1000000000LL)
 			return -LNX_EINVAL;
 		if (sec == 0 && nsec == 0)
 			return -LNX_ETIMEDOUT;
-		ms = (uint64_t)sec * 1000 + (uint64_t)nsec / 1000000;
+		ms = (uint64_t)sec * 1000ULL;
+		ms += ((uint64_t)nsec + 999999ULL) / 1000000ULL;
 		if (ms == 0)
 			ms = 1;
 		timed = 1;
 	}
 
-	AA64Registers* regs = AA64GetCurrentRegCtx();
-	regs->x0 = 0;
-	thr->futex_uaddr = (uint64_t)uaddr;
-	thr->futex_bitset = bitset;
-	thr->futex_waiting = 1;
-	if (timed)
-		AuSleepThread(thr, ms);
-	else
-		AuBlockThread(thr);
-	AuScheduleThread(regs);
-	return 0;
+	int r = AuFutexWait(proc, thr, uaddr, val, bitset, timed, ms);
+	if (r == -AU_FUTEX_ETIMEDOUT)
+		return -LNX_ETIMEDOUT;
+	return r;
 }
 
 static void linux_write_tid(uint64_t ptr, uint32_t tid) {
@@ -349,9 +315,9 @@ static int64_t linux_clone(uint64_t flags, uint64_t newsp, uint64_t parent_tid, 
 	frame->x0 = 0;
 	frame->EL0SP = (int64_t)newsp;
 
-	/* the child is on the ready list as soon as AuCreateSubKthread
-	 * returns; hold the scheduler lock until its resume state below is
-	 * complete so no other core picks a half initialised thread */
+	/* AuCreateSubKthread publishes the child on the ready list. Keep it
+	 * locked until its resume state, process membership and TIDs are
+	 * initialized so another core cannot run a partially published child. */
 	uint64_t sched_daif = AuSchedLock();
 	AA64Thread* child = AuCreateSubKthread(AuProcessEntSubThread, (uint64_t)frame, proc->cr3, "lthr");
 	child->threadType = THREAD_LEVEL_USER | THREAD_LEVEL_SUBTHREAD;
@@ -363,7 +329,6 @@ static int64_t linux_clone(uint64_t flags, uint64_t newsp, uint64_t parent_tid, 
 	child->linux_tls = (flags & LNX_CLONE_SETTLS) ? tls : aa64_read_tpidr_el0();
 	if (flags & LNX_CLONE_CHILD_CLEARTID)
 		child->clear_child_tid = child_tid;
-	AuSchedUnlock(sched_daif);
 	proc->threads[proc->num_thread++] = child;
 
 	uint32_t tid = (uint32_t)child->thread_id;
@@ -371,6 +336,7 @@ static int64_t linux_clone(uint64_t flags, uint64_t newsp, uint64_t parent_tid, 
 		linux_write_tid(parent_tid, tid);
 	if (flags & LNX_CLONE_CHILD_SETTID)
 		linux_write_tid(child_tid, tid);
+	AuSchedUnlock(sched_daif);
 	return (int64_t)tid;
 }
 
@@ -383,7 +349,7 @@ static int64_t linux_exit(int group) {
 	if (thr->clear_child_tid) {
 		uint32_t* word = (uint32_t*)thr->clear_child_tid;
 		*word = 0;
-		futex_wake(proc, word, 1, 0xffffffffu);
+		AuFutexWake(proc, word, 1, 0xffffffffu);
 		thr->clear_child_tid = 0;
 	}
 	if (regs)
@@ -867,10 +833,8 @@ int64_t AuLinuxSyscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint6
 						   (int)a1,
 						   (uint32_t)a2,
 						   (void*)a3,
-						   (uint32_t)((a1 & LNX_FUTEX_CMD_MASK) == LNX_FUTEX_WAIT_BITSET ||
-											  (a1 & LNX_FUTEX_CMD_MASK) == LNX_FUTEX_WAKE_BITSET
-										  ? a5
-										  : 0));
+						   (uint32_t*)a4,
+						   (uint32_t)a5);
 	case 99:
 	case 100:
 	case 132:

@@ -1,7 +1,7 @@
 /**
 * BSD 2-Clause License
 *
-* Copyright (c) 2022-2023, Manas Kamal Choudhury
+* Copyright (c) 2022-2026, Manas Kamal Choudhury
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -27,353 +27,288 @@
 *
 **/
 
+/*
+ * Float entry points and classification helpers.
+ *
+ * The double-precision functions live in the math/ directory and come from
+ * musl (MIT-licensed, Copyright (c) 2018 Arm Limited and other musl
+ * contributors).  Most float counterparts are wrappers that compute in
+ * double and round once to float; nextafterf and fmaf need float-specific
+ * implementations and live in math/ as well.
+ *
+ * acosf, atanf, atan2f, ceilf, fmodf and roundf have dedicated fdlibm
+ * implementations in the parent directory and must not be defined here.
+ */
+
+#include <fenv.h>
 #include <math.h>
 #include <string.h>
 
-#define itable ((double*)xtable)
+/* Private reentrant gamma helper, defined in math/lgamma_r.c. */
+extern "C" double __lgamma_r(double, int*);
 
-static unsigned int xtable[16] = {0x540bcb0d,
-								  0x3fe56936,
-								  0x415a86d3,
-								  0x3fe35800,
-								  0xd9ac3519,
-								  0x3fe1c80d,
-								  0x34f91569,
-								  0x3fe08be9,
-								  0x8f3386d8,
-								  0x3fee4794,
-								  0x9ea02719,
-								  0x3feb5b28,
-								  0xe4ff9edc,
-								  0x3fe92589,
-								  0x1c52539d,
-								  0x3fe76672};
-
-double ceil(double d) {
-	int c = (int)d;
-
-	if (d > 0)
-		d = (double)(c + 1);
-	else if (d < 0)
-		d = (double)c;
-	return d;
-}
-
-double cos(double radians) {
-	double result = 0;
-	double sign = 0;
-	double x2n = 0;
-	double factorial = 0;
-	double n, count;
-
-	while (radians > (M_PI * 2))
-		radians -= (M_PI * 2);
-	while (radians < -(M_PI * 2))
-		radians += (M_PI * 2);
-
-	for (n = 0; n < 15; n += 1) {
-		sign = 1.0;
-		for (count = 0; count < n; count += 1)
-			sign *= -1;
-
-		x2n = 1.0;
-		for (count = 0; count < (2 * n); count += 1)
-			x2n *= radians;
-
-		factorial = 1.0;
-		for (count = (2 * n); count > 0; count -= 1)
-			factorial *= count;
-
-		if (factorial)
-			result += (sign * (x2n / factorial));
-	}
-
-	return result;
-}
-
-float cosf(float radians) {
-	float result = 0;
-	float sign = 0;
-	float x2n = 0;
-	float factorial = 0;
-	float n, count;
-
-	while (radians > (M_PI * 2))
-		radians -= (M_PI * 2);
-	while (radians < -(M_PI * 2))
-		radians += (M_PI * 2);
-
-	for (n = 0; n < 10; n += 1) {
-		sign = 1.0;
-		for (count = 0; count < n; count += 1)
-			sign *= -1;
-
-		x2n = 1.0;
-		for (count = 0; count < (2 * n); count += 1)
-			x2n *= radians;
-
-		factorial = 1.0;
-		for (count = (2 * n); count > 0; count -= 1)
-			factorial *= count;
-
-		if (factorial)
-			result += (sign * (x2n / factorial));
-	}
-
-	return (result);
-}
-
-double fabs(double x) {
-	if (x < 0)
-		return (x *= -1.0);
-	else
-		return x;
-}
-
-float fabsf(float x) {
-	if (x < 0)
-		return (x *= -1.0);
-	else
-		return x;
-}
-
-double floor(double d) {
-	int i = (int)d;
-	return ((double)i);
-}
-
-float floorf(float d) {
-	int i = (int)d;
-	return ((float)i);
-}
-
-double fmod(double x, double y) {
-	double m = 0;
-
-	if (!y) {
-		m = 0;
-	} else {
-		m = (x - (floor(x / y) * y));
-	}
-
-	return m;
-}
-
-double modf(double x, double* pint) {
-	int i;
-
-	if (!pint)
-		return 0;
-
-	i = (int)x;
-	*pint = (double)i;
-	return (x - ((double)i));
-}
-
-double pow(double x, double y) {
-	int count;
-
-	if ((x < 0) && (floor(y) != y)) {
-		return 0;
-	}
-
-	if (!y) {
-		x = 1;
-	} else {
-		for (count = 1; count < y; count++)
-			x *= x;
-	}
-
-	return x;
-}
-
-double sin(double radians) {
-	double result = 0;
-	double sign = 0;
-	double x2nplus1 = 0;
-	double factorial = 0;
-	double n, count;
-
-	while (radians > (M_PI * 2))
-		radians -= (M_PI * 2);
-	while (radians < -(M_PI * 2))
-		radians += (M_PI * 2);
-
-	for (n = 0; n < 15; n += 1) {
-		sign = 1.0;
-		for (count = 0; count < n; count += 1)
-			sign *= -1;
-
-		x2nplus1 = 1.0;
-		for (count = 0; count < ((2 * n) + 1); count += 1)
-			x2nplus1 *= radians;
-
-		factorial = 1.0;
-		for (count = ((2 * n) + 1); count > 0; count -= 1)
-			factorial *= count;
-
-		if (factorial)
-			result += (sign * (x2nplus1 / factorial));
-	}
-
-	return result;
-}
-
-float sinf(float radians) {
-	float result = 0;
-	float sign = 0;
-	float x2nplus1 = 0;
-	float factorial = 0;
-	float n, count;
-
-	while (radians > (M_PI * 2))
-		radians -= (M_PI * 2);
-	while (radians < -(M_PI * 2))
-		radians += (M_PI * 2);
-
-	for (n = 0; n < 10; n += 1) {
-		sign = 1.0;
-		for (count = 0; count < n; count += 1)
-			sign *= -1;
-
-		x2nplus1 = 1.0;
-		for (count = 0; count < ((2 * n) + 1); count += 1)
-			x2nplus1 *= radians;
-
-		factorial = 1.0;
-		for (count = ((2 * n) + 1); count > 0; count -= 1)
-			factorial *= count;
-
-		if (factorial)
-			result += (sign * (x2nplus1 / factorial));
-	}
-
-	return result;
-}
-
-static int norm2(double* t) {
-	unsigned e, f, g;
-
-	f = ((((unsigned*)t)[1]) >> 1);
-	e = ((unsigned*)t)[1];
-	f += 0x1FF80000;
-	g = (e & 0x000FFFFF);
-	f &= 0xFFF00000;
-	((int*)t)[1] = g + 0x40000000 - (e & 0x00100000);
-
-	return (f);
-}
-
-double sqrt(double y) {
-	double a;
-	int e, c;
-
-	e = norm2(&y);
-	c = (((int*)&y)[1]) >> (18) & (7);
-	a = itable[c];
-
-	for (c = 0; c < 6; c++)
-		a = 0.5 * a * (3.0 - y * a * a);
-	a *= y;
-
-	((int*)&a)[1] &= 0x000FFFFF;
-	((int*)&a)[1] |= e;
-
-	return (a);
-}
-
-double tan(double radians) {
-	return (sin(radians) / cos(radians));
-}
-
-float tanf(float radians) {
-	return (sinf(radians) / cosf(radians));
-}
-
-float sqrtf(float x) {
-	return (float)sqrt(x);
-}
-
-double frexp(double x, int* exp) {
-	struct {
-		uint32_t lsw;
-		uint32_t msw;
-	} extract;
-
-	memcpy(&extract, &x, sizeof(double));
-
-	*exp = ((extract.msw & 0x7ff00000) >> 20) - 0x3FE;
-
-	struct {
-		uint32_t lsw;
-		uint32_t msw;
-	} out_double;
-
-	out_double.msw = (extract.msw & 0x800fffff) | 0x3FE00000;
-	out_double.lsw = extract.lsw;
-
-	double out;
-	memcpy(&out, &out_double, sizeof(double));
-	return out;
-}
+/* --- classification ---------------------------------------------------- */
 
 XE_EXTERN XE_EXPORT int fpclassify(double x) {
-	typedef union {
-		double asFloat;
-		uint64_t asInt;
-	} bits_t;
-	bits_t bits;
-	memset(&bits, 0, sizeof(bits_t));
-	bits.asFloat = x;
-	uint64_t exponent = (bits.asInt >> 52) & 0x7FF;
-	uint64_t mantissa = (bits.asInt & 0xFffffFFFFffffULL);
+	double_bits_t bits;
 
-	if (exponent == 0x7FF) {
+	memset(&bits, 0, sizeof(bits));
+	bits.d = x;
+	uint64_t exponent = (bits.i >> 52) & 0x7FF;
+	uint64_t mantissa = (bits.i & 0xFFFFFFFFFFFFFULL);
+
+	if (exponent == 0x7FF)
 		return mantissa ? FP_NAN : FP_INFINITE;
-	} else if (exponent == 0) {
+	if (exponent == 0)
 		return mantissa ? FP_SUBNORMAL : FP_ZERO;
-	}
 
 	return FP_NORMAL;
 }
 
-static inline int isnan_f(float x) {
-	union {
-		float f;
-		uint32_t u;
-	} v = {x};
+/* --- absolute value and rounding --------------------------------------- */
 
-	return ((v.u & 0x7F800000u) == 0x7F800000u) && (v.u & 0x007FFFFFu);
+float fabsf(float x) {
+	return (float)fabs((double)x);
 }
 
-static inline float fmaxf_ieee(float a, float b) {
-	if (isnan_f(a))
-		return b;
-	if (isnan_f(b))
-		return a;
+float floorf(float x) {
+	return (float)floor((double)x);
+}
 
+float truncf(float x) {
+	return (float)trunc((double)x);
+}
+
+double nearbyint(double x) {
+	/* nearbyint differs from rint only in that it must not raise the
+	 * inexact exception.  rint rounds in hardware, which does raise it,
+	 * so preserve the caller's flag across the call. */
+	int inexact = fetestexcept(FE_INEXACT);
+
+	feclearexcept(FE_INEXACT);
+	double y = rint(x);
+	if (inexact)
+		feraiseexcept(FE_INEXACT);
+	else
+		feclearexcept(FE_INEXACT);
+
+	return y;
+}
+
+/* --- decomposition ----------------------------------------------------- */
+
+float modff(float x, float* iptr) {
+	double ip;
+	double fp = modf((double)x, &ip);
+
+	if (iptr)
+		*iptr = (float)ip;
+	return (float)fp;
+}
+
+float frexpf(float x, int* exp) {
+	return (float)frexp((double)x, exp);
+}
+
+float ldexpf(float x, int exp) {
+	return (float)ldexp((double)x, exp);
+}
+
+float scalbnf(float x, int exp) {
+	return (float)scalbn((double)x, exp);
+}
+
+/* --- exponential and logarithmic --------------------------------------- */
+
+float expf(float x) {
+	return (float)exp((double)x);
+}
+
+float exp2f(float x) {
+	return (float)exp2((double)x);
+}
+
+float logf(float x) {
+	return (float)log((double)x);
+}
+
+float log2f(float x) {
+	return (float)log2((double)x);
+}
+
+float log10f(float x) {
+	return (float)log10((double)x);
+}
+
+float powf(float x, float y) {
+	return (float)pow((double)x, (double)y);
+}
+
+float sqrtf(float x) {
+	return (float)sqrt((double)x);
+}
+
+float cbrtf(float x) {
+	return (float)cbrt((double)x);
+}
+
+float hypotf(float x, float y) {
+	return (float)hypot((double)x, (double)y);
+}
+
+float expm1f(float x) {
+	return (float)expm1((double)x);
+}
+
+float log1pf(float x) {
+	return (float)log1p((double)x);
+}
+
+/* --- trigonometric ------------------------------------------------------ */
+
+float sinf(float x) {
+	return (float)sin((double)x);
+}
+
+float cosf(float x) {
+	return (float)cos((double)x);
+}
+
+float tanf(float x) {
+	return (float)tan((double)x);
+}
+
+float asinf(float x) {
+	return (float)asin((double)x);
+}
+
+float copysignf(float x, float y) {
+	return (float)copysign((double)x, (double)y);
+}
+
+/* --- hyperbolic --------------------------------------------------------- */
+
+float sinhf(float x) {
+	return (float)sinh((double)x);
+}
+
+float coshf(float x) {
+	return (float)cosh((double)x);
+}
+
+float tanhf(float x) {
+	return (float)tanh((double)x);
+}
+
+float asinhf(float x) {
+	return (float)asinh((double)x);
+}
+
+float acoshf(float x) {
+	return (float)acosh((double)x);
+}
+
+float atanhf(float x) {
+	return (float)atanh((double)x);
+}
+
+/* --- error function, gamma function ------------------------------------- */
+
+float erff(float x) {
+	return (float)erf((double)x);
+}
+
+float erfcf(float x) {
+	return (float)erfc((double)x);
+}
+
+float tgammaf(float x) {
+	return (float)tgamma((double)x);
+}
+
+float lgammaf(float x) {
+	return (float)lgamma((double)x);
+}
+
+double lgamma_r(double x, int* sign) {
+	return __lgamma_r(x, sign);
+}
+
+float lgammaf_r(float x, int* sign) {
+	return (float)__lgamma_r((double)x, sign);
+}
+
+/* --- remainder, neighbours, fused multiply-add -------------------------- */
+
+float remainderf(float x, float y) {
+	return (float)remainder((double)x, (double)y);
+}
+
+float remquof(float x, float y, int* quo) {
+	return (float)remquo((double)x, (double)y, quo);
+}
+
+/* --- exponent extraction, long conversions ------------------------------ */
+
+float logbf(float x) {
+	return (float)logb((double)x);
+}
+
+int ilogbf(float x) {
+	return ilogb((double)x);
+}
+
+long lrintf(float x) {
+	return (long)rint((double)x);
+}
+
+long long llrintf(float x) {
+	return (long long)rint((double)x);
+}
+
+long lroundf(float x) {
+	return (long)round((double)x);
+}
+
+long long llroundf(float x) {
+	return (long long)round((double)x);
+}
+
+float scalblnf(float x, long n) {
+	return (float)scalbln((double)x, n);
+}
+
+float nanf(const char* s) {
+	(void)s;
+	return (float)nan(s);
+}
+
+/* --- min/max and positive difference ------------------------------------ */
+
+float fmaxf(float a, float b) {
+	if (isnan(a))
+		return b;
+	if (isnan(b))
+		return a;
 	if (a == b)
 		return a + b;
-
 	return (a > b) ? a : b;
 }
 
-static inline float fminf_ieee(float a, float b) {
-	if (isnan_f(a))
+float fminf(float a, float b) {
+	if (isnan(a))
 		return b;
-	if (isnan_f(b))
+	if (isnan(b))
 		return a;
-
 	if (a == b)
 		return a + b;
-
 	return (a < b) ? a : b;
 }
 
-float fmaxf(float a, float b) {
-	return fmaxf_ieee(a, b);
-}
-
-float fminf(float a, float b) {
-	return fminf_ieee(a, b);
+float fdimf(float x, float y) {
+	if (isnan(x))
+		return x;
+	if (isnan(y))
+		return y;
+	return x > y ? x - y : 0.0f;
 }

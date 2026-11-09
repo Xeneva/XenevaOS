@@ -45,8 +45,10 @@ void xe_free_page(void* ptr, int pages);
 #define USE_DL_PREFIX
 #define LACKS_TIME_H
 /* Unikernel builds run XELnch and Namdapha as threads in one process, so
- * they share this allocator. dlmalloc's built-in atomic spin lock makes
- * its global state safe across timer preemption. */
+ * they share this allocator. The lock below serializes the global state
+ * across timer preemption and user threads. USE_LOCKS=2 selects dlmalloc's
+ * user-supplied lock path, which is why MLOCK_T and the macros are defined
+ * here rather than letting dlmalloc pick pthreads/spinlocks. */
 #define LACKS_SCHED_H
 /* The PE/COFF Clang target does not advertise the GNU version macros used by
  * dlmalloc's built-in lock selector, so provide the lock explicitly. */
@@ -59,7 +61,7 @@ static inline int xe_malloc_lock(MLOCK_T* lock) {
 	}
 	return 0;
 }
-#define USE_LOCKS 0
+#define USE_LOCKS 2
 #define INITIAL_LOCK(lock) (*(lock) = 0)
 #define DESTROY_LOCK(lock) (0)
 #define ACQUIRE_LOCK(lock) xe_malloc_lock(lock)

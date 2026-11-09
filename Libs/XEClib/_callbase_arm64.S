@@ -338,6 +338,20 @@ _KeCreateThread:
 	  mov x0, x6
 	  ret
 
+.global _KeCreateThreadArg
+_KeCreateThreadArg:
+	  mov x16, SYS_CREATE_USER_THREAD
+	  svc #0
+	  mov x0, x6
+	  ret
+
+.global _KeFutex
+_KeFutex:
+	  mov x16, SYS_FUTEX
+	  svc #0
+	  mov x0, x6
+	  ret
+
 .global _KeSetFileToProcess
 _KeSetFileToProcess:
 	  mov x16, SYS_SET_FILE_TO_PROCESS
@@ -832,7 +846,6 @@ poll:
 	svc #0
 	mov x0, x6
 	ret
-
 .global chmod
 chmod:
     mov x16, 84

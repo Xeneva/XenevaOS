@@ -64,7 +64,7 @@ extern int PauseThread();
 /*
 * GetThreadID -- returns currently running thread id
 */
-extern uint16_t GetThreadID();
+extern uint64_t GetThreadID();
 #elif ARCH_ARM64
 extern uint64_t GetThreadID();
 #endif

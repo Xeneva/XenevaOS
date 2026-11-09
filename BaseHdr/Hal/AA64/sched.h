@@ -162,6 +162,13 @@ typedef struct _aa64_task_ {
 	uint64_t futex_uaddr;
 	uint32_t futex_bitset;
 	uint8_t futex_waiting;
+	/* Result to place in x0/x6 when a futex waiter is resumed.  This is
+	 * needed because AuScheduleThread resumes at EL0 and never returns to
+	 * the kernel wait path.  futex_active means the SVC frame has not been
+	 * stored yet; futex_frame_valid means it has and may be patched. */
+	int futex_result;
+	uint8_t futex_active;
+	uint8_t futex_frame_valid;
 	/** absolute wake-up time (system us) of a sleeping thread; see AuSleepThread */
 	uint64_t sleep_until_us;
 	uint8_t blocked_on_poll;
