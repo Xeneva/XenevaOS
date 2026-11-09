@@ -67,6 +67,7 @@ _Static_assert(SYS_GET_CURRENT_US == 70, "smp soak syscall numbers");
 _Static_assert(SYS_GET_NUM_PROCESS_COUNT == 75, "smp soak syscall numbers");
 _Static_assert(SYS_PAUSE_THREAD == 2, "smp soak syscall numbers");
 _Static_assert(SYS_SEND_SIGNAL_TO_THREAD == 80, "smp soak syscall numbers");
+_Static_assert(SYS_THREAD_SET_AFFINITY == 89, "smp soak syscall numbers");
 
 #define SMPSOAK_SPACES	  3
 #define SMPSOAK_PER_SPACE 2
@@ -106,12 +107,33 @@ typedef struct {
 } SoakPair;
 
 #define SMPSOAK_PAIR_WORKERS 2
-static SoakWorker s_workers[SMPSOAK_WORKERS + SMPSOAK_PAIR_WORKERS];
+
+/* core reservation test (SMPSOAK=2): latency probes, see aa64_smp_soak_probe */
+typedef struct {
+	volatile uint64_t iters;
+	volatile uint64_t max_gap;
+	volatile uint64_t over;
+	volatile uint64_t threshold;
+	volatile uint64_t target;
+	volatile uint64_t go;
+	volatile uint64_t bind_ret;
+	uint64_t pad;
+} SoakProbe;
+_Static_assert(sizeof(SoakProbe) == 64, "probe layout is hard coded in aa64smpsoak.s");
+
+#define SMPSOAK_MAX_PROBES 4
+#define SMPSOAK_PROBE_US   20 /* gaps longer than this count as interruptions */
+static SoakProbe* s_probes[SMPSOAK_MAX_PROBES];
+static int s_nprobes;
+static uint32_t s_iso_mask;
+
+static SoakWorker s_workers[SMPSOAK_WORKERS + SMPSOAK_PAIR_WORKERS + SMPSOAK_MAX_PROBES];
 static SoakPair* s_pair;
 
 extern uint8_t aa64_smp_soak_user[];
 extern uint8_t aa64_smp_soak_waiter[];
 extern uint8_t aa64_smp_soak_waker[];
+extern uint8_t aa64_smp_soak_probe[];
 extern uint8_t aa64_smp_soak_user_end[];
 
 static uint64_t soakMapPage(uint64_t* pd, uint64_t va, uint8_t attr) {
@@ -137,7 +159,7 @@ static void AuSMPSoakWorkerEntry(uint64_t ctx) {
 	mask_irqs();
 	AA64Thread* self = AuGetCurrentThread();
 	SoakWorker* w = NULL;
-	for (int i = 0; i < SMPSOAK_WORKERS + SMPSOAK_PAIR_WORKERS; i++)
+	for (int i = 0; i < SMPSOAK_WORKERS + SMPSOAK_PAIR_WORKERS + SMPSOAK_MAX_PROBES; i++)
 		if (s_workers[i].thr == self)
 			w = &s_workers[i];
 	if (!w) {
@@ -154,16 +176,23 @@ static void AuSMPSoakWorkerEntry(uint64_t ctx) {
 
 typedef struct {
 	uint64_t tick;
+	uint64_t busy; /* counter ticks, precise (works on tickless cores) */
 	uint64_t idle;
 	uint64_t switches;
+	uint64_t foreign;
 } SoakCpuSnap;
 
 static void soakSnapCpus(SoakCpuSnap* s) {
-	for (int c = 0; c < AA64_SMP_MAX_CPUS; c++) {
-		AA64PerCPU* p = &_aa64_percpu[c];
-		s[c].tick = p->tick_count;
-		s[c].idle = p->idle_tick;
-		s[c].switches = p->context_switches;
+	AA64CPUStats st[AA64_SMP_MAX_CPUS];
+	memset(s, 0, sizeof(SoakCpuSnap) * AA64_SMP_MAX_CPUS);
+	int n = AA64SMPGetCPUStats(st, AA64_SMP_MAX_CPUS);
+	for (int i = 0; i < n; i++) {
+		uint32_t c = st[i].cpu;
+		s[c].tick = st[i].timer_irqs;
+		s[c].busy = st[i].busy_ticks;
+		s[c].idle = st[i].idle_ticks;
+		s[c].switches = st[i].context_switches;
+		s[c].foreign = _aa64_percpu[c].foreign_runs;
 	}
 }
 
@@ -174,6 +203,17 @@ static void AuSMPSoakReporter(uint64_t ctx) {
 	uint64_t prev_handoffs = 0;
 	bool ok = true;
 	uint32_t min_busy_ap = 100;
+	uint64_t prev_probe[SMPSOAK_MAX_PROBES] = {0};
+
+	if (s_nprobes) {
+		/* reserve the cores, then let the probes bind themselves */
+		int r = AuCpuSetIsolatedMask(s_iso_mask);
+		UARTDebugOut("[smpsoak]: isolating cores mask %x -> %d \r\n", (uint64_t)s_iso_mask, r);
+		if (r != 0)
+			ok = false;
+		for (int i = 0; i < s_nprobes; i++)
+			s_probes[i]->go = 1;
+	}
 	soakSnapCpus(prev);
 
 	for (int round = 1; round <= SMPSOAK_ROUNDS; round++) {
@@ -199,17 +239,40 @@ static void AuSMPSoakReporter(uint64_t ctx) {
 				ok = false; /* a lost wakeup left the pair stuck */
 			prev_handoffs = h;
 		}
+		uint64_t freq = get_cntfrq_el0();
+		for (int i = 0; i < s_nprobes; i++) {
+			SoakProbe* pr = s_probes[i];
+			uint64_t it = pr->iters;
+			uint64_t gap = pr->max_gap;
+			pr->max_gap = 0; /* per round maximum */
+			bool iso = (s_iso_mask >> pr->target) & 1u;
+			UARTDebugOut("[smpsoak]:  probe core %d (%s) iters +%d max gap %d us, gaps > %d us: %d \r\n",
+						 pr->target, iso ? "isolated" : "general", it - prev_probe[i],
+						 freq ? gap * 1000000 / freq : 0, SMPSOAK_PROBE_US, pr->over);
+			if (pr->bind_ret != 0 || it == prev_probe[i])
+				ok = false; /* failed to bind, or not running */
+			prev_probe[i] = it;
+		}
 		for (int c = 0; c < AA64_SMP_MAX_CPUS; c++) {
 			AA64PerCPU* p = &_aa64_percpu[c];
 			if (p->magic != AA64_PERCPU_MAGIC || p->state != AA64_CPU_STATE_ONLINE)
 				continue;
 			uint64_t dt = now[c].tick - prev[c].tick;
+			uint64_t db = now[c].busy - prev[c].busy;
 			uint64_t di = now[c].idle - prev[c].idle;
-			uint32_t busy = (dt && di < dt) ? (uint32_t)(100 - (di * 100) / dt) : 0;
-			UARTDebugOut("[smpsoak]:  cpu %d busy %d pct ticks %d switches %d \r\n",
-						 c, busy, dt, now[c].switches - prev[c].switches);
+			uint32_t busy = (db + di) ? (uint32_t)((db * 100) / (db + di)) : 0;
+			UARTDebugOut("[smpsoak]:  cpu %d busy %d pct ticks %d switches %d%s%s foreign %d \r\n",
+						 c, busy, dt, now[c].switches - prev[c].switches,
+						 p->isolated ? " isolated" : "", p->tick_stopped ? " notick" : "",
+						 now[c].foreign);
 			if (c != 0 && round > 1 && busy < min_busy_ap)
 				min_busy_ap = busy;
+			if (p->isolated) {
+				if (now[c].foreign)
+					ok = false; /* an unbound thread ran on a reserved core */
+				if (round > 1 && dt > 10)
+					ok = false; /* the lone probe kept being ticked */
+			}
 		}
 		memcpy(prev, now, sizeof(prev));
 	}
@@ -289,6 +352,55 @@ void AuSMPSoakStart(void) {
 				s_pair->waiter_tid = w->thr->thread_id;
 		}
 	}
+
+#ifdef __XENEVA_SMP_SOAK_ISO__
+	/* core reservation: isolate cores 2.. (core 1 with two cores), one
+	 * latency probe per isolated core plus a control probe on core 1 */
+	{
+		uint32_t ncpu = AA64SMPGetCPUCount();
+		uint32_t targets[SMPSOAK_MAX_PROBES];
+		int n = 0;
+		if (ncpu >= 3) {
+			for (uint32_t c = 2; c < ncpu && c < AA64_SMP_MAX_CPUS; c++)
+				s_iso_mask |= 1u << c;
+		} else if (ncpu == 2) {
+			s_iso_mask = 1u << 1;
+		}
+		for (uint32_t c = 1; c < ncpu && n < SMPSOAK_MAX_PROBES; c++)
+			if ((s_iso_mask >> c) & 1u)
+				targets[n++] = c;
+		if (ncpu >= 3 && !(s_iso_mask & 2u) && n < SMPSOAK_MAX_PROBES)
+			targets[n++] = 1; /* control: a general core shared with the workers */
+
+		uint64_t* pd = AuCreateVirtualAddressSpace();
+		uint64_t code = soakMapPage(pd, SMPSOAK_CODE_VA, PTE_USER_EXECUTABLE | PTE_NORMAL_MEM | PTE_AP_RW_USER);
+		uint64_t data = soakMapPage(pd, SMPSOAK_DATA_VA, PTE_NORMAL_MEM | PTE_AP_RW_USER);
+		if (n && pd && code && data) {
+			memcpy((void*)P2V(code), aa64_smp_soak_user, code_len);
+			soakSyncCode((void*)P2V(code), code_len);
+			for (int j = 0; j < n; j++) {
+				int i = SMPSOAK_WORKERS + SMPSOAK_PAIR_WORKERS + j;
+				uint64_t stack_va = SMPSOAK_STACK_VA + (uint64_t)i * 0x2000;
+				if (!soakMapPage(pd, stack_va, PTE_NORMAL_MEM | PTE_AP_RW_USER))
+					break;
+				SoakProbe* pr = (SoakProbe*)(P2V(data) + (uint64_t)j * sizeof(SoakProbe));
+				pr->target = targets[j];
+				pr->threshold = get_cntfrq_el0() * SMPSOAK_PROBE_US / 1000000;
+				s_probes[j] = pr;
+				SoakWorker* w = &s_workers[i];
+				w->slot_va = SMPSOAK_DATA_VA + (uint64_t)j * sizeof(SoakProbe);
+				w->stack_top = stack_va + PAGE_SIZE;
+				w->entry_va = SMPSOAK_CODE_VA + (uint64_t)(aa64_smp_soak_probe - aa64_smp_soak_user);
+				char name[8] = {'p', 'r', 'o', 'b', 'e', (char)('0' + targets[j]), 0, 0};
+				w->thr = AuCreateKthread(AuSMPSoakWorkerEntry, pd, name);
+				w->thr->threadType = THREAD_LEVEL_USER | THREAD_LEVEL_NOPROC;
+				s_nprobes = j + 1;
+			}
+		}
+		UARTDebugOut("[smpsoak]: core reservation test: isolate mask %x, %d probes \r\n",
+					 (uint64_t)s_iso_mask, s_nprobes);
+	}
+#endif
 
 	AuCreateKthread(AuSMPSoakReporter, AuCreateVirtualAddressSpace(), "smpsoak");
 	UARTDebugOut("[smpsoak]: %d user workers in %d address spaces \r\n", SMPSOAK_WORKERS,

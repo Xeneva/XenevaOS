@@ -42,6 +42,7 @@
 .global aa64_smp_soak_user_end
 .global aa64_smp_soak_waiter
 .global aa64_smp_soak_waker
+.global aa64_smp_soak_probe
 .balign 16
 aa64_smp_soak_user:
     mov x20, x0
@@ -203,4 +204,39 @@ aa64_smp_soak_waker:
 23: subs x9, x9, #1
     b.ne 23b
     b 21b
+
+// Latency probe (core reservation test). x0 = probe slot:
+//   [0] iterations  [8] largest gap between two iterations (counter ticks,
+//   cleared by the reporter each round)  [16] gaps above [24] threshold
+//   [32] core to bind to  [40] go flag  [48] affinity syscall result
+// Waits for go, binds itself to its core (SYS_THREAD_SET_AFFINITY), then
+// spins reading CNTVCT_EL0. Any interruption (tick, IPI, preemption, a
+// context switch) shows up as a large gap. No syscalls in the loop.
+aa64_smp_soak_probe:
+    mov x20, x0
+    add x21, x20, #40
+31: ldar x1, [x21]
+    cbz x1, 31b
+    ldr x0, [x20, #32]
+    mov x16, #89            // SYS_THREAD_SET_AFFINITY
+    svc #0
+    str x0, [x20, #48]
+    mrs x22, cntvct_el0
+32: mrs x1, cntvct_el0
+    sub x2, x1, x22
+    mov x22, x1
+    ldr x3, [x20, #8]
+    cmp x2, x3
+    b.ls 33f
+    str x2, [x20, #8]
+33: ldr x3, [x20, #24]
+    cmp x2, x3
+    b.ls 34f
+    ldr x4, [x20, #16]
+    add x4, x4, #1
+    str x4, [x20, #16]
+34: ldr x4, [x20]
+    add x4, x4, #1
+    str x4, [x20]
+    b 32b
 aa64_smp_soak_user_end:

@@ -772,6 +772,27 @@ _KeGetCPUStats:
 	mov x0, x6
 	ret
 
+.global _KeCpuSetIsolated
+_KeCpuSetIsolated:
+    mov x16, SYS_CPU_SET_ISOLATED
+	svc #0
+	mov x0, x6
+	ret
+
+.global _KeCpuGetIsolated
+_KeCpuGetIsolated:
+    mov x16, SYS_CPU_GET_ISOLATED
+	svc #0
+	mov x0, x6
+	ret
+
+.global _KeThreadSetAffinity
+_KeThreadSetAffinity:
+    mov x16, SYS_THREAD_SET_AFFINITY
+	svc #0
+	mov x0, x6
+	ret
+
 .global _KeSetWalltime
 _KeSetWalltime:
     mov x16, SYS_SET_WALLTIME

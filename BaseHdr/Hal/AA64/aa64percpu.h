@@ -89,6 +89,14 @@ typedef struct __aa64_per_cpu__ {
 	volatile uint64_t idle_cnt; /* running its idle thread */
 	/* name of the thread the core switched to last, for monitors */
 	char cur_name[8];
+
+	/* core reservation (sched.c): isolated cores run bound threads only */
+	volatile uint32_t isolated;
+	/* the core's scheduler timer is off (isolated core, one bound thread) */
+	volatile uint32_t tick_stopped;
+	/* times an isolated core switched to a thread not bound to it: must
+	 * stay 0, checked by the isolation test */
+	volatile uint64_t foreign_runs;
 } __attribute__((aligned(64))) AA64PerCPU;
 
 extern AA64PerCPU _aa64_percpu[AA64_SMP_MAX_CPUS];

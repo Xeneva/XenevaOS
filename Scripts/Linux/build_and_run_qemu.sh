@@ -152,6 +152,8 @@ XR_VNC=1
 XR_TELNET=0
 TERM_MODE=0
 TERM_CMD=""
+# --isolate-cpus=LIST: cores reserved for bound threads (written to /cores.cnf)
+ISOLATE_CPUS=""
 TEST_MUSL=0
 INITRD_SIZE_MB=""
 ISO=0
@@ -515,6 +517,7 @@ while [ $# -gt 0 ]; do
         --force-legacy-build) FORCE_LEGACY_BUILD=1 ;;
         --install-deps) INSTALL_DEPS=1 ;;
         --headless) HEADLESS=1 ;;
+        --isolate-cpus=*) ISOLATE_CPUS="${1#*=}" ;;
         --term)
             TERM_MODE=1
             shift
@@ -1136,6 +1139,13 @@ if [ "$FORCE_LEGACY_BUILD" -eq 0 ]; then
     fi
     if [ "$TEST_MUSL" -eq 1 ]; then
         echo "[+] hello.elf and musl.elf added to the image (--test-musl)."
+    fi
+    # core reservation for init: "isolate=2-3", or every core general
+    if [ -n "$ISOLATE_CPUS" ]; then
+        echo "[+] Reserving cores $ISOLATE_CPUS for bound threads (/cores.cnf)"
+        printf 'isolate=%s\n' "$ISOLATE_CPUS" > Resources/resources/cores.cnf
+    else
+        rm -f Resources/resources/cores.cnf
     fi
     for resource in Resources/resources/*; do
         if pack_excluded "$(basename "$resource")"; then

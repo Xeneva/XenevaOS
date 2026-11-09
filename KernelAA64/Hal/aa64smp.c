@@ -148,6 +148,16 @@ void AA64SMPAPEntry(AA64SMPBootParam* param) {
 	AA64PerCPU* self = AA64GetPerCPU();
 	self->state = AA64_CPU_STATE_ONLINE;
 
+	/* CNTKCTL_EL1 is per core: let EL0 read the counters here too, as
+	 * AuroraTimerInitialize does on the boot core. Without it any user
+	 * thread migrated to this core faults on mrs cntvct_el0 (EC 0x18) */
+	{
+		uint64_t k;
+		__asm__ volatile("mrs %0, cntkctl_el1" : "=r"(k));
+		k |= (1ULL << 0) | (1ULL << 1);
+		__asm__ volatile("msr cntkctl_el1, %0\n isb" ::"r"(k));
+	}
+
 	/* banked GIC state (GICv2 CPU interface / GICv3 redistributor) can
 	 * only be programmed from the core itself */
 	GICInitializeCPU(cpu_num, param->mpidr);
@@ -405,11 +415,27 @@ int AA64SMPGetCPUStats(AA64CPUStats* out, int max) {
 		AA64CPUStats s;
 		memset(&s, 0, sizeof(s));
 		s.cpu = c;
-		s.online = (p->state == AA64_CPU_STATE_ONLINE) && (c == 0 || p->sched_release);
+		if ((p->state == AA64_CPU_STATE_ONLINE) && (c == 0 || p->sched_release))
+			s.online |= AA64_CPU_STAT_ONLINE;
+		if (p->isolated)
+			s.online |= AA64_CPU_STAT_ISOLATED;
+		if (p->tick_stopped)
+			s.online |= AA64_CPU_STAT_NOTICK;
 		s.mpidr = p->mpidr;
 		/* written by the owning core only, aligned 64 bit loads */
 		s.busy_ticks = p->busy_cnt;
 		s.idle_ticks = p->idle_cnt;
+		/* a tickless core may not switch for a long time: charge the open
+		 * interval to whatever it runs now so usage stays live */
+		uint64_t last = p->acct_last;
+		uint64_t now = get_cntpct_el0();
+		if (last && now > last) {
+			AA64Thread* cur = p->currentThread;
+			if (cur && cur == p->idleThread)
+				s.idle_ticks += now - last;
+			else
+				s.busy_ticks += now - last;
+		}
 		s.context_switches = p->context_switches;
 		s.timer_irqs = p->tick_count;
 		s.counter_freq = p->timer_freq;

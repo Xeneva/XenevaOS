@@ -29,6 +29,7 @@
 *
 **/
 
+#include <Hal/AA64/aa64percpu.h>
 #include <Hal/AA64/aa64smp.h>
 #include <stdint.h>
 #include <Drivers/uart.h>
@@ -132,6 +133,44 @@ int GetCPUStats(AA64CPUStats* buf, int max) {
 	if (!__BORDOISILA_UBUF_VALIDATE(buf, (size_t)max * sizeof(AA64CPUStats)))
 		return -1;
 	return AA64SMPGetCPUStats(buf, max);
+}
+
+/**
+ * @brief CpuSetIsolated -- SYS_CPU_SET_ISOLATED, reserve cores (root only)
+ * @param mask -- bit n isolates core n; 0 = use all cores normally
+ */
+int CpuSetIsolated(uint32_t mask) {
+	AA64Thread* thr = AuGetCurrentThread();
+	AuProcess* proc = thr ? (AuProcess*)thr->procSlot : NULL;
+	if (!proc)
+		proc = thr ? AuProcessFindThread(thr) : NULL;
+	if (!proc || !AuCredIsRoot(&proc->creds))
+		return -3;
+	return AuCpuSetIsolatedMask(mask);
+}
+
+/** @brief CpuGetIsolated -- SYS_CPU_GET_ISOLATED */
+uint64_t CpuGetIsolated() {
+	return AuCpuGetIsolatedMask();
+}
+
+/**
+ * @brief ThreadSetAffinity -- SYS_THREAD_SET_AFFINITY, bind the calling
+ * thread to a core (-1 unbinds). Returns once it runs there
+ */
+int ThreadSetAffinity(int cpu) {
+	AA64Thread* thr = AuGetCurrentThread();
+	int r = AuThreadSetAffinity(thr, cpu);
+	if (r != 0)
+		return r;
+	if (cpu >= 0 && (uint32_t)cpu != AA64GetCPUNum()) {
+		/* move now: give up this core, resume at EL0 on the bound one */
+		AA64Registers* regs = AA64GetCurrentRegCtx();
+		regs->x0 = 0;
+		regs->x6 = 0;
+		AuScheduleThread(regs);
+	}
+	return 0;
 }
 
 AA64Registers* AA64GetCurrentRegCtx() {
@@ -246,6 +285,9 @@ static void* syscalls[AURORA_MAX_SYSCALL] = {
 	[SYS_FILE_FSYS_OWN] = AuVFSOwnFsys,
 	[SYS_FUTEX] = AuFutexSyscall,
 	[SYS_GET_CPU_STATS] = GetCPUStats,
+	[SYS_CPU_SET_ISOLATED] = CpuSetIsolated,
+	[SYS_CPU_GET_ISOLATED] = CpuGetIsolated,
+	[SYS_THREAD_SET_AFFINITY] = ThreadSetAffinity,
 };
 
 #ifdef __KERNEL_PROFILER_ON__
@@ -345,6 +387,9 @@ static char* syscall_name[AURORA_MAX_SYSCALL] = {
 	[SYS_GET_WALLTIME] = "AuGetWalltime",
 	[SYS_FUTEX] = "AuFutexSyscall",
 	[SYS_GET_CPU_STATS] = "GetCPUStats",
+	[SYS_CPU_SET_ISOLATED] = "CpuSetIsolated",
+	[SYS_CPU_GET_ISOLATED] = "CpuGetIsolated",
+	[SYS_THREAD_SET_AFFINITY] = "ThreadSetAffinity",
 };
 #endif
 
