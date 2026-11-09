@@ -154,4 +154,31 @@ extern void GICCallSPIHandler(int spi);
  * @brief GICDisable -- disable the GIC
  */
 extern void GICDisable();
+
+/**
+ * @brief GICInitializeCPU -- bring up the calling core's GIC CPU interface
+ * (GICv2) or its redistributor and system register interface (GICv3)
+ * @param cpu_num -- logical number of the calling core
+ * @param mpidr -- affinity of the calling core
+ */
+extern void GICInitializeCPU(uint32_t cpu_num, uint64_t mpidr);
+
+/**
+ * @brief GICEnablePPILocal -- enable an SGI/PPI on the calling core only
+ * @param irq -- interrupt id, below 32
+ */
+extern void GICEnablePPILocal(uint32_t irq);
+
+/**
+ * @brief GICSendSGI -- send a software generated interrupt to one core
+ * @param cpu -- logical cpu number of the target
+ * @param sgi -- SGI id, 0..15
+ */
+extern void GICSendSGI(uint32_t cpu, uint32_t sgi);
+
+/** @brief GICMaskIRQ -- stop the distributor forwarding an SPI */
+extern void GICMaskIRQ(uint32_t irq);
+
+/** @brief GICUnmaskIRQ -- let the distributor forward an SPI again */
+extern void GICUnmaskIRQ(uint32_t irq);
 #endif

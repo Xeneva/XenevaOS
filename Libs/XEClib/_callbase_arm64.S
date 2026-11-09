@@ -751,6 +751,13 @@ _KeProcessFetch:
 	mov x0, x6
 	ret
 
+.global _KeGetCPUStats
+_KeGetCPUStats:
+    mov x16, SYS_GET_CPU_STATS
+	svc #0
+	mov x0, x6
+	ret
+
 .global _KeSetWalltime
 _KeSetWalltime:
     mov x16, SYS_SET_WALLTIME

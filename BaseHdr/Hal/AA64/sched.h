@@ -57,6 +57,9 @@ typedef struct _list_ list_t;
 #define THREAD_LEVEL_USER		 (1 << 1)
 #define THREAD_LEVEL_SUBTHREAD	 (1 << 2)
 #define THREAD_LEVEL_MAIN_THREAD (1 << 3)
+//! THREAD_LEVEL_NOPROC -- user mode thread that belongs to no process
+//! (kernel self tests); it may use the syscall fast path without one
+#define THREAD_LEVEL_NOPROC		 (1 << 4)
 
 //#pragma pack(push,1)
 /* AuUserEntry structure */
@@ -162,6 +165,17 @@ typedef struct _aa64_task_ {
 	/** absolute wake-up time (system us) of a sleeping thread; see AuSleepThread */
 	uint64_t sleep_until_us;
 	uint8_t blocked_on_poll;
+	/* SMP: 1 while some core executes on this thread's context or kernel
+	 * stack. A core claims it when it picks the thread and the switch
+	 * path in aa64switch.s drops it only once that core is off the stack,
+	 * so no two cores ever run on the same stack. Keep these two at the
+	 * end: aa64switch.s hard codes the offsets of the fields above. */
+	volatile uint32_t on_cpu;
+	/* BKL depth the thread held when it was switched out (Sync/bkl.h) */
+	uint32_t bkl_depth;
+	/* exception frame of the syscall this thread is executing, see
+	 * AA64GetCurrentRegCtx. Per thread: syscalls run on several cores */
+	AA64Registers* syscall_regs;
 } AA64Thread;
 
 //#pragma pack(pop)
@@ -289,6 +303,8 @@ extern AA64Thread* AuEDFPickNext(void);
 extern uint64_t AuEDFGetMisses(AA64Thread* thread);
 extern void AuEDFSelfTestStart(void);
 extern void AuSoakStart(void);
+/* SMP user mode soak test (SMPSOAK=1 builds), see Hal/smp_soak.c */
+extern void AuSMPSoakStart(void);
 
 /**
  * @brief AuThreadWaitForTermination -- wait for desired thread
@@ -303,6 +319,33 @@ extern int AuThreadWaitForTermination(int thread_id);
  * needs to be freed
  */
 extern void AuThreadAwakeWaiters(AA64Thread* thread);
+
+/**
+ * @brief AuSchedCreateAPIdleThread -- create the idle thread of a
+ * secondary core, called on the boot core
+ * @param cpu_num -- logical cpu number of the secondary core
+ */
+extern AA64Thread* AuSchedCreateAPIdleThread(uint32_t cpu_num);
+
+/**
+ * @brief AuSchedEnterAPIdle -- start the calling secondary core's timer
+ * and switch onto its idle thread, never returns
+ */
+extern void AuSchedEnterAPIdle(void) __attribute__((noreturn));
+
+/**
+ * @brief AuSchedCanRunHere -- may the calling core resume this thread now
+ * (not running elsewhere, and kernel contexts only on the boot core).
+ * Call with the scheduler lock held.
+ */
+extern bool AuSchedCanRunHere(AA64Thread* thread);
+
+/**
+ * @brief AuThreadWaitOffCPU -- wait until no core executes on the
+ * thread's context any more, call before freeing its stack or address
+ * space. Drops the BKL while waiting.
+ */
+extern void AuThreadWaitOffCPU(AA64Thread* thread);
 
 #endif
 

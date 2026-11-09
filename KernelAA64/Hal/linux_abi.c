@@ -349,6 +349,10 @@ static int64_t linux_clone(uint64_t flags, uint64_t newsp, uint64_t parent_tid, 
 	frame->x0 = 0;
 	frame->EL0SP = (int64_t)newsp;
 
+	/* the child is on the ready list as soon as AuCreateSubKthread
+	 * returns; hold the scheduler lock until its resume state below is
+	 * complete so no other core picks a half initialised thread */
+	uint64_t sched_daif = AuSchedLock();
 	AA64Thread* child = AuCreateSubKthread(AuProcessEntSubThread, (uint64_t)frame, proc->cr3, "lthr");
 	child->threadType = THREAD_LEVEL_USER | THREAD_LEVEL_SUBTHREAD;
 	child->procSlot = proc;
@@ -359,6 +363,7 @@ static int64_t linux_clone(uint64_t flags, uint64_t newsp, uint64_t parent_tid, 
 	child->linux_tls = (flags & LNX_CLONE_SETTLS) ? tls : aa64_read_tpidr_el0();
 	if (flags & LNX_CLONE_CHILD_CLEARTID)
 		child->clear_child_tid = child_tid;
+	AuSchedUnlock(sched_daif);
 	proc->threads[proc->num_thread++] = child;
 
 	uint32_t tid = (uint32_t)child->thread_id;

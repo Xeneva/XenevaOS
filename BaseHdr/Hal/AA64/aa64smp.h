@@ -40,6 +40,9 @@
 /* number of 4K pages given to each secondary core as its boot stack */
 #define AA64_SMP_AP_STACK_PAGES 4
 
+/* number of 4K pages given to each core as its EL1 exception stack */
+#define AA64_SMP_EXC_STACK_PAGES 4
+
 /* PSCI 0.2+ function ids (SMC64 calling convention where needed) */
 #define PSCI_FN_VERSION	 0x84000000
 #define PSCI_FN64_CPU_ON 0xC4000003
@@ -57,6 +60,12 @@
 
 /* MPIDR_EL1 affinity fields Aff3..Aff0 */
 #define AA64_MPIDR_AFF_MASK 0xFF00FFFFFFULL
+
+#define __ISOLATE_CPU_HARDWARE_MASK 0x1
+
+/* SGIs used between cores */
+#define AA64_IPI_RESCHED	  0 /* a thread became runnable, reschedule */
+#define AA64_IPI_DEFERRED_IRQ 1 /* run interrupt work deferred to the BKL owner */
 
 /*
  * AA64SMPBootParam -- handed to a secondary core through
@@ -84,6 +93,8 @@ typedef struct _aa64_smp_boot_param_ {
 	uint64_t online;	  //88  -- written by the AP once it reaches C
 	uint64_t ttbr0;		  //96  -- boot core's TTBR0, restored in C
 	uint64_t tcr;		  //104 -- boot core's TCR, restored in C
+	uint64_t _isolate;	  //112 -- isolate the cpu
+	uint64_t exception_stack_top; //120 -- higher half top of the EL1 exception stack
 } AA64SMPBootParam;
 
 /**
@@ -91,6 +102,44 @@ typedef struct _aa64_smp_boot_param_ {
  * in the device tree through PSCI CPU_ON
  */
 extern void AA64SMPInitialize();
+
+/**
+ * @brief AA64SMPStartSchedulers -- give every online secondary core its
+ * idle thread and release it from its wait loop, called by
+ * AuSchedulerStart on the boot core
+ */
+extern void AA64SMPStartSchedulers();
+
+/**
+ * @brief AA64SMPIPILocalInit -- enable the IPI SGIs on the calling core
+ */
+extern void AA64SMPIPILocalInit();
+
+/*
+ * AA64CPUStats -- one core as reported to user space by SYS_GET_CPU_STATS.
+ * Mirrors XECpuStats in Libs/XEClib/includes/sys/_keproc.h, keep both in
+ * sync. Times are generic timer counter ticks (counter_freq per second)
+ * since the core started scheduling; user space diffs two samples.
+ */
+typedef struct _aa64_cpu_stats_ {
+	uint32_t cpu;				/* logical cpu number */
+	uint32_t online;			/* 1 once the core schedules threads */
+	uint64_t mpidr;				/* affinity */
+	uint64_t busy_ticks;		/* time running a thread other than idle */
+	uint64_t idle_ticks;		/* time in its idle thread */
+	uint64_t context_switches;	/* switches to a different thread */
+	uint64_t timer_irqs;		/* scheduler timer interrupts taken */
+	uint64_t counter_freq;		/* CNTFRQ_EL0 */
+	char current[8];			/* thread it switched to last */
+} AA64CPUStats;
+
+/**
+ * @brief AA64SMPGetCPUStats -- fill one AA64CPUStats per known core
+ * @param out -- destination array
+ * @param max -- capacity of out
+ * @return number of entries written
+ */
+extern int AA64SMPGetCPUStats(AA64CPUStats* out, int max);
 
 /**
  * @brief AA64SMPGetCPUCount -- returns the number of online cores,

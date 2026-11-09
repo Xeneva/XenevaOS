@@ -29,6 +29,7 @@
 *
 **/
 
+#include <Sync/spinlock.h>
 #include <Mm/vmmngr.h>
 #include <aucon.h>
 #include <Mm/pmmngr.h>
@@ -74,13 +75,156 @@ static int isRangeInsideKernel(uint64_t va) {
 
 #define VMM_PHYS_MASK 0x0000FFFFFFFFF000ULL
 
+/* TTBR0 (user half, VA bit 63 clear) leaves are not global so their TLB
+ * entries carry the ASID; TTBR1 kernel mappings stay global */
+static inline uint64_t vmm_ng(uint64_t va) {
+	return (va >> 63) ? 0 : PTE_NG;
+}
+
+/* TTBR0 holds the ASID in [63:48]: never use it as a physical address */
+static inline uint64_t vmm_ttbr0_phys(void) {
+	return read_ttbr0_el1() & VMM_PHYS_MASK;
+}
+
 static uint64_t* vmm_current_root(uint64_t virt_addr) {
-	uint64_t phys = isRangeInsideKernel(virt_addr) ? read_ttbr1_el1() : read_ttbr0_el1();
+	uint64_t phys = isRangeInsideKernel(virt_addr) ? read_ttbr1_el1() : vmm_ttbr0_phys();
 	return (uint64_t*)P2V(phys & VMM_PHYS_MASK);
 }
 
 bool AuIsVirtualAddressSpaceActive(uint64_t* root) {
 	return root && (read_ttbr0_el1() & VMM_PHYS_MASK) == V2P((uint64_t)root);
+}
+
+/* ---------------------------------------------------------------------
+ * ASIDs
+ *
+ * Every address space made by AuCreateVirtualAddressSpace gets its own
+ * ASID, so a context switch only rewrites TTBR0 and keeps the TLB. All
+ * invalidations by VA use vaae1is/vmalle1is (every ASID), and an ASID is
+ * flushed when its address space dies, before it can be handed out again.
+ * Roots that were never registered (the boot root used by plain kernel
+ * threads) share ASID 0, which the switch flushes locally each time.
+ * --------------------------------------------------------------------- */
+#define VMM_ASID_MAP_SIZE 1024 /* power of two */
+#define VMM_ASID_TOMBSTONE UINT64_MAX
+typedef struct {
+	uint64_t root; /* physical address of the root table, 0 = free */
+	uint32_t asid;
+} VmmAsidEntry;
+static VmmAsidEntry s_asid_map[VMM_ASID_MAP_SIZE];
+static uint64_t s_asid_bitmap[65536 / 64];
+static uint32_t s_asid_count; /* 256 or 65536, 0 = ASIDs off */
+static uint32_t s_asid_next = 1;
+static Spinlock s_asid_lock __attribute__((aligned(8)));
+
+static inline uint32_t vmmAsidHash(uint64_t root) {
+	return (uint32_t)((root >> 12) * 2654435761u) & (VMM_ASID_MAP_SIZE - 1);
+}
+
+static void vmmAsidAssign(uint64_t root) {
+	if (!s_asid_count || !root)
+		return;
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_asid_lock);
+	uint32_t asid = 0;
+	for (uint32_t n = 1; n < s_asid_count; n++) {
+		uint32_t a = s_asid_next;
+		s_asid_next = (s_asid_next + 1 < s_asid_count) ? s_asid_next + 1 : 1;
+		if (!(s_asid_bitmap[a / 64] & (1ULL << (a % 64)))) {
+			asid = a;
+			break;
+		}
+	}
+	if (asid) {
+		uint32_t h = vmmAsidHash(root);
+		for (uint32_t i = 0; i < VMM_ASID_MAP_SIZE; i++, h = (h + 1) & (VMM_ASID_MAP_SIZE - 1)) {
+			if (s_asid_map[h].root == 0 || s_asid_map[h].root == VMM_ASID_TOMBSTONE) {
+				s_asid_map[h].root = root;
+				s_asid_map[h].asid = asid;
+				s_asid_bitmap[asid / 64] |= (1ULL << (asid % 64));
+				break;
+			}
+		}
+		/* map full: the root just falls back to ASID 0 */
+	}
+	AuReleaseSpinlockIrqRestore(&s_asid_lock, d);
+}
+
+/* caller holds s_asid_lock */
+static VmmAsidEntry* vmmAsidFind(uint64_t root) {
+	uint32_t h = vmmAsidHash(root);
+	for (uint32_t i = 0; i < VMM_ASID_MAP_SIZE; i++, h = (h + 1) & (VMM_ASID_MAP_SIZE - 1)) {
+		if (s_asid_map[h].root == 0)
+			return NULL;
+		if (s_asid_map[h].root == root)
+			return &s_asid_map[h];
+	}
+	return NULL;
+}
+
+static void vmmAsidRelease(uint64_t root) {
+	if (!s_asid_count || !root)
+		return;
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_asid_lock);
+	VmmAsidEntry* e = vmmAsidFind(root);
+	if (e) {
+		uint64_t asid = e->asid;
+		e->root = VMM_ASID_TOMBSTONE;
+		e->asid = 0;
+		/* no core can still be on this address space (the reaper waited
+		 * for its threads), drop whatever any TLB cached for the ASID */
+		__asm__ volatile("dsb ishst\n tlbi aside1is, %0\n dsb ish\n isb" ::"r"(asid << 48) : "memory");
+		s_asid_bitmap[asid / 64] &= ~(1ULL << (asid % 64));
+	}
+	AuReleaseSpinlockIrqRestore(&s_asid_lock, d);
+}
+
+/**
+ * @brief AuVmmAsidInitialize -- detect ASID width and switch TCR_EL1 to
+ * ASID tagged TTBR0 translations. Boot core, before secondary cores start
+ * (they copy this core's TCR_EL1)
+ */
+void AuVmmAsidInitialize(void) {
+	uint64_t mmfr0;
+	__asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(mmfr0));
+	bool asid16 = ((mmfr0 >> 4) & 0xF) == 2;
+	uint64_t tcr = read_tcr_el1();
+	tcr &= ~(1ULL << 22); /* A1 = 0: the ASID comes from TTBR0 */
+	if (asid16)
+		tcr |= (1ULL << 36); /* AS = 1: 16 bit ASIDs */
+	else
+		tcr &= ~(1ULL << 36);
+	__asm__ volatile("msr tcr_el1, %0\n isb" ::"r"(tcr) : "memory");
+	tlb_flush_vmalle1is();
+	s_asid_bitmap[0] |= 1; /* ASID 0: unregistered roots */
+	s_asid_count = asid16 ? 65536 : 256;
+	UARTDebugOut("[vmm]: %d bit ASIDs \r\n", asid16 ? 16 : 8);
+}
+
+/**
+ * @brief AuVmmActivate -- load an address space into TTBR0 of the calling
+ * core with its ASID, no TLB flush needed
+ * @param pml -- virtual address of the root table (AA64Thread::pml)
+ */
+void AuVmmActivate(uint64_t pml) {
+	uint64_t root = V2P(pml) & VMM_PHYS_MASK;
+	uint64_t asid = 0;
+	if (s_asid_count) {
+		uint64_t d = AuAcquireSpinlockIrqSave(&s_asid_lock);
+		VmmAsidEntry* e = vmmAsidFind(root);
+		if (e)
+			asid = e->asid;
+		AuReleaseSpinlockIrqRestore(&s_asid_lock, d);
+	}
+	/* root and ASID change in one register write */
+	__asm__ volatile("msr ttbr0_el1, %0\n isb" ::"r"(root | (asid << 48)) : "memory");
+	if (asid == 0) {
+		/* ASID 0 is shared by every unregistered root: drop this core's
+		 * entries for it (they may belong to the previous such root) */
+		if (s_asid_count)
+			__asm__ volatile("tlbi aside1, xzr\n dsb nsh\n isb" ::: "memory");
+		else
+			tlb_flush_vmalle1is();
+	}
 }
 
 /* Lookup only: unmapping a hole must never allocate page tables. Block
@@ -124,7 +268,7 @@ void AuVmmngrInitialize() {
 	AuTextOut("[aurora]: initializing virtual memory manager \r\n");
 	/* XNLDR installs the direct physical map while it still owns the
 	 * inherited firmware root, so i leave that active root alone here --axiss */
-	uint64_t* userRoot = (uint64_t*)read_ttbr0_el1();
+	uint64_t* userRoot = (uint64_t*)vmm_ttbr0_phys();
 	uint64_t* kernelRoot = (uint64_t*)read_ttbr1_el1();
 	/* accessing the live root through the just-installed direct map here,
 	 * since the inherited low alias might point at a different firmware
@@ -237,7 +381,7 @@ bool AuMapPage(uint64_t phys_addr, uint64_t virt_addr, uint8_t attrib) {
 		return false;
 	}
 
-	pml1[i1] = (phys_addr & ~0xFFFULL) | flags;
+	pml1[i1] = (phys_addr & ~0xFFFULL) | flags | vmm_ng(virt_addr);
 	virt_addr &= ~0xFFFULL;
 	void* address = &pml1[i1];
 	/* a single leaf PTE changed here, so i clean just its cache line before
@@ -310,7 +454,7 @@ bool AuMapPageEx(uint64_t* pml4i, uint64_t phys_addr, uint64_t virt_addr, uint8_
 		return false;
 	}
 
-	pml1[i1] = (phys_addr & ~0xFFFULL) | flags;
+	pml1[i1] = (phys_addr & ~0xFFFULL) | flags | vmm_ng(virt_addr);
 	return true;
 }
 
@@ -378,7 +522,7 @@ AuVPage* AuVmmngrGetPage(uint64_t virt_addr, uint8_t _flags, uint8_t mode) {
 	if (phys_addr == PMM_INVALID_PHYS)
 		return NULL;
 	memset((void*)P2V(phys_addr), 0, PAGE_SIZE);
-	pml1[i1] = (phys_addr & VMM_PHYS_MASK) | flags;
+	pml1[i1] = (phys_addr & VMM_PHYS_MASK) | flags | vmm_ng(virt_addr);
 	data_cache_flush(&pml1[i1]);
 	tlb_flush(VIRT_ADDR_ALIGN(virt_addr));
 	return (AuVPage*)&pml1[i1];
@@ -422,7 +566,7 @@ uint64_t* AuGetFreePage(bool user, void* ptr) {
 			start = KERNEL_BASE_ADDRESS;
 	}
 
-	uint64_t* pml4 = (uint64_t*)P2V(read_ttbr0_el1());
+	uint64_t* pml4 = (uint64_t*)P2V(vmm_ttbr0_phys());
 	if (user == 0)
 		pml4 = (uint64_t*)P2V(read_ttbr1_el1());
 
@@ -430,7 +574,7 @@ uint64_t* AuGetFreePage(bool user, void* ptr) {
 		if (isRangeInsideKernel((uint64_t)ptr))
 			pml4 = (uint64_t*)P2V(read_ttbr1_el1());
 		else
-			pml4 = (uint64_t*)P2V(read_ttbr0_el1());
+			pml4 = (uint64_t*)P2V(vmm_ttbr0_phys());
 	}
 
 	/* Walk through every page tables */
@@ -522,6 +666,7 @@ bool AuDestroyVirtualAddressSpace(uint64_t* root) {
 		if ((desc & (PTE_VALID | PTE_TABLE)) == (PTE_VALID | PTE_TABLE))
 			vmm_destroy_table(desc & VMM_PHYS_MASK, 1);
 	}
+	vmmAsidRelease(V2P((uint64_t)root));
 	AuPmmngrReleasePage(V2P((uint64_t)root));
 	return true;
 }
@@ -532,7 +677,7 @@ bool AuDestroyVirtualAddressSpace(uint64_t* root) {
  * @param flags -- flags to update
  */
 void AuUpdatePageFlags(uint64_t virt_addr, uint64_t flags) {
-	uint64_t* pml4_ = (uint64_t*)P2V(read_ttbr0_el1());
+	uint64_t* pml4_ = (uint64_t*)P2V(vmm_ttbr0_phys());
 
 	uint64_t* pdpt = (uint64_t*)P2V(pml4_[pml4_index(virt_addr)] & ~0xFFFUL);
 	uint64_t* pd = (uint64_t*)P2V(pdpt[pdpt_index(virt_addr)] & ~0xFFFUL);
@@ -540,7 +685,7 @@ void AuUpdatePageFlags(uint64_t virt_addr, uint64_t flags) {
 	uint64_t* page = (uint64_t*)P2V(pt[pt_index(virt_addr)] & ~0xFFFUL);
 
 	if (page) {
-		pt[pt_index(virt_addr)] = (V2P(*page) & ~0xFFFULL) | flags;
+		pt[pt_index(virt_addr)] = (V2P(*page) & ~0xFFFULL) | flags | vmm_ng(virt_addr);
 		data_cache_flush(&pt[pt_index(virt_addr)]);
 	}
 }
@@ -629,6 +774,7 @@ uint64_t* AuCreateVirtualAddressSpace() {
 			new_pml[i] = 0;
 	}
 
+	vmmAsidAssign(V2P((uint64_t)new_pml));
 	return new_pml;
 }
 

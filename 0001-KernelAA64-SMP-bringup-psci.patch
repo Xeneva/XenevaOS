@@ -1,0 +1,895 @@
+From 6583f10e12899cc58103ad3cf13431edb19010a5 Mon Sep 17 00:00:00 2001
+From: Manas Kamal Choudhury <manaskamal.kandupur@gmail.com>
+Date: Sat, 7 Nov 2026 23:24:22 +0530
+Subject: [PATCH] feat(KernelAA64): bring up secondary cores through PSCI
+ CPU_ON
+
+First SMP milestone for KernelAA64. Every core under /cpus with
+enable-method = "psci" is started, switches to the boot core's
+translation regime, reaches higher half C, prints
+"From SMP : <n>" over UART and parks in wfi with irqs masked.
+
+- Hal/aa64smpboot.s: PSCI hvc/smc conduits and a position
+  independent trampoline. Drops EL2 -> EL1 when ATF hands the core
+  over in EL2 (iMX8MP), sets FPU/NEON, VBAR, MAIR, TCR, TTBR0/1,
+  turns the MMU on and branches to AA64SMPAPEntry.
+- Hal/aa64smp.c: walks /cpus, picks the PSCI conduit from
+  /psci method, copies the trampoline into a fresh boot page and
+  hands each core an AA64SMPBootParam (context_id) plus a 16K stack.
+  Cores are started one at a time; the boot core polls CNTPCT for
+  up to 500ms for each to report in.
+- The AP runs its last trampoline instructions with the MMU on, so
+  the boot page gets a private 1GB identity map in TTBR0 instead of
+  the firmware one (edk2 maps free RAM execute-never, and the low
+  half is torn down by AuVmmngrBootFree). AA64SMPAPEntry restores
+  the boot core's TTBR0/TCR first thing.
+- dtb.c: AuDeviceTreeGetChildNode and AuDeviceTreeGetStringProperty,
+  the existing prefix lookup can't enumerate /cpus.
+- init.c: AA64SMPInitialize() after board init.
+- build_and_run_qemu.sh: -smp, XENEVA_QEMU_SMP (default 4).
+
+Not yet: GIC CPU interface/timer per core, scheduler, spin-table
+(RPi3). Spinlocks from AuCreateSpinlock(false) are still no-ops.
+
+Assisted-by: LLM Claude
+---
+ BaseHdr/Hal/AA64/aa64smp.h            | 101 ++++++++
+ BaseHdr/dtb.h                         |  16 ++
+ KernelAA64/Hal/aa64smp.c              | 348 ++++++++++++++++++++++++++
+ KernelAA64/Hal/aa64smpboot.s          | 146 +++++++++++
+ KernelAA64/KernelAA64.vcxproj         |  13 +
+ KernelAA64/KernelAA64.vcxproj.filters |   9 +
+ KernelAA64/dtb.c                      |  62 +++++
+ KernelAA64/init.c                     |   6 +
+ Scripts/Linux/build_and_run_qemu.sh   |   7 +-
+ 9 files changed, 707 insertions(+), 1 deletion(-)
+ create mode 100644 BaseHdr/Hal/AA64/aa64smp.h
+ create mode 100644 KernelAA64/Hal/aa64smp.c
+ create mode 100644 KernelAA64/Hal/aa64smpboot.s
+
+diff --git a/BaseHdr/Hal/AA64/aa64smp.h b/BaseHdr/Hal/AA64/aa64smp.h
+new file mode 100644
+index 00000000..a8d27a6b
+--- /dev/null
++++ b/BaseHdr/Hal/AA64/aa64smp.h
+@@ -0,0 +1,101 @@
++/**
++* @file aa64smp.h
++*
++* BSD 2-Clause License
++*
++* Copyright (c) 2022-2026, Manas Kamal Choudhury
++* All rights reserved.
++*
++* Redistribution and use in source and binary forms, with or without
++* modification, are permitted provided that the following conditions are met:
++*
++* 1. Redistributions of source code must retain the above copyright notice, this
++*    list of conditions and the following disclaimer.
++*
++* 2. Redistributions in binary form must reproduce the above copyright notice,
++*    this list of conditions and the following disclaimer in the documentation
++*    and/or other materials provided with the distribution.
++*
++* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++* AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++* DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
++* FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++* SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++* CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++* OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++*
++**/
++
++#ifndef __AA64_SMP_H__
++#define __AA64_SMP_H__
++
++#include <stdint.h>
++#include <aurora.h>
++
++#define AA64_SMP_MAX_CPUS 8
++
++/* number of 4K pages given to each secondary core as its boot stack */
++#define AA64_SMP_AP_STACK_PAGES 4
++
++/* PSCI 0.2+ function ids (SMC64 calling convention where needed) */
++#define PSCI_FN_VERSION	 0x84000000
++#define PSCI_FN64_CPU_ON 0xC4000003
++
++#define PSCI_RET_SUCCESS		  0
++#define PSCI_RET_NOT_SUPPORTED	  -1
++#define PSCI_RET_INVALID_PARAMS	  -2
++#define PSCI_RET_DENIED			  -3
++#define PSCI_RET_ALREADY_ON		  -4
++#define PSCI_RET_ON_PENDING		  -5
++#define PSCI_RET_INTERNAL_FAILURE -6
++#define PSCI_RET_NOT_PRESENT	  -7
++#define PSCI_RET_DISABLED		  -8
++#define PSCI_RET_INVALID_ADDRESS  -9
++
++/* MPIDR_EL1 affinity fields Aff3..Aff0 */
++#define AA64_MPIDR_AFF_MASK 0xFF00FFFFFFULL
++
++/*
++ * AA64SMPBootParam -- handed to a secondary core through
++ * PSCI CPU_ON context_id (x0). The trampoline reads it with
++ * the MMU off, so the BSP cleans it to PoC before CPU_ON.
++ *
++ * idmap_ttbr0/idmap_tcr are only live inside the trampoline,
++ * AA64SMPAPEntry swaps them for ttbr0/tcr (the boot core's)
++ *
++ * NOTE: field offsets are hard coded in Hal/aa64smpboot.s,
++ * keep both in sync
++ */
++typedef struct _aa64_smp_boot_param_ {
++	uint64_t entry;		  //0   -- higher half C entry
++	uint64_t stack_top;	  //8   -- higher half stack top
++	uint64_t param_virt;  //16  -- higher half address of this block
++	uint64_t idmap_ttbr0; //24  -- private identity map of the boot page
++	uint64_t ttbr1;		  //32
++	uint64_t idmap_tcr;	  //40  -- boot core TCR with TTBR0 fields forced
++	uint64_t mair;		  //48
++	uint64_t sctlr;		  //56
++	uint64_t vbar;		  //64
++	uint64_t cpu_num;	  //72  -- logical cpu number
++	uint64_t mpidr;		  //80
++	uint64_t online;	  //88  -- written by the AP once it reaches C
++	uint64_t ttbr0;		  //96  -- boot core's TTBR0, restored in C
++	uint64_t tcr;		  //104 -- boot core's TCR, restored in C
++} AA64SMPBootParam;
++
++/**
++ * @brief AA64SMPInitialize -- start every secondary core described
++ * in the device tree through PSCI CPU_ON
++ */
++extern void AA64SMPInitialize();
++
++/**
++ * @brief AA64SMPGetCPUCount -- returns the number of online cores,
++ * boot core included
++ */
++AU_EXTERN AU_EXPORT uint32_t AA64SMPGetCPUCount();
++
++#endif
+diff --git a/BaseHdr/dtb.h b/BaseHdr/dtb.h
+index 032135ab..9644c653 100644
+--- a/BaseHdr/dtb.h
++++ b/BaseHdr/dtb.h
+@@ -119,6 +119,22 @@ AU_EXTERN AU_EXPORT uint32_t AuDeviceTreeGetU32Property(uint32_t* node, const ch
+ 
+ AU_EXTERN AU_EXPORT uint32_t* AuDeviceTreeGetPropCells(uint32_t* node, const char* property, uint32_t* out_num_cells);
+ 
++/**
++ * @brief AuDeviceTreeGetStringProperty -- returns the string value of
++ * a property, or NULL if the node doesnt have it
++ * @param node -- Pointer to node
++ * @param property -- Property name
++ */
++AU_EXTERN AU_EXPORT const char* AuDeviceTreeGetStringProperty(uint32_t* node, const char* property);
++
++/**
++ * @brief AuDeviceTreeGetChildNode -- returns the index-th direct child
++ * of a node, grand children are skipped
++ * @param node -- Pointer to parent node (as returned by AuDeviceTreeGetNode)
++ * @param index -- zero based child index
++ */
++AU_EXTERN AU_EXPORT uint32_t* AuDeviceTreeGetChildNode(uint32_t* node, uint32_t index);
++
+ AU_EXTERN AU_EXPORT void AuDeviceTreeDumpAll();
+ AU_EXTERN AU_EXPORT void AuDeviceTreeDumpAllProps(const char* node_name);
+ /**
+diff --git a/KernelAA64/Hal/aa64smp.c b/KernelAA64/Hal/aa64smp.c
+new file mode 100644
+index 00000000..1c3a10d0
+--- /dev/null
++++ b/KernelAA64/Hal/aa64smp.c
+@@ -0,0 +1,348 @@
++/**
++* @file aa64smp.c
++*
++* BSD 2-Clause License
++*
++* Copyright (c) 2022-2026, Manas Kamal Choudhury
++* All rights reserved.
++*
++* Redistribution and use in source and binary forms, with or without
++* modification, are permitted provided that the following conditions are met:
++*
++* 1. Redistributions of source code must retain the above copyright notice, this
++*    list of conditions and the following disclaimer.
++*
++* 2. Redistributions in binary form must reproduce the above copyright notice,
++*    this list of conditions and the following disclaimer in the documentation
++*    and/or other materials provided with the distribution.
++*
++* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++* AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++* DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
++* FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++* SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++* CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++* OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++*
++**/
++
++#include <stdint.h>
++#include <stddef.h>
++#include <stdbool.h>
++#include <string.h>
++#include <_null.h>
++#include <aurora.h>
++#include <dtb.h>
++#include <aucon.h>
++#include <Drivers/uart.h>
++#include <Hal/AA64/aa64smp.h>
++#include <Hal/AA64/aa64lowlevel.h>
++#include <Mm/pmmngr.h>
++#include <Mm/vmmngr.h>
++
++/*
++ * Secondary core bring up, first milestone: every core described
++ * under /cpus with enable-method = "psci" is started with CPU_ON,
++ * gets the boot core's translation regime, reaches higher half C,
++ * prints itself and parks. No scheduler, no GIC CPU interface yet.
++ *
++ * Boot page layout (one physical page, entered by physical address
++ * with the MMU off):
++ *
++ *   0x000 .. 0x7FF  copy of aa64_smp_trampoline
++ *   0x800 .. 0xBFF  AA64SMPBootParam[AA64_SMP_MAX_CPUS], 128 byte stride
++ *
++ * The last two trampoline instructions run with the MMU already on,
++ * so the boot page needs an executable identity mapping. The firmware
++ * map in TTBR0 is no good for that: edk2 maps free RAM execute-never,
++ * and it goes away in AuVmmngrBootFree anyway. So the AP gets a private
++ * two level map (one 1GB block around the boot page) for TTBR0, with
++ * the TTBR0 half of TCR forced to 4K granule / 48 bit to match it.
++ */
++#define AA64_SMP_PARAM_OFFSET 0x800
++#define AA64_SMP_PARAM_STRIDE 128
++
++/* how long the boot core waits for one AP to report in */
++#define AA64_SMP_ONLINE_TIMEOUT_MS 500
++
++/* TCR_EL1 bits [15:0] describe TTBR0 walks only: T0SZ=16, IRGN0/ORGN0
++ * write back, SH0 inner shareable, TG0 4K */
++#define AA64_SMP_TCR_TTBR0_MASK	 0xFFFFULL
++#define AA64_SMP_TCR_TTBR0_IDMAP ((16ULL << 0) | (1ULL << 8) | (1ULL << 10) | (3ULL << 12))
++
++#define AA64_SMP_BLOCK_1G (1ULL << 30)
++
++extern uint8_t aa64_smp_trampoline[];
++extern uint8_t aa64_smp_trampoline_end[];
++extern char vectors[];
++extern int64_t aa64_psci_call_hvc(uint64_t fn, uint64_t arg1, uint64_t arg2, uint64_t arg3);
++extern int64_t aa64_psci_call_smc(uint64_t fn, uint64_t arg1, uint64_t arg2, uint64_t arg3);
++
++static uint64_t _smp_boot_page;
++static uint64_t _smp_idmap_root;
++static uint32_t _smp_cpu_count = 1;
++static uint32_t _smp_next_slot = 1;
++static bool _smp_psci_hvc;
++
++_Static_assert(sizeof(AA64SMPBootParam) <= AA64_SMP_PARAM_STRIDE,
++			   "AA64SMPBootParam outgrew its boot page slot");
++_Static_assert(AA64_SMP_PARAM_OFFSET + AA64_SMP_MAX_CPUS * AA64_SMP_PARAM_STRIDE <= PAGE_SIZE,
++			   "AA64 SMP boot page overflow");
++
++/* Hal/aa64smpboot.s reads these by fixed offset, BaseHdr's stddef.h
++ * has no offsetof so define one defensively */
++#ifndef offsetof
++#define offsetof(type, member) __builtin_offsetof(type, member)
++#endif
++_Static_assert(offsetof(AA64SMPBootParam, entry) == 0, "smp boot param layout");
++_Static_assert(offsetof(AA64SMPBootParam, stack_top) == 8, "smp boot param layout");
++_Static_assert(offsetof(AA64SMPBootParam, param_virt) == 16, "smp boot param layout");
++_Static_assert(offsetof(AA64SMPBootParam, idmap_ttbr0) == 24, "smp boot param layout");
++_Static_assert(offsetof(AA64SMPBootParam, ttbr1) == 32, "smp boot param layout");
++_Static_assert(offsetof(AA64SMPBootParam, idmap_tcr) == 40, "smp boot param layout");
++_Static_assert(offsetof(AA64SMPBootParam, mair) == 48, "smp boot param layout");
++_Static_assert(offsetof(AA64SMPBootParam, sctlr) == 56, "smp boot param layout");
++_Static_assert(offsetof(AA64SMPBootParam, vbar) == 64, "smp boot param layout");
++
++/**
++ * @brief AA64PSCICall -- call into PSCI firmware through the conduit
++ * named by the device tree
++ * @param fn -- PSCI function id
++ */
++static int64_t AA64PSCICall(uint64_t fn, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
++	if (_smp_psci_hvc)
++		return aa64_psci_call_hvc(fn, arg1, arg2, arg3);
++	return aa64_psci_call_smc(fn, arg1, arg2, arg3);
++}
++
++/**
++ * @brief AA64SMPGetBootParam -- returns the higher half address of a
++ * cpu's slot in the boot page
++ * @param cpu_num -- logical cpu number
++ */
++static AA64SMPBootParam* AA64SMPGetBootParam(uint32_t cpu_num) {
++	return (AA64SMPBootParam*)(P2V(_smp_boot_page) + AA64_SMP_PARAM_OFFSET +
++							   cpu_num * AA64_SMP_PARAM_STRIDE);
++}
++
++/**
++ * @brief AA64SMPAPEntry -- higher half entry of every secondary core,
++ * jumped to by aa64_smp_trampoline with MMU, caches and FPU on
++ * @param param -- this core's boot parameter block
++ */
++void AA64SMPAPEntry(AA64SMPBootParam* param) {
++	/* off the trampoline's identity map, onto the boot core's tables */
++	write_tcr_el1(param->tcr);
++	write_ttbr0_el1((uint64_t*)param->ttbr0);
++	isb_flush();
++	tlb_flush_vmalle1is();
++
++	uint64_t cpu_num = param->cpu_num;
++	UARTDebugOut("From SMP : %d \r\n", cpu_num);
++
++	/* report in, the boot core is spinning on this */
++	dmb_ish();
++	*(volatile uint64_t*)&param->online = 1;
++	dsb_ish();
++
++	/* park, irqs stay masked until the scheduler learns about us
++	 * TODO: per cpu GIC CPU interface, timer and an idle thread */
++	while (1)
++		_wfi();
++}
++
++/**
++ * @brief AA64SMPBuildIdentityMap -- build a tiny TTBR0 table that maps
++ * the 1GB block holding the boot page 1:1, normal memory, executable
++ * @param phys -- physical address to cover
++ * @return physical address of the L0 table, PMM_INVALID_PHYS on failure
++ */
++static uint64_t AA64SMPBuildIdentityMap(uint64_t phys) {
++	uint64_t l0 = AuPmmngrAllocPage(AURORA_PAGE_KERNEL);
++	if (l0 == PMM_INVALID_PHYS)
++		return PMM_INVALID_PHYS;
++	uint64_t l1 = AuPmmngrAllocPage(AURORA_PAGE_KERNEL);
++	if (l1 == PMM_INVALID_PHYS) {
++		AuPmmngrReleasePage(l0);
++		return PMM_INVALID_PHYS;
++	}
++
++	uint64_t* l0_table = (uint64_t*)P2V(l0);
++	uint64_t* l1_table = (uint64_t*)P2V(l1);
++	memset(l0_table, 0, PAGE_SIZE);
++	memset(l1_table, 0, PAGE_SIZE);
++
++	l0_table[(phys >> 39) & 0x1FF] = l1 | PTE_VALID | PTE_TABLE;
++	/* AttrIndx 1 is normal write back in the kernel's MAIR */
++	l1_table[(phys >> 30) & 0x1FF] = (phys & ~(AA64_SMP_BLOCK_1G - 1)) | PTE_VALID | PTE_BLOCK |
++									 PTE_ATTR_IDX_1 | PTE_SH_INNER | PTE_AF | PTE_AP_RW |
++									 PTE_USER_NOT_EXECUTABLE;
++
++	aa64_dc_cvac_range(l0_table, PAGE_SIZE);
++	aa64_dc_cvac_range(l1_table, PAGE_SIZE);
++	return l0;
++}
++
++/**
++ * @brief AA64SMPStartCPU -- fill the boot block for one core and
++ * start it through PSCI CPU_ON
++ * @param cpu_num -- logical cpu number to give this core
++ * @param mpidr -- target core's affinity value from the device tree
++ * @return true if the core reported in before the timeout
++ */
++static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr) {
++	uint64_t stack = AuPmmngrAllocPages(AA64_SMP_AP_STACK_PAGES, 1, 0, AURORA_PAGE_KERNEL);
++	if (stack == PMM_INVALID_PHYS) {
++		AuTextOut("[aurora]: smp: no stack for cpu %d \r\n", (uint64_t)cpu_num);
++		return false;
++	}
++
++	AA64SMPBootParam* param = AA64SMPGetBootParam(cpu_num);
++	memset(param, 0, sizeof(AA64SMPBootParam));
++	param->entry = (uint64_t)AA64SMPAPEntry;
++	param->stack_top = P2V(stack) + AA64_SMP_AP_STACK_PAGES * PAGE_SIZE;
++	param->param_virt = (uint64_t)param;
++	param->ttbr0 = read_ttbr0_el1();
++	param->tcr = read_tcr_el1();
++	param->idmap_ttbr0 = _smp_idmap_root;
++	param->idmap_tcr = (param->tcr & ~AA64_SMP_TCR_TTBR0_MASK) | AA64_SMP_TCR_TTBR0_IDMAP;
++	param->ttbr1 = read_ttbr1_el1();
++	param->mair = read_mair_el1();
++	param->sctlr = read_sctlr_el1();
++	param->vbar = (uint64_t)vectors;
++	param->cpu_num = cpu_num;
++	param->mpidr = mpidr;
++	param->online = 0;
++
++	/* the trampoline reads this with the MMU off */
++	aa64_dc_cvac_range(param, sizeof(AA64SMPBootParam));
++
++	uint64_t param_phys = _smp_boot_page + AA64_SMP_PARAM_OFFSET + cpu_num * AA64_SMP_PARAM_STRIDE;
++	int64_t ret = AA64PSCICall(PSCI_FN64_CPU_ON, mpidr, _smp_boot_page, param_phys);
++	if (ret != PSCI_RET_SUCCESS) {
++		AuTextOut("[aurora]: smp: CPU_ON mpidr %x failed (%d) \r\n", mpidr, ret);
++		AuPmmngrReleasePages(stack);
++		return false;
++	}
++
++	/* plain counter poll, AA64SleepUS parks in wfi and nothing is
++	 * guaranteed to wake us here */
++	uint64_t timeout = (get_cntfrq_el0() / 1000) * AA64_SMP_ONLINE_TIMEOUT_MS;
++	uint64_t start = get_cntpct_el0();
++	while ((get_cntpct_el0() - start) < timeout) {
++		if (*(volatile uint64_t*)&param->online)
++			return true;
++	}
++
++	/* stack and slot stay taken, a late AP might still be running on them */
++	AuTextOut(
++		"[aurora]: smp: cpu %d (mpidr %x) did not come online \r\n", (uint64_t)cpu_num, mpidr);
++	return false;
++}
++
++/**
++ * @brief AA64SMPInitialize -- start every secondary core described
++ * in the device tree through PSCI CPU_ON
++ */
++void AA64SMPInitialize() {
++	uint32_t* cpus = AuDeviceTreeGetNode("cpus");
++	if (!cpus) {
++		AuTextOut("[aurora]: smp: no /cpus node, staying uniprocessor \r\n");
++		return;
++	}
++
++	uint32_t* psci = AuDeviceTreeGetNode("psci");
++	const char* method = AuDeviceTreeGetStringProperty(psci, "method");
++	if (!method) {
++		AuTextOut("[aurora]: smp: no psci method, staying uniprocessor \r\n");
++		return;
++	}
++	_smp_psci_hvc = (strcmp(method, "hvc") == 0);
++
++	int64_t version = AA64PSCICall(PSCI_FN_VERSION, 0, 0, 0);
++	AuTextOut("[aurora]: smp: psci %d.%d via %s \r\n",
++			  (uint64_t)((version >> 16) & 0xFFFF),
++			  (uint64_t)(version & 0xFFFF),
++			  method);
++
++	size_t tramp_size = (size_t)(aa64_smp_trampoline_end - aa64_smp_trampoline);
++	if (tramp_size > AA64_SMP_PARAM_OFFSET) {
++		AuTextOut("[aurora]: smp: trampoline too big (%d bytes) \r\n", (uint64_t)tramp_size);
++		return;
++	}
++
++	_smp_boot_page = AuPmmngrAllocPage(AURORA_PAGE_KERNEL);
++	if (_smp_boot_page == PMM_INVALID_PHYS) {
++		AuTextOut("[aurora]: smp: no memory for boot page \r\n");
++		return;
++	}
++
++	void* boot_page = (void*)P2V(_smp_boot_page);
++	memset(boot_page, 0, PAGE_SIZE);
++	memcpy(boot_page, aa64_smp_trampoline, tramp_size);
++	/* the AP fetches this with MMU and caches off */
++	aa64_dc_cvac_range(boot_page, tramp_size);
++
++	/* TODO: boot page and identity map are kept for good (3 pages),
++	 * free them once every started core is known to be past the
++	 * trampoline */
++	_smp_idmap_root = AA64SMPBuildIdentityMap(_smp_boot_page);
++	if (_smp_idmap_root == PMM_INVALID_PHYS) {
++		AuTextOut("[aurora]: smp: no memory for identity map \r\n");
++		AuPmmngrReleasePage(_smp_boot_page);
++		return;
++	}
++
++	uint32_t addr_cells = AuDeviceTreeGetAddressCells(cpus);
++	if (addr_cells == 0)
++		addr_cells = 1;
++	uint64_t boot_mpidr = read_mpidr_el1() & AA64_MPIDR_AFF_MASK;
++
++	for (uint32_t i = 0;; i++) {
++		uint32_t* cpu = AuDeviceTreeGetChildNode(cpus, i);
++		if (!cpu)
++			break;
++
++		/* /cpus also holds cpu-map, l2-cache and friends */
++		const char* type = AuDeviceTreeGetStringProperty(cpu, "device_type");
++		if (!type || strcmp(type, "cpu") != 0)
++			continue;
++
++		uint64_t mpidr = AuDeviceTreeGetRegAddress(cpu, addr_cells) & AA64_MPIDR_AFF_MASK;
++		if (mpidr == boot_mpidr)
++			continue;
++
++		if (_smp_next_slot >= AA64_SMP_MAX_CPUS) {
++			AuTextOut("[aurora]: smp: more than %d cpus, ignoring the rest \r\n",
++					  (uint64_t)AA64_SMP_MAX_CPUS);
++			break;
++		}
++
++		const char* enable = AuDeviceTreeGetStringProperty(cpu, "enable-method");
++		if (!enable || strcmp(enable, "psci") != 0) {
++			/* TODO: spin-table (RPi3) */
++			AuTextOut("[aurora]: smp: cpu mpidr %x enable-method %s not supported \r\n",
++					  mpidr,
++					  enable ? enable : "none");
++			continue;
++		}
++
++		/* a slot is never reused, even if its core failed or timed out */
++		uint32_t slot = _smp_next_slot++;
++		if (AA64SMPStartCPU(slot, mpidr))
++			_smp_cpu_count++;
++	}
++
++	AuTextOut("[aurora]: smp: %d cpu(s) online \r\n", (uint64_t)_smp_cpu_count);
++}
++
++/**
++ * @brief AA64SMPGetCPUCount -- returns the number of online cores,
++ * boot core included
++ */
++uint32_t AA64SMPGetCPUCount() {
++	return _smp_cpu_count;
++}
+diff --git a/KernelAA64/Hal/aa64smpboot.s b/KernelAA64/Hal/aa64smpboot.s
+new file mode 100644
+index 00000000..db027d9e
+--- /dev/null
++++ b/KernelAA64/Hal/aa64smpboot.s
+@@ -0,0 +1,146 @@
++/**
++* BSD 2-Clause License
++*
++* Copyright (c) 2022-2026, Manas Kamal Choudhury
++* All rights reserved.
++*
++* Redistribution and use in source and binary forms, with or without
++* modification, are permitted provided that the following conditions are met:
++*
++* 1. Redistributions of source code must retain the above copyright notice, this
++*    list of conditions and the following disclaimer.
++*
++* 2. Redistributions in binary form must reproduce the above copyright notice,
++*    this list of conditions and the following disclaimer in the documentation
++*    and/or other materials provided with the distribution.
++*
++* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++* AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++* DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
++* FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++* SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++* CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++* OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++*
++**/
++
++// PSCI conduits, SMCCC: x0 = function id, x1..x3 = arguments,
++// result comes back in x0
++.global aa64_psci_call_hvc
++aa64_psci_call_hvc:
++    hvc #0
++    ret
++
++.global aa64_psci_call_smc
++aa64_psci_call_smc:
++    smc #0
++    ret
++
++
++// aa64_smp_trampoline -- first code a secondary core runs after
++// PSCI CPU_ON. AA64SMPInitialize copies everything between
++// aa64_smp_trampoline and aa64_smp_trampoline_end into a fresh
++// physical page, so this must stay position independent (adr only,
++// no literal pools, no absolute symbol references).
++//
++// entry state : MMU off, caches off, EL2 or EL1
++//               x0 = physical address of AA64SMPBootParam
++//
++// offsets used below come from AA64SMPBootParam in Hal/AA64/aa64smp.h
++.global aa64_smp_trampoline
++aa64_smp_trampoline:
++    msr daifset, #0xf
++
++    mrs x1, CurrentEL
++    lsr x1, x1, #2
++    cmp x1, #2
++    b.ne .Lsmp_in_el1
++
++    // ATF hands us the core in EL2 on real boards (iMX8MP), drop to
++    // EL1 the same way XNLDR does for the boot core
++    mrs x1, midr_el1
++    msr vpidr_el2, x1
++    mrs x1, mpidr_el1
++    msr vmpidr_el2, x1
++
++    mov x1, #(1 << 31)              // HCR_EL2.RW, EL1 is AArch64
++    msr hcr_el2, x1
++    mov x1, #0x33ff                 // CPTR_EL2, dont trap FP/SIMD
++    msr cptr_el2, x1
++    msr hstr_el2, xzr
++
++    mrs x1, cnthctl_el2
++    orr x1, x1, #3                  // EL1PCTEN | EL1PCEN
++    msr cnthctl_el2, x1
++    msr cntvoff_el2, xzr
++
++    // GICv3 system register interface only if the core has one,
++    // the virt board runs GICv2 where ICC_* is undefined
++    mrs x1, id_aa64pfr0_el1
++    ubfx x1, x1, #24, #4
++    cbz x1, .Lsmp_no_gicv3
++    mrs x1, S3_4_C12_C9_5           // ICC_SRE_EL2
++    orr x1, x1, #(1 << 0)           // SRE
++    orr x1, x1, #(1 << 3)           // Enable, lower EL may use SRE
++    msr S3_4_C12_C9_5, x1
++    isb
++.Lsmp_no_gicv3:
++    mov x1, #0x0800                 // SCTLR_EL1 RES1 bits, MMU off
++    movk x1, #0x30d0, lsl #16
++    msr sctlr_el1, x1
++
++    mov x1, #0x3c5                  // EL1h, DAIF masked
++    msr spsr_el2, x1
++    adr x1, .Lsmp_in_el1
++    msr elr_el2, x1
++    isb
++    eret
++
++.Lsmp_in_el1:
++    // known state before touching translation registers
++    mov x1, #0x0800
++    movk x1, #0x30d0, lsl #16
++    msr sctlr_el1, x1
++    isb
++
++    // FPU/NEON on, kernel C code is free to use q registers
++    mov x1, #(3 << 20)
++    msr cpacr_el1, x1
++
++    ldr x1, [x0, #64]
++    msr vbar_el1, x1
++    ldr x1, [x0, #48]
++    msr mair_el1, x1
++    ldr x1, [x0, #40]
++    msr tcr_el1, x1
++    ldr x1, [x0, #24]
++    msr ttbr0_el1, x1
++    ldr x1, [x0, #32]
++    msr ttbr1_el1, x1
++    isb
++
++    tlbi vmalle1
++    ic iallu
++    dsb nsh
++    isb
++
++    // pull everything we need into registers while the MMU is still
++    // off, once it is on this page is reached only through the
++    // private identity map in idmap_ttbr0 and we leave it right away
++    ldr x1, [x0, #8]
++    mov sp, x1
++    ldr x2, [x0, #0]
++    ldr x3, [x0, #56]
++    ldr x0, [x0, #16]
++    mov x29, xzr
++    mov x30, xzr
++
++    msr sctlr_el1, x3
++    isb
++    br x2
++
++.global aa64_smp_trampoline_end
++aa64_smp_trampoline_end:
+diff --git a/KernelAA64/KernelAA64.vcxproj b/KernelAA64/KernelAA64.vcxproj
+index d83ec3dd..0ad77a76 100644
+--- a/KernelAA64/KernelAA64.vcxproj
++++ b/KernelAA64/KernelAA64.vcxproj
+@@ -317,6 +317,7 @@
+     <ClCompile Include="Fs\vfs.c" />
+     <ClCompile Include="ftmngr.c" />
+     <ClCompile Include="Hal\aa64cpu.c" />
++    <ClCompile Include="Hal\aa64smp.c" />
+     <ClCompile Include="Hal\basicacpi.c" />
+     <ClCompile Include="Hal\gic.c" />
+     <ClCompile Include="Hal\profile.c" />
+@@ -422,6 +423,7 @@
+     <ClInclude Include="..\BaseHdr\Fs\fsprobe.h" />
+     <ClInclude Include="..\BaseHdr\Fs\initrd.h" />
+     <ClInclude Include="..\BaseHdr\Hal\AA64\aa64cpu.h" />
++    <ClInclude Include="..\BaseHdr\Hal\AA64\aa64smp.h" />
+     <ClInclude Include="..\BaseHdr\Hal\AA64\aa64lowlevel.h" />
+     <ClInclude Include="..\BaseHdr\Hal\AA64\gic.h" />
+     <ClInclude Include="..\BaseHdr\Hal\AA64\profile.h" />
+@@ -467,6 +469,17 @@
+       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">false</ExcludedFromBuild>
+       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</DeploymentContent>
+     </CustomBuild>
++    <CustomBuild Include="Hal\aa64smpboot.s">
++      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">false</ExcludedFromBuild>
++      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</DeploymentContent>
++      <FileType>Document</FileType>
++      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">clang --target=aarch64-windows-msvc -c -o "$(IntDir)%(Filename).obj" "%(FullPath)"</Command>
++      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">$(IntDir)%(Filename).obj</Outputs>
++      <Command Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">clang --target=aarch64-windows-msvc -c -o "$(IntDir)%(Filename).obj" "%(FullPath)"</Command>
++      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">$(IntDir)%(Filename).obj</Outputs>
++      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">false</ExcludedFromBuild>
++      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</DeploymentContent>
++    </CustomBuild>
+   </ItemGroup>
+   <ItemGroup>
+     <CustomBuild Include="Hal\aa64_print.s">
+diff --git a/KernelAA64/KernelAA64.vcxproj.filters b/KernelAA64/KernelAA64.vcxproj.filters
+index 3edb1d21..3cda16be 100644
+--- a/KernelAA64/KernelAA64.vcxproj.filters
++++ b/KernelAA64/KernelAA64.vcxproj.filters
+@@ -9,6 +9,9 @@
+     <ClCompile Include="Hal\aa64cpu.c">
+       <Filter>Hal</Filter>
+     </ClCompile>
++    <ClCompile Include="Hal\aa64smp.c">
++      <Filter>Hal</Filter>
++    </ClCompile>
+     <ClCompile Include="dtb.c" />
+     <ClCompile Include="Mm\pmmngr.c">
+       <Filter>Mm</Filter>
+@@ -359,6 +362,9 @@
+     <CustomBuild Include="Hal\aa64switch.s">
+       <Filter>Hal</Filter>
+     </CustomBuild>
++    <CustomBuild Include="Hal\aa64smpboot.s">
++      <Filter>Hal</Filter>
++    </CustomBuild>
+     <CustomBuild Include="Hal\aa64_print.s">
+       <Filter>Hal</Filter>
+     </CustomBuild>
+@@ -379,6 +385,9 @@
+     <ClInclude Include="..\BaseHdr\Hal\AA64\aa64cpu.h">
+       <Filter>Include\Hal</Filter>
+     </ClInclude>
++    <ClInclude Include="..\BaseHdr\Hal\AA64\aa64smp.h">
++      <Filter>Include\Hal</Filter>
++    </ClInclude>
+     <ClInclude Include="..\BaseHdr\dtb.h">
+       <Filter>Include</Filter>
+     </ClInclude>
+diff --git a/KernelAA64/dtb.c b/KernelAA64/dtb.c
+index acb8be46..e699a3df 100644
+--- a/KernelAA64/dtb.c
++++ b/KernelAA64/dtb.c
+@@ -281,6 +281,68 @@ uint32_t AuDeviceTreeGetU32Property(uint32_t* node, const char* property, uint32
+ 	return AuDTBSwap32(prop[2]);
+ }
+ 
++/**
++ * @brief AuDeviceTreeGetStringProperty -- returns the string value of
++ * a property, or NULL if the node doesnt have it
++ * @param node -- Pointer to node
++ * @param property -- Property name
++ */
++const char* AuDeviceTreeGetStringProperty(uint32_t* node, const char* property) {
++	if (!node)
++		return NULL;
++	uint32_t* prop = AuDeviceTreeFindProperty(node, property);
++	if (!prop)
++		return NULL;
++	if (AuDTBSwap32(prop[0]) == 0)
++		return NULL;
++	return (const char*)&prop[2];
++}
++
++/**
++ * @brief AuDeviceTreeGetChildNode -- returns the index-th direct child
++ * of a node, grand children are skipped
++ * @param node -- Pointer to parent node (as returned by AuDeviceTreeGetNode)
++ * @param index -- zero based child index
++ */
++uint32_t* AuDeviceTreeGetChildNode(uint32_t* node, uint32_t index) {
++	if (!dtbAddress || !node)
++		return NULL;
++
++	uint32_t depth = 0;
++	uint32_t count = 0;
++
++	/* skip the parent's own name */
++	node += (strlen((char*)node) + 4) / 4;
++
++	while (1) {
++		uint32_t tag = AuDTBSwap32(*node);
++		if (tag == FDT_NOP) {
++			node++;
++		} else if (tag == FDT_PROP) {
++			uint32_t len = AuDTBSwap32(node[1]);
++			node += 3;
++			node += (len + 3) / 4;
++		} else if (tag == FDT_BEGIN_NODE) {
++			node++;
++			if (depth == 0) {
++				if (count == index)
++					return node;
++				count++;
++			}
++			depth++;
++			node += (strlen((char*)node) + 4) / 4;
++		} else if (tag == FDT_END_NODE) {
++			/* end of the parent itself */
++			if (depth == 0)
++				return NULL;
++			depth--;
++			node++;
++		} else {
++			return NULL;
++		}
++	}
++}
++
+ /**
+  * @brief AuDeviceTreeInitialize -- initialize the device tree
+  * @param fdt_address -- device tree address passed by
+diff --git a/KernelAA64/init.c b/KernelAA64/init.c
+index bece7842..4767ced8 100644
+--- a/KernelAA64/init.c
++++ b/KernelAA64/init.c
+@@ -44,6 +44,7 @@
+ #include <Hal/AA64/gic.h>
+ #include <Hal/basicacpi.h>
+ #include <Hal/AA64/aa64lowlevel.h>
++#include <Hal/AA64/aa64smp.h>
+ #include <loader.h>
+ #include <Drivers/uart.h>
+ #include <Hal/AA64/qemu.h>
+@@ -232,6 +233,11 @@ void _AuMain(KERNEL_BOOT_INFO* info) {
+ 	AuDeviceTreeMapMMIO();
+ 	AA64CPUPostInitialize(info);
+ 	AuAA64BoardInitialize();
++
++	/* bring up the secondary cores, they print themselves and park
++	 * until the scheduler learns to use them */
++	AA64SMPInitialize();
++
+ 	AuVFSInitialise();
+ 	AuInitrdInitialize(info);
+ 	/* Device nodes published by AuConsolePostInitialise (notably /dev/graph)
+diff --git a/Scripts/Linux/build_and_run_qemu.sh b/Scripts/Linux/build_and_run_qemu.sh
+index 399be19b..f43fae67 100755
+--- a/Scripts/Linux/build_and_run_qemu.sh
++++ b/Scripts/Linux/build_and_run_qemu.sh
+@@ -1255,7 +1255,7 @@ if [ "$ISO" -eq 1 ]; then
+ 
+     echo "[+] ISO ready: $iso_output"
+     echo "[+] Test it with:"
+-    echo "    qemu-system-aarch64 -machine virt,gic-version=2,highmem=off -cpu cortex-a72 -m 1024M \\"
++    echo "    qemu-system-aarch64 -machine virt,gic-version=2,highmem=off -cpu cortex-a72 -smp 4 -m 1024M \\"
+     echo "        -bios <path-to-QEMU_EFI.fd> -cdrom \"$iso_output\" -serial stdio"
+     exit 0
+ fi
+@@ -1267,8 +1267,10 @@ if [ "$BLEED" -eq 1 ]; then
+ else
+     qemu_memory="${XENEVA_QEMU_MEMORY:-1024M}"
+ fi
++qemu_smp="${XENEVA_QEMU_SMP:-4}"
+ echo "[+] Image ready! Booting QEMU..."
+ echo "[+] Guest memory: $qemu_memory"
++echo "[+] Guest cpus: $qemu_smp (XENEVA_QEMU_SMP=1 for uniprocessor)"
+ 
+ # A QEMU built without PulseAudio only exposes 'none'/'wav'. Asking it for
+ # 'pa' aborts the emulator before the guest ever boots, so ask the binary
+@@ -1290,6 +1292,9 @@ esac
+ QEMU_ARGS=(
+     -machine virt,gic-version=2,highmem=off
+     -cpu cortex-a72
++    # secondary cores sit powered off until KernelAA64 starts them with
++    # PSCI CPU_ON (Hal/aa64smp.c)
++    -smp "$qemu_smp"
+     -m "$qemu_memory"
+     -bios "$QEMU_FIRMWARE"
+     # explicit modern-only virtio-blk-pci (disable-legacy=on) instead of the
+-- 
+2.43.0
+

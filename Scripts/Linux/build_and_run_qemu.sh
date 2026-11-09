@@ -1290,7 +1290,7 @@ case "${NETSRV:-0}" in
 esac
 
 QEMU_ARGS=(
-    -machine virt,gic-version=2,highmem=off
+    -machine virt,gic-version=2,highmem=off,acpi=off
     -cpu cortex-a72
     # secondary cores sit powered off until KernelAA64 starts them with
     # PSCI CPU_ON (Hal/aa64smp.c)

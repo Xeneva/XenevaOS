@@ -249,6 +249,10 @@ void AA64CpuInitialize() {
 	cpuFrequency = 0;
 	basisTime = 0;
 
+	/* firmware leaves tpidr_el1 UNKNOWN, make AA64GetPerCPU() return
+	 * NULL until AA64PerCPUBootInitialize runs */
+	__asm__ volatile("msr tpidr_el1, xzr\n\tisb" ::: "memory");
+
 	/*
 	 * Initialize the vector table
 	 */

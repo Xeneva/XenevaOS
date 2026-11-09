@@ -51,7 +51,7 @@ if [ "${BUILD_USER_APPS:-0}" -eq 1 ]; then
         APPS=(
             Init DeodhaiXR Terminal Namdapha XELnch
             Calender Calculator Files Control XEShell btctl XENotes XEPaints XESheets
-            Clipd dcltest Phulbari
+            Clipd dcltest Phulbari monitor
         )
         # hwtest unloads the in-kernel sound driver and claims its PCI function from
         # user space, so it is only built and packed when explicitly requested:

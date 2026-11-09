@@ -95,8 +95,20 @@ static void pmm_owner_del_locked(uint16_t slot, uint64_t count) {
 static inline uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) & ~(a - 1); }
 static inline bool valid_page(uint64_t p) { return p < total_pages; }
 static inline bool power_of_two(uint64_t v) { return v && !(v & (v - 1)); }
-static inline void lock(void) { if (pmm_lock) AuAcquireSpinlock(pmm_lock); }
-static inline void unlock(void) { if (pmm_lock) AuReleaseSpinlock(pmm_lock); }
+/* IRQ safe: an interrupt handler that allocates must never spin against
+ * a holder it interrupted on the same core. Only the holder touches the
+ * saved DAIF, so one static slot is enough */
+static uint64_t pmm_lock_daif;
+static inline void lock(void) {
+	if (pmm_lock) {
+		uint64_t d = AuAcquireSpinlockIrqSave(pmm_lock);
+		pmm_lock_daif = d;
+	}
+}
+static inline void unlock(void) {
+	if (pmm_lock)
+		AuReleaseSpinlockIrqRestore(pmm_lock, pmm_lock_daif);
+}
 
 static void fatal(const char* reason, uint64_t page, uint64_t detail) {
 	AuTextOut("[pmm]: FATAL %s page=%x detail=%x\r\n", reason,

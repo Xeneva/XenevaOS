@@ -39,6 +39,8 @@
 #include <aucon.h>
 #include <Drivers/uart.h>
 #include <Hal/AA64/aa64smp.h>
+#include <Hal/AA64/aa64percpu.h>
+#include <Hal/AA64/gic.h>
 #include <Hal/AA64/aa64lowlevel.h>
 #include <Mm/pmmngr.h>
 #include <Mm/vmmngr.h>
@@ -106,6 +108,7 @@ _Static_assert(offsetof(AA64SMPBootParam, idmap_tcr) == 40, "smp boot param layo
 _Static_assert(offsetof(AA64SMPBootParam, mair) == 48, "smp boot param layout");
 _Static_assert(offsetof(AA64SMPBootParam, sctlr) == 56, "smp boot param layout");
 _Static_assert(offsetof(AA64SMPBootParam, vbar) == 64, "smp boot param layout");
+_Static_assert(offsetof(AA64SMPBootParam, exception_stack_top) == 120, "smp boot param layout");
 
 /**
  * @brief AA64PSCICall -- call into PSCI firmware through the conduit
@@ -140,18 +143,28 @@ void AA64SMPAPEntry(AA64SMPBootParam* param) {
 	isb_flush();
 	tlb_flush_vmalle1is();
 
-	uint64_t cpu_num = param->cpu_num;
-	UARTDebugOut("From SMP : %d \r\n", cpu_num);
+	uint32_t cpu_num = (uint32_t)param->cpu_num;
+	AA64PerCPUInitialize(cpu_num, param->mpidr, param->exception_stack_top);
+	AA64PerCPU* self = AA64GetPerCPU();
+	self->state = AA64_CPU_STATE_ONLINE;
+
+	/* banked GIC state (GICv2 CPU interface / GICv3 redistributor) can
+	 * only be programmed from the core itself */
+	GICInitializeCPU(cpu_num, param->mpidr);
+	UARTDebugOut("From core : %d mpidr : %x \r\n", (uint64_t)cpu_num, param->mpidr);
 
 	/* report in, the boot core is spinning on this */
 	dmb_ish();
 	*(volatile uint64_t*)&param->online = 1;
 	dsb_ish();
 
-	/* park, irqs stay masked until the scheduler learns about us
-	 * TODO: per cpu GIC CPU interface, timer and an idle thread */
-	while (1)
-		_wfi();
+	/* irqs stay masked until AA64SMPStartSchedulers hands us an idle
+	 * thread. wfe cannot miss the wakeup: a sev between the load and the
+	 * wfe leaves the event register set and wfe falls straight through */
+	while (!__atomic_load_n(&self->sched_release, __ATOMIC_ACQUIRE))
+		__asm__ volatile("wfe");
+
+	AuSchedEnterAPIdle();
 }
 
 /**
@@ -200,6 +213,13 @@ static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr) {
 		return false;
 	}
 
+	uint64_t exc_stack = AuPmmngrAllocPages(AA64_SMP_EXC_STACK_PAGES, 1, 0, AURORA_PAGE_KERNEL);
+	if (exc_stack == PMM_INVALID_PHYS) {
+		AuTextOut("[aurora]: smp: no exception stack for cpu %d \r\n", (uint64_t)cpu_num);
+		AuPmmngrReleasePages(stack);
+		return false;
+	}
+
 	AA64SMPBootParam* param = AA64SMPGetBootParam(cpu_num);
 	memset(param, 0, sizeof(AA64SMPBootParam));
 	param->entry = (uint64_t)AA64SMPAPEntry;
@@ -216,6 +236,8 @@ static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr) {
 	param->cpu_num = cpu_num;
 	param->mpidr = mpidr;
 	param->online = 0;
+	param->_isolate = 0;
+	param->exception_stack_top = P2V(exc_stack) + AA64_SMP_EXC_STACK_PAGES * PAGE_SIZE;
 
 	/* the trampoline reads this with the MMU off */
 	aa64_dc_cvac_range(param, sizeof(AA64SMPBootParam));
@@ -225,6 +247,7 @@ static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr) {
 	if (ret != PSCI_RET_SUCCESS) {
 		AuTextOut("[aurora]: smp: CPU_ON mpidr %x failed (%d) \r\n", mpidr, ret);
 		AuPmmngrReleasePages(stack);
+		AuPmmngrReleasePages(exc_stack);
 		return false;
 	}
 
@@ -248,9 +271,12 @@ static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr) {
  * in the device tree through PSCI CPU_ON
  */
 void AA64SMPInitialize() {
+	/* boot core (logical cpu 0) per cpu data is set up earlier by
+	 * AA64PerCPUBootInitialize, called from _AuMain */
 	uint32_t* cpus = AuDeviceTreeGetNode("cpus");
 	if (!cpus) {
 		AuTextOut("[aurora]: smp: no /cpus node, staying uniprocessor \r\n");
+		AuDeviceTreeDumpAll();
 		return;
 	}
 
@@ -301,6 +327,7 @@ void AA64SMPInitialize() {
 		addr_cells = 1;
 	uint64_t boot_mpidr = read_mpidr_el1() & AA64_MPIDR_AFF_MASK;
 
+	/** Parse device tree and verify cpu cores here */
 	for (uint32_t i = 0;; i++) {
 		uint32_t* cpu = AuDeviceTreeGetChildNode(cpus, i);
 		if (!cpu)
@@ -337,6 +364,70 @@ void AA64SMPInitialize() {
 	}
 
 	AuTextOut("[aurora]: smp: %d cpu(s) online \r\n", (uint64_t)_smp_cpu_count);
+}
+
+/**
+ * @brief AA64SMPStartSchedulers -- give every online secondary core its
+ * idle thread and release it from its wait loop, called by
+ * AuSchedulerStart on the boot core
+ */
+void AA64SMPStartSchedulers() {
+	for (uint32_t cpu = 1; cpu < _smp_next_slot; cpu++) {
+		AA64PerCPU* p = &_aa64_percpu[cpu];
+		if (p->magic != AA64_PERCPU_MAGIC || p->state != AA64_CPU_STATE_ONLINE)
+			continue;
+		p->idleThread = AuSchedCreateAPIdleThread(cpu);
+		if (!p->idleThread) {
+			AuTextOut("[aurora]: smp: no idle thread for cpu %d \r\n", (uint64_t)cpu);
+			continue;
+		}
+		/* idleThread must be visible before the release flag */
+		__atomic_store_n(&p->sched_release, 1, __ATOMIC_RELEASE);
+		dsb_ish();
+		__asm__ volatile("sev");
+	}
+}
+
+_Static_assert(sizeof(AA64CPUStats) == 64, "AA64CPUStats is user space ABI (XECpuStats)");
+
+/**
+ * @brief AA64SMPGetCPUStats -- fill one AA64CPUStats per known core
+ * @param out -- destination array
+ * @param max -- capacity of out
+ * @return number of entries written
+ */
+int AA64SMPGetCPUStats(AA64CPUStats* out, int max) {
+	int n = 0;
+	for (uint32_t c = 0; c < AA64_SMP_MAX_CPUS && n < max; c++) {
+		AA64PerCPU* p = &_aa64_percpu[c];
+		if (p->magic != AA64_PERCPU_MAGIC)
+			continue;
+		AA64CPUStats s;
+		memset(&s, 0, sizeof(s));
+		s.cpu = c;
+		s.online = (p->state == AA64_CPU_STATE_ONLINE) && (c == 0 || p->sched_release);
+		s.mpidr = p->mpidr;
+		/* written by the owning core only, aligned 64 bit loads */
+		s.busy_ticks = p->busy_cnt;
+		s.idle_ticks = p->idle_cnt;
+		s.context_switches = p->context_switches;
+		s.timer_irqs = p->tick_count;
+		s.counter_freq = p->timer_freq;
+		memcpy(s.current, p->cur_name, sizeof(s.current));
+		s.current[sizeof(s.current) - 1] = '\0';
+		memcpy(&out[n++], &s, sizeof(s));
+	}
+	return n;
+}
+
+/**
+ * @brief AA64SMPIPILocalInit -- enable the IPI SGIs on the calling core
+ */
+void AA64SMPIPILocalInit() {
+#ifndef __TARGET_BOARD_RPI3__
+	GICEnablePPILocal(AA64_IPI_RESCHED);
+	GICEnablePPILocal(AA64_IPI_DEFERRED_IRQ);
+#endif
 }
 
 /**

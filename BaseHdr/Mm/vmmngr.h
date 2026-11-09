@@ -70,6 +70,9 @@
 #define PTE_KERNEL_NOT_EXECUTABLE (1ULL << 53)
 
 #define PTE_NORMAL_MEM			 PTE_ATTR_IDX_1
+/* not global: TLB entries are tagged with the ASID. Set on every TTBR0
+ * (user half) leaf, see vmm_ng() */
+#define PTE_NG					 (1ULL << 11)
 #define PTE_DEVICE_MEM			 PTE_ATTR_IDX_0
 #define PTE_NORMAL_NON_CACHEABLE (2ULL << 2)
 #endif
@@ -243,6 +246,19 @@ extern void AuFreePagesEx(uint64_t* root, uint64_t virt_addr, bool free_physical
  * Cached/device pages and inherited upper-half kernel tables are preserved.
  * Shared-memory mappings must be detached by the SHM manager first. */
 extern bool AuDestroyVirtualAddressSpace(uint64_t* root);
+
+/**
+ * @brief AuVmmAsidInitialize -- detect ASID width and switch TCR_EL1 to
+ * ASID tagged TTBR0 translations. Boot core, before secondary cores start
+ */
+extern void AuVmmAsidInitialize(void);
+
+/**
+ * @brief AuVmmActivate -- load an address space into TTBR0 of the calling
+ * core with its ASID, no TLB flush needed
+ * @param pml -- virtual address of the root table (AA64Thread::pml)
+ */
+extern void AuVmmActivate(uint64_t pml);
 #endif
 
 /**

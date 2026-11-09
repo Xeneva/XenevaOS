@@ -37,6 +37,7 @@
 #include <process.h>
 #include <dtb.h>
 #include <Hal/AA64/sched.h>
+#include <Hal/AA64/aa64percpu.h>
 #include <Board/RPI3bp/rpi3bp.h>
 
 GIC __gic;
@@ -95,6 +96,15 @@ typedef void (*irq_callback)(int spi);
 
 #define GICR(n) (n.gicRMMIO)
 
+/* GICR_TYPER[63:32] is the frame's Aff3.Aff2.Aff1.Aff0, bit 4 marks the
+ * last frame of the redistributor region */
+#define GICR_TYPER_LAST	 (1ULL << 4)
+#define GICR_MAX_FRAMES	 AA64_SMP_MAX_CPUS
+#define GICR_FRAME_PAGES (GICR_STRIDE / PAGE_SIZE)
+
+/* redistributor RD_base of each logical cpu, filled by gicrInitFrame */
+static uint64_t _gicr_cpu_base[AA64_SMP_MAX_CPUS];
+
 uint64_t* gic_dist_mmio;
 uint64_t* gic_redist_mmio;
 
@@ -105,6 +115,7 @@ static irq_callback callbacks[MAX_SPIS];
 
 /* forward: GICv2 SPIs need an explicit CPU target, see GICEnableSPIIRQ */
 void GICSetTargetCPU(int spi);
+static void gicRecordTargetMask(void);
 
 /**
  * @brief gic_outqw -- writes a value to mmio registers in qword
@@ -255,17 +266,46 @@ uint32_t GICVerifyVersion() {
 }
 
 /**
- * @brief GICRInitialize -- initialize GIC redistributor
- * @param cpu_num -- desired cpu core number
+ * @brief gicrFindFrame -- find the redistributor frame that belongs to
+ * the core with the given affinity
+ * @return RD_base of the frame, 0 if no frame matches
  */
-void GICRInitialize(int cpu_num) {
-	AuTextOut("Initializing GICR \r\n");
-	uint64_t* gicr = (uint64_t*)GICR(__gic) + (cpu_num * GICR_STRIDE);
-	uint64_t* sgi = (uint64_t*)((uint64_t)gicr + GICR_SGI_BASE);
+static uint64_t gicrFindFrame(uint64_t mpidr) {
+	uint32_t want = (uint32_t)(((mpidr >> 8) & 0xFF000000ULL) | (mpidr & 0xFFFFFFULL));
+	for (uint32_t i = 0; i < GICR_MAX_FRAMES; i++) {
+		uint64_t frame = GICR(__gic) + (uint64_t)i * GICR_STRIDE;
+		uint64_t typer = *(volatile uint64_t*)(frame + GICR_TYPER);
+		if ((uint32_t)(typer >> 32) == want)
+			return frame;
+		if (typer & GICR_TYPER_LAST)
+			break;
+	}
+	return 0;
+}
 
-	uint64_t gicr_typer = gic_inl_(gicr, GICR_TYPER);
-	uint32_t proc_num = (uint32_t)((gicr_typer >> 8) & 0xFFFF); // >>80
-	AuTextOut("GICR : %x , cpu num : %d \r\n", gicr, proc_num);
+/**
+ * @brief gicrInitFrame -- wake and configure the calling core's
+ * redistributor, then its ICC system register interface
+ * @param cpu_num -- logical number of the calling core
+ * @param mpidr -- affinity of the calling core
+ * @param verbose -- print progress (boot core only, the console is not
+ * safe to use from several cores yet)
+ */
+static void gicrInitFrame(uint32_t cpu_num, uint64_t mpidr, bool verbose) {
+	uint64_t frame = gicrFindFrame(mpidr);
+	if (!frame) {
+		/* no affinity match, fall back to frame order */
+		frame = GICR(__gic) + (uint64_t)cpu_num * GICR_STRIDE;
+	}
+	_gicr_cpu_base[cpu_num] = frame;
+	uint64_t* gicr = (uint64_t*)frame;
+	uint64_t* sgi = (uint64_t*)(frame + GICR_SGI_BASE);
+
+	if (verbose) {
+		uint64_t gicr_typer = gic_inl_(gicr, GICR_TYPER);
+		uint32_t proc_num = (uint32_t)((gicr_typer >> 8) & 0xFFFF);
+		AuTextOut("GICR : %x , cpu num : %d \r\n", gicr, proc_num);
+	}
 	uint32_t waker = gic_inl_(gicr, GICR_WAKER);
 	waker &= ~GICR_WAKER_PS;
 	gic_outl_(gicr, GICR_WAKER, waker);
@@ -281,14 +321,54 @@ void GICRInitialize(int cpu_num) {
 	while (gic_inl_(gicr, GICR_CTLR) & GICR_CTLR_RWP)
 		;
 
+	/* GICR_IPRIORITYR already includes the SGI frame offset, so it is
+	 * relative to RD_base, not to sgi (that landed in the next frame) */
 	for (int i = 0; i < 8; i++)
-		gic_outl_(sgi, GICR_IPRIORITYR(i), 0xA0A0A0A0);
+		gic_outl_(gicr, GICR_IPRIORITYR(i), 0xA0A0A0A0);
 
 	/** initialize the cpu interface **/
-	if (gic_cpu_init())
+	if (gic_cpu_init() && verbose)
 		AuTextOut("Failed to initialize GIC Cpu interface \r\n");
+}
 
+/**
+ * @brief GICRInitialize -- initialize GIC redistributor
+ * @param cpu_num -- desired cpu core number
+ */
+void GICRInitialize(int cpu_num) {
+	AuTextOut("Initializing GICR \r\n");
+	gicrInitFrame((uint32_t)cpu_num, read_mpidr_el1() & AA64_MPIDR_AFF_MASK, true);
 	AuTextOut("GIC-R initialized \r\n");
+}
+
+/**
+ * @brief GICInitializeCPU -- bring up the calling core's GIC CPU interface
+ * (GICv2) or its redistributor and system register interface (GICv3).
+ * The boot core does this inside GICInitialize, secondary cores call it
+ * from AA64SMPAPEntry.
+ * @param cpu_num -- logical number of the calling core
+ * @param mpidr -- affinity of the calling core
+ */
+void GICInitializeCPU(uint32_t cpu_num, uint64_t mpidr) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)cpu_num;
+	(void)mpidr;
+#else
+	if (cpu_num >= AA64_SMP_MAX_CPUS)
+		return;
+	if (__gic.version >= GIC_VERSION_3) {
+		gicrInitFrame(cpu_num, mpidr, false);
+		return;
+	}
+	if (!__gic.gicCMMIO)
+		return;
+	/* GICC and the SGI/PPI half of GICD are banked per core */
+	gic_outl_((uint64_t*)__gic.gicCMMIO, GICC_PMR, 0xFF);
+	gic_outl_((uint64_t*)__gic.gicCMMIO, GICC_CTLR, 0x3);
+	dsb_sy_barrier();
+	isb_flush();
+	gicRecordTargetMask();
+#endif
 }
 
 /**
@@ -380,12 +460,12 @@ skip_:
 	if (__gic.gicMSIPhys)
 		__gic.gicMSIMMIO = (uint64_t)AuMapMMIO(__gic.gicMSIPhys, 2);
 
-	/** map Redist to MMIO, for one redistributor 128 KiB, 
-	 * for 4 cores, it consumes 512 KiB 128 pages, for now
-	 * not supporting multi cores, only one core is needed
+	/** map Redist to MMIO, one redistributor frame is 128 KiB,
+	 * map one frame per possible cpu (AA64_SMP_MAX_CPUS)
 	 */
 	if (version >= GIC_VERSION_3)
-		__gic.gicRMMIO = (uint64_t)AuMapMMIO(__gic.gicRPhys, 128);
+		__gic.gicRMMIO =
+			(uint64_t)AuMapMMIO(__gic.gicRPhys, GICR_MAX_FRAMES * GICR_FRAME_PAGES);
 
 	gic_regs = (volatile uint32_t*)__gic.gicDMMIO;
 	gicc_regs = (volatile uint32_t*)__gic.gicCMMIO;
@@ -413,6 +493,7 @@ skip_:
 		gic_outl_((uint64_t*)__gic.gicCMMIO, GICC_PMR, 0x1ff);
 		gic_outl_((uint64_t*)__gic.gicCMMIO, GICC_CTLR, 0x3);
 		isb_flush();
+		gicRecordTargetMask();
 	}
 
 	/* enable the distributor interface */
@@ -435,19 +516,56 @@ skip_:
 	AuTextOut("GIC Initialized \r\n");
 }
 
+/* GICv2: banked GICD_ITARGETSR0 reads back the calling core's own CPU
+ * interface bit, which is what GICD_SGIR wants as target */
+static void gicRecordTargetMask(void) {
+	AA64PerCPU* p = AA64GetPerCPU();
+	if (!p || __gic.version >= GIC_VERSION_3)
+		return;
+	p->gic_target_mask = *(volatile uint8_t*)(GICD(__gic) + 0x800);
+}
+
+/* RD_base of a logical cpu, falling back to frame order before
+ * gicrInitFrame ran for it */
+static uint64_t gicrCPUBase(uint32_t cpu) {
+	if (cpu < AA64_SMP_MAX_CPUS && _gicr_cpu_base[cpu])
+		return _gicr_cpu_base[cpu];
+	return GICR(__gic) + (uint64_t)cpu * GICR_STRIDE;
+}
+
 void GICREnablePPI(uint32_t cpu, uint32_t intid) {
-	size_t sgi = GICR(__gic) + (cpu * GICR_STRIDE) + GICR_SGI_BASE;
+	size_t sgi = gicrCPUBase(cpu) + GICR_SGI_BASE;
 	gic_outl_((uint64_t*)sgi, 0x100, (1u << intid));
 }
 
 void GICRSetPPIPriority(uint32_t cpu, uint32_t intid, uint8_t prio) {
-	size_t sgi = GICR(__gic) + (cpu * GICR_STRIDE) + GICR_SGI_BASE;
+	size_t sgi = gicrCPUBase(cpu) + GICR_SGI_BASE;
 	uint32_t reg = intid / 4;
 	uint32_t shift = (intid % 4) * 8;
 	uint32_t val = gic_inl_((uint64_t*)sgi, 0x400 + reg * 4);
 	val &= ~(0xFFu << shift);
 	val |= ((uint32_t)prio << shift);
 	gic_outl_((uint64_t*)sgi, 0x400 + reg * 4, val);
+}
+
+/**
+ * @brief GICEnablePPILocal -- enable an SGI/PPI on the calling core only
+ * @param irq -- interrupt id, below 32
+ */
+void GICEnablePPILocal(uint32_t irq) {
+	if (irq >= 32)
+		return;
+	if (__gic.version >= GIC_VERSION_3) {
+		uint32_t cpu = AA64GetCPUNum();
+		GICREnablePPI(cpu, irq);
+		GICRSetPPIPriority(cpu, irq, 0xA0);
+		return;
+	}
+	/* GICv2: IPRIORITYR0-7 and ISENABLER0 are banked per core */
+	*(volatile uint8_t*)(GICD(__gic) + GICD_IPRIORITYR(irq)) = 0xA0;
+	GICD_ISENABLER(0) = (1u << irq);
+	dsb_sy_barrier();
+	isb_flush();
 }
 
 /** @briefGICEnableIRQ -- enable an IRQ
@@ -750,4 +868,51 @@ void GICDisable() {
 		UARTDebugOut("[aurora]: GIC version 2 disabling \r\n");
 	}
 	UARTDebugOut("[aurora]: GIC disabled \r\n");
+}
+
+/**
+ * @brief GICSendSGI -- send a software generated interrupt to one core
+ * @param cpu -- logical cpu number of the target
+ * @param sgi -- SGI id, 0..15
+ */
+void GICSendSGI(uint32_t cpu, uint32_t sgi) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)cpu;
+	(void)sgi;
+#else
+	if (cpu >= AA64_SMP_MAX_CPUS)
+		return;
+	AA64PerCPU* p = &_aa64_percpu[cpu];
+	/* whatever the target is woken up for must be visible first */
+	__asm__ volatile("dsb ishst" ::: "memory");
+	if (__gic.version >= GIC_VERSION_3) {
+		uint64_t m = p->mpidr;
+		uint64_t v = (((m >> 32) & 0xFF) << 48) | (((m >> 16) & 0xFF) << 32) |
+					 (((m >> 8) & 0xFF) << 16) | ((uint64_t)(sgi & 0xF) << 24) |
+					 (1ULL << (m & 0xF));
+		__asm__ volatile("msr S3_0_C12_C11_5, %0\n isb" ::"r"(v)); /* ICC_SGI1R_EL1 */
+	} else {
+		uint32_t mask = p->gic_target_mask & 0xFF;
+		if (!mask)
+			return;
+		/* GICD_SGIR: TargetListFilter 0 (use the list), CPUTargetList, ID */
+		*(volatile uint32_t*)(GICD(__gic) + 0xF00) = (mask << 16) | (sgi & 0xF);
+	}
+#endif
+}
+
+/** @brief GICMaskIRQ -- stop the distributor forwarding an SPI */
+void GICMaskIRQ(uint32_t irq) {
+	if (irq < 32 || irq >= 1020)
+		return;
+	GICD_ICENABLE(irq / 32) = (1u << (irq % 32));
+	dsb_sy_barrier();
+}
+
+/** @brief GICUnmaskIRQ -- let the distributor forward an SPI again */
+void GICUnmaskIRQ(uint32_t irq) {
+	if (irq < 32 || irq >= 1020)
+		return;
+	GICD_ISENABLER(irq / 32) = (1u << (irq % 32));
+	dsb_sy_barrier();
 }

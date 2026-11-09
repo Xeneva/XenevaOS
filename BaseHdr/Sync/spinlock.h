@@ -63,4 +63,19 @@ AU_EXTERN AU_EXPORT void AuAcquireSpinlock(Spinlock* lock);
 */
 AU_EXTERN AU_EXPORT void AuReleaseSpinlock(Spinlock* lock);
 
+/*
+* AuAcquireSpinlockIrqSave -- masks IRQs on this core, then acquires the
+* lock. Use it for any lock an interrupt handler can also take.
+* @param lock -- pointer to spinlock
+* @return previous DAIF, hand it to AuReleaseSpinlockIrqRestore
+*/
+AU_EXTERN AU_EXPORT uint64_t AuAcquireSpinlockIrqSave(Spinlock* lock);
+
+/*
+* AuReleaseSpinlockIrqRestore -- releases the lock, then restores DAIF
+* @param lock -- pointer to spinlock
+* @param daif -- value returned by AuAcquireSpinlockIrqSave
+*/
+AU_EXTERN AU_EXPORT void AuReleaseSpinlockIrqRestore(Spinlock* lock, uint64_t daif);
+
 #endif

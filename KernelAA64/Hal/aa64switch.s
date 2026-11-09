@@ -33,6 +33,21 @@
 .extern AuPrintStack
 .extern AuIdleLoop
 
+/* SMP switch completion: run right after a core moved SP onto the next
+ * thread's stack. Drops the previous thread's on_cpu claim (release
+ * store, its saved context is published before it) so another core may
+ * resume it. AA64PerCPU::switchRelease, offset 32 (asserted in
+ * Hal/aa64percpu.c), holds &prev->on_cpu or 0. Clobbers x9, x10. */
+.macro sched_finish_switch
+   mrs x9, tpidr_el1
+   cbz x9, .Lsfs_done\@
+   ldr x10, [x9, #32]
+   cbz x10, .Lsfs_done\@
+   str xzr, [x9, #32]
+   stlr wzr, [x10]
+.Lsfs_done\@:
+.endm
+
 .global aa64_store_context
 aa64_store_context:
 /* x0 holds the register frame */
@@ -130,6 +145,7 @@ first_time_sex:
     ldr x2, [x1, #96]
     mov sp, x2
     msr SP_EL0, x2
+    sched_finish_switch
     eret
 
 .global resume_user
@@ -389,13 +405,8 @@ aa64_schedule_init:
    mrs x3, spsr_el1
    str x3, [x0,#112]
 
-   msr ttbr0_el1, x2
-   //msr ttbr1_el1, x0
-   isb sy
-   dsb ishst
-   tlbi vmalle1is 
-   dsb ish
-   isb 
+   /* TTBR0 (with its ASID) was already switched by AuScheduleNext
+    * through AuVmmActivate; x2 is unused */
 
    /* x1 is always _idle_thr here (AuScheduleNext's only caller of this
     * routine hands off to idle). Idle gets preempted by every timer tick,
@@ -411,6 +422,7 @@ aa64_schedule_init:
    ldr x2, [x1, #0x100]
    bic x2, x2, #15
    mov sp, x2
+   sched_finish_switch
    adrp x3, AuIdleLoop
    add x3, x3, :lo12:AuIdleLoop
    br x3
@@ -420,6 +432,7 @@ aa64_restore_sp:
    ldr x2, [x0,#96]
    bic x2, x2, #15
    mov sp, x2
+   sched_finish_switch
 
    ldr x4, [sp, #200]
    ldp x5, x6, [sp, #192]
@@ -455,6 +468,7 @@ aa64_resume_exception_frame:
    //mov sp, x0
    msr ELR_EL1, x1
    msr SPSR_EL1, x2
+   sched_finish_switch
    ldp x30, x0, [sp], #16
    msr SP_EL0, x0
    ldp x28, x29, [sp], #16
