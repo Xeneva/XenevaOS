@@ -29,6 +29,8 @@
 *
 **/
 
+#include <Hal/AA64/aa64percpu.h>
+#include <Hal/AA64/aa64smp.h>
 #include <stdint.h>
 #include <Drivers/uart.h>
 #include <Hal/AA64/aa64lowlevel.h>
@@ -117,7 +119,66 @@ int ExecUname(struct utsname* name) {
 	return 0;
 }
 
+/**
+ * @brief GetCPUStats -- SYS_GET_CPU_STATS, per core usage counters
+ * @param buf -- user array of AA64CPUStats (XECpuStats)
+ * @param max -- capacity of buf
+ * @return number of entries written, -1 on a bad buffer
+ */
+int GetCPUStats(AA64CPUStats* buf, int max) {
+	if (!buf || max <= 0)
+		return -1;
+	if (max > AA64_SMP_MAX_CPUS)
+		max = AA64_SMP_MAX_CPUS;
+	if (!__BORDOISILA_UBUF_VALIDATE(buf, (size_t)max * sizeof(AA64CPUStats)))
+		return -1;
+	return AA64SMPGetCPUStats(buf, max);
+}
+
+/**
+ * @brief CpuSetIsolated -- SYS_CPU_SET_ISOLATED, reserve cores (root only)
+ * @param mask -- bit n isolates core n; 0 = use all cores normally
+ */
+int CpuSetIsolated(uint32_t mask) {
+	AA64Thread* thr = AuGetCurrentThread();
+	AuProcess* proc = thr ? (AuProcess*)thr->procSlot : NULL;
+	if (!proc)
+		proc = thr ? AuProcessFindThread(thr) : NULL;
+	if (!proc || !AuCredIsRoot(&proc->creds))
+		return -3;
+	return AuCpuSetIsolatedMask(mask);
+}
+
+/** @brief CpuGetIsolated -- SYS_CPU_GET_ISOLATED */
+uint64_t CpuGetIsolated() {
+	return AuCpuGetIsolatedMask();
+}
+
+/**
+ * @brief ThreadSetAffinity -- SYS_THREAD_SET_AFFINITY, bind the calling
+ * thread to a core (-1 unbinds). Returns once it runs there
+ */
+int ThreadSetAffinity(int cpu) {
+	AA64Thread* thr = AuGetCurrentThread();
+	int r = AuThreadSetAffinity(thr, cpu);
+	if (r != 0)
+		return r;
+	if (cpu >= 0 && (uint32_t)cpu != AA64GetCPUNum()) {
+		/* move now: give up this core, resume at EL0 on the bound one */
+		AA64Registers* regs = AA64GetCurrentRegCtx();
+		regs->x0 = 0;
+		regs->x6 = 0;
+		AuScheduleThread(regs);
+	}
+	return 0;
+}
+
 AA64Registers* AA64GetCurrentRegCtx() {
+	/* per thread: syscalls run on several cores at once now, and a parked
+	 * syscall may resume on another core */
+	AA64Thread* thr = AuGetCurrentThread();
+	if (thr && thr->syscall_regs)
+		return thr->syscall_regs;
 	return svcCurrentRegs;
 }
 
@@ -223,6 +284,10 @@ static void* syscalls[AURORA_MAX_SYSCALL] = {
 	[SYS_FILE_CHMOD] = Chmod,
 	[SYS_FILE_FSYS_OWN] = AuVFSOwnFsys,
 	[SYS_FUTEX] = AuFutexSyscall,
+	[SYS_GET_CPU_STATS] = GetCPUStats,
+	[SYS_CPU_SET_ISOLATED] = CpuSetIsolated,
+	[SYS_CPU_GET_ISOLATED] = CpuGetIsolated,
+	[SYS_THREAD_SET_AFFINITY] = ThreadSetAffinity,
 };
 
 #ifdef __KERNEL_PROFILER_ON__
@@ -321,6 +386,10 @@ static char* syscall_name[AURORA_MAX_SYSCALL] = {
 	[SYS_SET_WALLTIME] = "AuSetWalltime",
 	[SYS_GET_WALLTIME] = "AuGetWalltime",
 	[SYS_FUTEX] = "AuFutexSyscall",
+	[SYS_GET_CPU_STATS] = "GetCPUStats",
+	[SYS_CPU_SET_ISOLATED] = "CpuSetIsolated",
+	[SYS_CPU_GET_ISOLATED] = "CpuGetIsolated",
+	[SYS_THREAD_SET_AFFINITY] = "ThreadSetAffinity",
 };
 #endif
 
@@ -357,6 +426,7 @@ void AuAA64SyscallHandler(AA64Registers* regs) {
 			linux_thr->returnFromSyscall = 1;
 			linux_thr->syscallNum = (uint32_t)regs->x8;
 			svcCurrentRegs = regs;
+			linux_thr->syscall_regs = regs;
 			retcode = (uint64_t)AuLinuxSyscall((uint64_t)regs->x8,
 											   (uint64_t)regs->x0,
 											   (uint64_t)regs->x1,
@@ -386,6 +456,7 @@ skip_1:
 	currThr->returnFromSyscall = 1;
 	currThr->syscallNum = vector;
 	svcCurrentRegs = regs;
+	currThr->syscall_regs = regs;
 
 	syscall_func func = (syscall_func)syscalls[vector];
 	if (!func) {
@@ -425,4 +496,59 @@ skip_1:
 skip_3:
 #endif
 	return;
+}
+
+/**
+ * @brief AuAA64SyscallFast -- syscalls that run without the BKL.
+ *
+ * Only calls whose state has its own protection: the scheduler lock
+ * (sleep), the calling thread itself (thread id) and single writer
+ * clock values. Taken only by native user threads whose process needs no
+ * lookup (procSlot set; Linux processes use their own table), and only
+ * while srvfs keeps no per thread history (its hooks are not SMP safe).
+ * @param regs -- syscall exception frame
+ * @return true if the syscall was handled here
+ */
+bool AuAA64SyscallFast(AA64Registers* regs) {
+	uint64_t vector = regs->x16;
+	switch (vector) {
+	case SYS_GET_THREAD_ID:
+	case SYS_PROCESS_SLEEP:
+	case SYS_GET_SYSTEM_TIMER_TICK:
+	case SYS_GET_CURRENT_US:
+	case SYS_GET_CURRENT_MS:
+		break;
+	default:
+		return false;
+	}
+	AA64Thread* thr = AuGetCurrentThread();
+	if (!thr || !(thr->threadType & THREAD_LEVEL_USER))
+		return false;
+	AuProcess* proc = (AuProcess*)thr->procSlot;
+	if (proc) {
+		if (proc->type_flags & PROCESS_TYPE_LINUX)
+			return false;
+	} else if (!(thr->threadType & THREAD_LEVEL_NOPROC)) {
+		return false;
+	}
+	if (g_srvfs_active)
+		return false;
+	syscall_func func = (syscall_func)syscalls[vector];
+	if (!func)
+		return false;
+
+	mask_irqs();
+	uint64_t syscall_elr;
+	uint64_t syscall_spsr = read_spsr_el1();
+	__asm__ volatile("mrs %0, elr_el1" : "=r"(syscall_elr));
+	thr->returnFromSyscall = 1;
+	thr->syscallNum = (uint32_t)vector;
+	thr->syscall_regs = regs;
+	uint64_t retcode = func(regs->x0, regs->x1, regs->x2, regs->x3, regs->x4, regs->x5);
+	__asm__ volatile("msr elr_el1, %0" : : "r"(syscall_elr));
+	__asm__ volatile("msr spsr_el1, %0" : : "r"(syscall_spsr));
+	regs->x0 = retcode;
+	regs->x6 = retcode;
+	thr->returnFromSyscall = 0;
+	return true;
 }

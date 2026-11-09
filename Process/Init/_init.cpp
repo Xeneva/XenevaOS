@@ -384,8 +384,49 @@ static void init_watch_svcmgr() {
 	g_svcmgr_pid = launch_svcmgr();
 }
 
+/**
+ * @brief init_apply_core_reservation -- read /cores.cnf and reserve cores.
+ * "isolate=none" (or no file) keeps every core general; "isolate=2-3" or
+ * "isolate=1,3" reserves those cores for threads that bind themselves
+ * with _KeThreadSetAffinity (LLM workers, HFT loops, ...)
+ */
+static void init_apply_core_reservation() {
+	char cfg[64] = {0};
+	int fd = _KeOpenFile("/cores.cnf", FILE_OPEN_READ_ONLY);
+	if (fd == -1)
+		return;
+	_KeReadFile(fd, cfg, sizeof(cfg) - 1);
+	_KeCloseFile(fd);
+	const char* p = strstr(cfg, "isolate=");
+	if (!p)
+		return;
+	p += 8;
+	uint32_t mask = 0;
+	if (strncmp(p, "none", 4) != 0) {
+		while (*p >= '0' && *p <= '9') {
+			int lo = 0, hi;
+			while (*p >= '0' && *p <= '9')
+				lo = lo * 10 + (*p++ - '0');
+			hi = lo;
+			if (*p == '-') {
+				p++;
+				hi = 0;
+				while (*p >= '0' && *p <= '9')
+					hi = hi * 10 + (*p++ - '0');
+			}
+			for (int c = lo; c <= hi && c < 32; c++)
+				mask |= (1u << c);
+			if (*p == ',')
+				p++;
+		}
+	}
+	int r = _KeCpuSetIsolated(mask);
+	_KePrint("[init]: core reservation mask %x -> %d \r\n", mask, r);
+}
+
 extern "C" void main(int argc, char* argv[]) {
 	int pid = _KeGetProcessID();
+	init_apply_core_reservation();
 
 	_KePrint("Init Process running ii %d\n", pid);
 	int threadID = _KeGetThreadID();

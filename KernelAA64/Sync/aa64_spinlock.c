@@ -28,6 +28,7 @@
 
 #include <Sync/spinlock.h>
 #include <_null.h>
+#include <Hal/AA64/aa64lowlevel.h>
 #include <Mm/kmalloc.h>
 #if defined(__GNUC__) || defined(__clang__)
 #include <stdbool.h>
@@ -52,16 +53,25 @@ AU_EXTERN AU_EXPORT Spinlock* AuCreateSpinlock(bool early) {
 		return &early_spin[early_spinlock_cnt++];
 	}else {
 		spinlock = (Spinlock*)kmalloc(sizeof(Spinlock));
+		if (!spinlock)
+			return NULL;
 		spinlock->value = 0;
 	}
-	return NULL;
+	/* this used to return NULL, which turned every heap allocated lock
+	 * into a no-op (Acquire/Release ignore NULL) */
+	return spinlock;
 }
 
 /*
- * AuDeleteSpinlock -- no-op for early spinlocks
+ * AuDeleteSpinlock -- frees a heap allocated spinlock, no-op for early
+ * spinlocks (they live in early_spin[])
  */
 AU_EXTERN AU_EXPORT void AuDeleteSpinlock(Spinlock* lock) {
-	(void)lock;
+	if (!lock)
+		return;
+	if (lock >= &early_spin[0] && lock < &early_spin[8])
+		return;
+	kfree(lock);
 }
 
 /*
@@ -80,4 +90,24 @@ AU_EXTERN AU_EXPORT void AuReleaseSpinlock(Spinlock* lock) {
 	if (!lock)
 	   return;
 	aa64_spinlock_release((uint32_t*)&lock->value);
+}
+
+/*
+ * AuAcquireSpinlockIrqSave -- mask IRQs on this core, then acquire
+ */
+AU_EXTERN AU_EXPORT uint64_t AuAcquireSpinlockIrqSave(Spinlock* lock) {
+	uint64_t daif = read_daif();
+	mask_irqs();
+	if (lock)
+		aa64_spinlock_acquire((uint32_t*)&lock->value);
+	return daif;
+}
+
+/*
+ * AuReleaseSpinlockIrqRestore -- release, then restore the saved DAIF
+ */
+AU_EXTERN AU_EXPORT void AuReleaseSpinlockIrqRestore(Spinlock* lock, uint64_t daif) {
+	if (lock)
+		aa64_spinlock_release((uint32_t*)&lock->value);
+	restore_daif(daif);
 }

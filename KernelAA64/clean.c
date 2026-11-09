@@ -42,6 +42,8 @@
 #include <_null.h>
 
 static void AuCleanThread(AA64Thread* thr) {
+	/* its stack is freed below */
+	AuThreadWaitOffCPU(thr);
 	AuThreadCleanTrash(thr);
 	if (thr->originalKSp) {
 		uint64_t location = (thr->originalKSp + 64) - KERNEL_STACK_SIZE;
@@ -78,6 +80,11 @@ void AuProcessClean(AuProcess* parent, AuProcess* killable) {
 	if (!AuProcessCanReap(killable))
 		return;
 	UARTDebugOut("[aurora-clean]: killing process : %s \r\n", killable->name);
+	/* a thread of killable may still be finishing its time slice on
+	 * another core, nothing below may run under it */
+	AuThreadWaitOffCPU(killable->main_thread);
+	for (int i = 0; i < killable->num_thread; ++i)
+		AuThreadWaitOffCPU(killable->threads[i]);
 	AuIpcProcessGone(killable);
 	AuSHMUnmapAll(killable);
 	AA64Thread* main_thr = killable->main_thread;

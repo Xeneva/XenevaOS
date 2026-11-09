@@ -37,6 +37,7 @@
 #include <Drivers/uart.h>
 #include <_null.h>
 #include <signal.h>
+#include <Sync/spinlock.h>
 #if defined(__GNUC__) || defined(__clang__)
 #ifndef __cplusplus
 #include <stdbool.h>
@@ -44,6 +45,9 @@
 #endif
 
 static AuKernelTimer _timers[AURORA_MAX_TIMER];
+/* timer subsystem lock: _timers[] and the wall clock. IRQ safe, the tick
+ * takes it from interrupt context. Callbacks run outside it */
+static Spinlock s_timer_lock __attribute__((aligned(8)));
 static uint64_t _system_current_us;
 static uint64_t _system_current_ms;
 static void AuWalltimeUpdate();
@@ -111,7 +115,7 @@ void AuroraTimerInitialize() {
  * @param handler -- handler function
  * @param param -- extra param data to pass to handler
  */
-int AuroraTimerStart(uint32_t delay_ms, AuroraTimerCallback handler, void* param, int idx) {
+static int AuroraTimerStart_unlocked(uint32_t delay_ms, AuroraTimerCallback handler, void* param, int idx) {
 	if (idx != -1) {
 		if (_timers[idx].active)
 			return -1;
@@ -143,7 +147,7 @@ int AuroraTimerStart(uint32_t delay_ms, AuroraTimerCallback handler, void* param
  * @param handler -- handler function
  * @param param -- extra data to pass to handler
  */
-int AuroraTimerStartPeriodic(uint32_t interval_ms, AuroraTimerCallback handler, void* param) {
+static int AuroraTimerStartPeriodic_unlocked(uint32_t interval_ms, AuroraTimerCallback handler, void* param) {
 	for (int i = 0; i < AURORA_MAX_TIMER; i++) {
 		if (_timers[i].active)
 			continue;
@@ -163,7 +167,7 @@ int AuroraTimerStartPeriodic(uint32_t interval_ms, AuroraTimerCallback handler, 
  * @brief AuroraTimerCancel -- cancel a timer
  * @param tNum -- timer number
  */
-void AuroraTimerCancel(int tNum) {
+static void AuroraTimerCancel_unlocked(int tNum) {
 	if (tNum >= 0 && tNum < AURORA_MAX_TIMER) {
 		_timers[tNum].active = 0;
 	}
@@ -173,7 +177,7 @@ void AuroraTimerCancel(int tNum) {
  * @brief AuroraTimerIsActive -- check if timer is active
  * @param tNum -- timer index
  */
-bool AuroraTimerIsActive(int tNum) {
+static bool AuroraTimerIsActive_unlocked(int tNum) {
 	if (tNum >= 0 && tNum < AURORA_MAX_TIMER) {
 		return _timers[tNum].active;
 	}
@@ -184,30 +188,53 @@ bool AuroraTimerIsActive(int tNum) {
  * @brief AuroraTimerTick -- called by kernel
  * to handle all expired timers
  */
-void AuroraTimerTick() {
+void AuroraTimerUpdateClock(void) {
 	uint64_t now = _get_current_us();
+	/* single writer (the boot core's tick), aligned 64 bit stores */
 	_system_current_us = now;
 	_system_current_ms = _get_current_ms();
 
 	//update the wall time
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
 	AuWalltimeUpdate();
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+}
 
+void AuroraTimerRunExpired(void) {
+	uint64_t now = _get_current_us();
+	AuroraTimerCallback handlers[AURORA_MAX_TIMER];
+	void* params[AURORA_MAX_TIMER];
+	int n = 0;
+
+	/* collect under the lock, call without it: a callback may well use
+	 * the timer API itself */
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
 	for (int i = 0; i < AURORA_MAX_TIMER; i++) {
 		if (!_timers[i].active)
 			continue;
 		if (now < _timers[i].expireUS)
 			continue;
-		AuroraTimerCallback handler = _timers[i].handler;
-		void* param = _timers[i].param;
 		//	UARTDebugOut("Timer fired : %d \r\n", i);
 		if (_timers[i].intervalUS > 0) {
 			_timers[i].expireUS = now + _timers[i].intervalUS;
 		} else
 			_timers[i].active = 0;
 
-		if (handler)
-			handler(param);
+		if (_timers[i].handler) {
+			handlers[n] = _timers[i].handler;
+			params[n] = _timers[i].param;
+			n++;
+		}
 	}
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+
+	for (int i = 0; i < n; i++)
+		handlers[i](params[i]);
+}
+
+void AuroraTimerTick() {
+	AuroraTimerUpdateClock();
+	AuroraTimerRunExpired();
 }
 
 uint64_t AuGetCurrentMS() {
@@ -229,7 +256,7 @@ void __kernel_timer_alarm_callback(void* param) {
  * @param thr -- pointer to thread which requires one-shot timer
  * @param seconds -- amount of second to wait
  */
-int AuTimerCalculateAlarm(AA64Thread* thr, uint64_t seconds) {
+static int AuTimerCalculateAlarm_unlocked(AA64Thread* thr, uint64_t seconds) {
 	uint64_t now = _get_current_us();
 	int remaining_sec = 0;
 
@@ -293,7 +320,7 @@ static inline uint64_t _us_to_timeval(uint64_t us, timeval_t* tv) {
  *@brief AuTimerSetITimer -- posix standard implementation of 
  * setting periodic timer
  */
-int AuTimerSetITimer(AA64Thread* thr, int which, const itimerval_t* newval, itimerval_t* oldval) {
+static int AuTimerSetITimer_unlocked(AA64Thread* thr, int which, const itimerval_t* newval, itimerval_t* oldval) {
 	if (which != ITIMER_REAL)
 		return -1;
 
@@ -354,7 +381,7 @@ int AuTimerSetITimer(AA64Thread* thr, int which, const itimerval_t* newval, itim
 	return 0;
 }
 
-int AuTimerGetITimer(AA64Thread* thr, int which, itimerval_t* curr_value) {
+static int AuTimerGetITimer_unlocked(AA64Thread* thr, int which, itimerval_t* curr_value) {
 	if (which != ITIMER_REAL)
 		return -1;
 	if (!curr_value)
@@ -376,7 +403,7 @@ int AuTimerGetITimer(AA64Thread* thr, int which, itimerval_t* curr_value) {
 	return 0;
 }
 
-void AuSetWalltime(int64_t sec, int64_t nsec) {
+static void AuSetWalltime_unlocked(int64_t sec, int64_t nsec) {
 	//lock
 	/** need credential verifications too, for security **/
 	wallClock.cycle_last = get_cntpct_el0();
@@ -384,7 +411,7 @@ void AuSetWalltime(int64_t sec, int64_t nsec) {
 	wallClock.wall_nsec = nsec;
 }
 
-void AuGetWalltime(int64_t* out_sec, int64_t* out_ns) {
+static void AuGetWalltime_unlocked(int64_t* out_sec, int64_t* out_ns) {
 	/** need credential verifications too, for security **/
 
 	uint64_t now = get_cntpct_el0();
@@ -421,7 +448,7 @@ static void AuWalltimeUpdate() {
  * @brief AuGetTimerByThread -- checks and return a timer id
  * respective to its thread
  */
-int AuGetTimerByThread(void* param) {
+static int AuGetTimerByThread_unlocked(void* param) {
 	for (int i = 0; i < AURORA_MAX_TIMER; i++) {
 		if (_timers[i].param == param) {
 			return i;
@@ -429,4 +456,72 @@ int AuGetTimerByThread(void* param) {
 	}
 
 	return -1;
+}
+
+/* public timer API: every entry point holds the timer subsystem lock */
+int AuroraTimerStart(uint32_t delay_ms, AuroraTimerCallback handler, void* param, int idx) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	int r = AuroraTimerStart_unlocked(delay_ms, handler, param, idx);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+	return r;
+}
+
+int AuroraTimerStartPeriodic(uint32_t interval_ms, AuroraTimerCallback handler, void* param) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	int r = AuroraTimerStartPeriodic_unlocked(interval_ms, handler, param);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+	return r;
+}
+
+void AuroraTimerCancel(int tNum) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	AuroraTimerCancel_unlocked(tNum);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+}
+
+bool AuroraTimerIsActive(int tNum) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	bool r = AuroraTimerIsActive_unlocked(tNum);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+	return r;
+}
+
+int AuTimerCalculateAlarm(AA64Thread* thr, uint64_t seconds) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	int r = AuTimerCalculateAlarm_unlocked(thr, seconds);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+	return r;
+}
+
+int AuTimerSetITimer(AA64Thread* thr, int which, const itimerval_t* newval, itimerval_t* oldval) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	int r = AuTimerSetITimer_unlocked(thr, which, newval, oldval);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+	return r;
+}
+
+int AuTimerGetITimer(AA64Thread* thr, int which, itimerval_t* curr_value) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	int r = AuTimerGetITimer_unlocked(thr, which, curr_value);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+	return r;
+}
+
+void AuSetWalltime(int64_t sec, int64_t nsec) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	AuSetWalltime_unlocked(sec, nsec);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+}
+
+void AuGetWalltime(int64_t* out_sec, int64_t* out_ns) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	AuGetWalltime_unlocked(out_sec, out_ns);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+}
+
+int AuGetTimerByThread(void* param) {
+	uint64_t d = AuAcquireSpinlockIrqSave(&s_timer_lock);
+	int r = AuGetTimerByThread_unlocked(param);
+	AuReleaseSpinlockIrqRestore(&s_timer_lock, d);
+	return r;
 }

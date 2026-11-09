@@ -29,6 +29,16 @@ ifeq ($(SOAK),1)
     SOAK_FLAGS = -D__XENEVA_SOAK__
 endif
 
+# SMPSOAK=1: CPU heavy user mode threads on every core (Hal/smp_soak.c)
+SMPSOAK ?= 0
+ifeq ($(SMPSOAK),1)
+    SMPSOAK_FLAGS = -D__XENEVA_SMP_SOAK__
+endif
+# SMPSOAK=2: the same plus core reservation (isolated cores, latency probes)
+ifeq ($(SMPSOAK),2)
+    SMPSOAK_FLAGS = -D__XENEVA_SMP_SOAK__ -D__XENEVA_SMP_SOAK_ISO__
+endif
+
 # Stage 1 always allocates owner accounting; Stages 2-3 (redzones,
 # poisoning, caller tracking, leak dump, frame-table owner scan) compile
 # in only with DEBUG_ALLOC=1. Threaded through from
@@ -90,7 +100,7 @@ ifeq ($(TOOLCHAIN), llvm)
     # pulls compiler_types in first so its fallbacks never shadow them.
     CFLAGS  = -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check -fno-strict-aliasing \
               -O2 -g -gdwarf-4 $(LLVM_TARGET) -fno-builtin \
-              -DARCH_ARM64 -D__KERNEL__ $(BOARD_FLAG) -D__STDC_LIMIT_MACROS $(BLEED_FLAGS) $(GPUSRV_FLAGS) $(DRV_SELFTEST_FLAGS) $(SOAK_FLAGS) $(DEBUG_ALLOC_FLAGS) $(BYPASS_VIRTGPU_FLAGS) -D__XENEVA_BYPASS_VIRTIO_INPUT__ \
+              -DARCH_ARM64 -D__KERNEL__ $(BOARD_FLAG) -D__STDC_LIMIT_MACROS $(BLEED_FLAGS) $(GPUSRV_FLAGS) $(DRV_SELFTEST_FLAGS) $(SOAK_FLAGS) $(SMPSOAK_FLAGS) $(DEBUG_ALLOC_FLAGS) $(BYPASS_VIRTGPU_FLAGS) -D__XENEVA_BYPASS_VIRTIO_INPUT__ \
               -Wno-error=incompatible-pointer-types -Wno-error=int-conversion \
               -Wno-implicit-function-declaration -Wno-error=conflicting-types $(INCLUDES)
 
@@ -121,7 +131,7 @@ else
 
     CFLAGS  = -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check -fno-strict-aliasing \
               -O2 \
-              -DARCH_ARM64 -D__KERNEL__ $(BOARD_FLAG) -D__STDC_LIMIT_MACROS $(BLEED_FLAGS) $(GPUSRV_FLAGS) $(DRV_SELFTEST_FLAGS) $(SOAK_FLAGS) $(DEBUG_ALLOC_FLAGS) $(BYPASS_VIRTGPU_FLAGS) $(BYPASS_VIRTIO_INPUT_FLAGS) \
+              -DARCH_ARM64 -D__KERNEL__ $(BOARD_FLAG) -D__STDC_LIMIT_MACROS $(BLEED_FLAGS) $(GPUSRV_FLAGS) $(DRV_SELFTEST_FLAGS) $(SOAK_FLAGS) $(SMPSOAK_FLAGS) $(DEBUG_ALLOC_FLAGS) $(BYPASS_VIRTGPU_FLAGS) $(BYPASS_VIRTIO_INPUT_FLAGS) \
               $(INCLUDES)
 endif
 

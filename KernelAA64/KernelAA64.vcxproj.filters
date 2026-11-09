@@ -9,6 +9,9 @@
     <ClCompile Include="Hal\aa64cpu.c">
       <Filter>Hal</Filter>
     </ClCompile>
+    <ClCompile Include="Hal\aa64smp.c">
+      <Filter>Hal</Filter>
+    </ClCompile>
     <ClCompile Include="dtb.c" />
     <ClCompile Include="Mm\pmmngr.c">
       <Filter>Mm</Filter>
@@ -359,6 +362,9 @@
     <CustomBuild Include="Hal\aa64switch.s">
       <Filter>Hal</Filter>
     </CustomBuild>
+    <CustomBuild Include="Hal\aa64smpboot.s">
+      <Filter>Hal</Filter>
+    </CustomBuild>
     <CustomBuild Include="Hal\aa64_print.s">
       <Filter>Hal</Filter>
     </CustomBuild>
@@ -377,6 +383,9 @@
       <Filter>Include\Hal</Filter>
     </ClInclude>
     <ClInclude Include="..\BaseHdr\Hal\AA64\aa64cpu.h">
+      <Filter>Include\Hal</Filter>
+    </ClInclude>
+    <ClInclude Include="..\BaseHdr\Hal\AA64\aa64smp.h">
       <Filter>Include\Hal</Filter>
     </ClInclude>
     <ClInclude Include="..\BaseHdr\dtb.h">

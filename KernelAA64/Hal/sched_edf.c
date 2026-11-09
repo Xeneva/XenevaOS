@@ -149,6 +149,8 @@ AA64Thread* AuEDFPickNext(void) {
 		if (t->state != THREAD_STATE_READY &&
 			t->state != THREAD_STATE_LEFT_IN_KERNEL)
 			continue;
+		if (!AuSchedCanRunHere(t))
+			continue;
 		if (!best || t->edf_deadline_us < best->edf_deadline_us ||
 			(t->edf_deadline_us == best->edf_deadline_us &&
 				t->thread_id < best->thread_id))

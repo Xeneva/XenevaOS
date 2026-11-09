@@ -44,6 +44,8 @@
 #include <Hal/AA64/gic.h>
 #include <Hal/basicacpi.h>
 #include <Hal/AA64/aa64lowlevel.h>
+#include <Hal/AA64/aa64smp.h>
+#include <Hal/AA64/aa64percpu.h>
 #include <loader.h>
 #include <Drivers/uart.h>
 #include <Hal/AA64/qemu.h>
@@ -228,10 +230,17 @@ void _AuMain(KERNEL_BOOT_INFO* info) {
 	AuPmmngrInitialize(info);
 	AuVmmngrInitialize();
 	AuTextOut("[aurora]: virtual memory manager initialized \r\n");
+	AuVmmAsidInitialize();
+	AA64PerCPUBootInitialize();
 	AuHeapInitialize();
 	AuDeviceTreeMapMMIO();
 	AA64CPUPostInitialize(info);
 	AuAA64BoardInitialize();
+
+	/* bring up the secondary cores, they print themselves and park
+	 * until the scheduler learns to use them */
+	AA64SMPInitialize();
+
 	AuVFSInitialise();
 	AuInitrdInitialize(info);
 	/* Device nodes published by AuConsolePostInitialise (notably /dev/graph)
@@ -378,6 +387,9 @@ void _AuMain(KERNEL_BOOT_INFO* info) {
 	//AuEDFSelfTestStart();
 #ifdef __XENEVA_SOAK__
 	AuSoakStart();
+#endif
+#ifdef __XENEVA_SMP_SOAK__
+	AuSMPSoakStart();
 #endif
 
 	AuProcess* proc = AuCreateProcessSlot(0, "exec");

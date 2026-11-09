@@ -36,9 +36,9 @@
 #include <Sync/spinlock.h>
 #include <Sync/futex.h>
 
-/* Serializes waiter-list checks against FUTEX_WAKE/REQUEUE.  The scheduler
- * lock is taken inside AuBlockThread/AuSleepThread/AuThreadMakeReady, so the
- * order is always futex_lock -> sched lock. */
+/* Take futex_lock before the scheduler lock. Waiter publication, timeout
+ * handling, and saved-frame updates share the scheduler lock, so a wake
+ * cannot patch a frame after another core has resumed the waiter. */
 static Spinlock futex_lock = { 0 };
 
 static AuProcess* futex_current_process(AA64Thread* thr) {
@@ -88,7 +88,7 @@ static int futex_parse_timeout(void* timeout, int* timed, uint64_t* ms) {
 	return 0;
 }
 
-/* Caller holds futex_lock. */
+/* Caller holds futex_lock and the scheduler lock. */
 static void futex_wake_one(AA64Thread* thr) {
 	if (!thr)
 		return;
@@ -130,10 +130,12 @@ int AuFutexWait(AuProcess* proc, AA64Thread* thr, uint32_t* uaddr,
 		timeout_result = -110;
 
 	AuAcquireSpinlock(&futex_lock);
+	uint64_t sched_daif = AuSchedLock();
 
 	/* Re-check the user word under the lock.  A wake that raced us will
 	 * have changed it, so we return EAGAIN instead of sleeping forever. */
 	if (*(volatile uint32_t*)uaddr != val) {
+		AuSchedUnlock(sched_daif);
 		AuReleaseSpinlock(&futex_lock);
 		return -AU_FUTEX_EAGAIN;
 	}
@@ -154,6 +156,7 @@ int AuFutexWait(AuProcess* proc, AA64Thread* thr, uint32_t* uaddr,
 	 * futex_waiting set and move the thread to the ready list.  IRQs are
 	 * still masked in the syscall path, so no timer can intervene between
 	 * the release and AuScheduleThread. */
+	AuSchedUnlock(sched_daif);
 	AuReleaseSpinlock(&futex_lock);
 
 	/* Does not return for a real user thread: AuScheduleThread restores the
@@ -177,6 +180,7 @@ int AuFutexWake(AuProcess* proc, uint32_t* uaddr, int nwake, uint32_t bitset) {
 	int woke = 0;
 
 	AuAcquireSpinlock(&futex_lock);
+	uint64_t sched_daif = AuSchedLock();
 	n = futex_collect(proc, list, MAX_THREADS_PER_PROCESS + 1);
 	for (int i = 0; i < n && woke < nwake; i++) {
 		AA64Thread* thr = list[i];
@@ -187,6 +191,7 @@ int AuFutexWake(AuProcess* proc, uint32_t* uaddr, int nwake, uint32_t bitset) {
 		futex_wake_one(thr);
 		woke++;
 	}
+	AuSchedUnlock(sched_daif);
 	AuReleaseSpinlock(&futex_lock);
 	return woke;
 }
@@ -204,7 +209,9 @@ int AuFutexRequeue(AuProcess* proc, uint32_t* uaddr, int nwake,
 	int moved = 0;
 
 	AuAcquireSpinlock(&futex_lock);
+	uint64_t sched_daif = AuSchedLock();
 	if (has_cmp && *(volatile uint32_t*)uaddr != cmpval) {
+		AuSchedUnlock(sched_daif);
 		AuReleaseSpinlock(&futex_lock);
 		return -AU_FUTEX_EAGAIN;
 	}
@@ -223,6 +230,7 @@ int AuFutexRequeue(AuProcess* proc, uint32_t* uaddr, int nwake,
 			break;
 		}
 	}
+	AuSchedUnlock(sched_daif);
 	AuReleaseSpinlock(&futex_lock);
 	return woke;
 }

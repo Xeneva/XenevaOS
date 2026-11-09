@@ -152,6 +152,8 @@ XR_VNC=1
 XR_TELNET=0
 TERM_MODE=0
 TERM_CMD=""
+# --isolate-cpus=LIST: cores reserved for bound threads (written to /cores.cnf)
+ISOLATE_CPUS=""
 TEST_MUSL=0
 INITRD_SIZE_MB=""
 ISO=0
@@ -515,6 +517,7 @@ while [ $# -gt 0 ]; do
         --force-legacy-build) FORCE_LEGACY_BUILD=1 ;;
         --install-deps) INSTALL_DEPS=1 ;;
         --headless) HEADLESS=1 ;;
+        --isolate-cpus=*) ISOLATE_CPUS="${1#*=}" ;;
         --term)
             TERM_MODE=1
             shift
@@ -1137,6 +1140,13 @@ if [ "$FORCE_LEGACY_BUILD" -eq 0 ]; then
     if [ "$TEST_MUSL" -eq 1 ]; then
         echo "[+] hello.elf and musl.elf added to the image (--test-musl)."
     fi
+    # core reservation for init: "isolate=2-3", or every core general
+    if [ -n "$ISOLATE_CPUS" ]; then
+        echo "[+] Reserving cores $ISOLATE_CPUS for bound threads (/cores.cnf)"
+        printf 'isolate=%s\n' "$ISOLATE_CPUS" > Resources/resources/cores.cnf
+    else
+        rm -f Resources/resources/cores.cnf
+    fi
     for resource in Resources/resources/*; do
         if pack_excluded "$(basename "$resource")"; then
             continue
@@ -1255,7 +1265,7 @@ if [ "$ISO" -eq 1 ]; then
 
     echo "[+] ISO ready: $iso_output"
     echo "[+] Test it with:"
-    echo "    qemu-system-aarch64 -machine virt,gic-version=2,highmem=off -cpu cortex-a72 -m 1024M \\"
+    echo "    qemu-system-aarch64 -machine virt,gic-version=2,highmem=off -cpu cortex-a72 -smp 4 -m 1024M \\"
     echo "        -bios <path-to-QEMU_EFI.fd> -cdrom \"$iso_output\" -serial stdio"
     exit 0
 fi
@@ -1267,8 +1277,10 @@ if [ "$BLEED" -eq 1 ]; then
 else
     qemu_memory="${XENEVA_QEMU_MEMORY:-1024M}"
 fi
+qemu_smp="${XENEVA_QEMU_SMP:-4}"
 echo "[+] Image ready! Booting QEMU..."
 echo "[+] Guest memory: $qemu_memory"
+echo "[+] Guest cpus: $qemu_smp (XENEVA_QEMU_SMP=1 for uniprocessor)"
 
 # A QEMU built without PulseAudio only exposes 'none'/'wav'. Asking it for
 # 'pa' aborts the emulator before the guest ever boots, so ask the binary
@@ -1288,8 +1300,11 @@ case "${NETSRV:-0}" in
 esac
 
 QEMU_ARGS=(
-    -machine virt,gic-version=2,highmem=off
+    -machine virt,gic-version=2,highmem=off,acpi=off
     -cpu cortex-a72
+    # secondary cores sit powered off until KernelAA64 starts them with
+    # PSCI CPU_ON (Hal/aa64smp.c)
+    -smp "$qemu_smp"
     -m "$qemu_memory"
     -bios "$QEMU_FIRMWARE"
     # explicit modern-only virtio-blk-pci (disable-legacy=on) instead of the

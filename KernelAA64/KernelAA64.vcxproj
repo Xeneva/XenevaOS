@@ -317,6 +317,7 @@
     <ClCompile Include="Fs\vfs.c" />
     <ClCompile Include="ftmngr.c" />
     <ClCompile Include="Hal\aa64cpu.c" />
+    <ClCompile Include="Hal\aa64smp.c" />
     <ClCompile Include="Hal\basicacpi.c" />
     <ClCompile Include="Hal\gic.c" />
     <ClCompile Include="Hal\profile.c" />
@@ -422,6 +423,7 @@
     <ClInclude Include="..\BaseHdr\Fs\fsprobe.h" />
     <ClInclude Include="..\BaseHdr\Fs\initrd.h" />
     <ClInclude Include="..\BaseHdr\Hal\AA64\aa64cpu.h" />
+    <ClInclude Include="..\BaseHdr\Hal\AA64\aa64smp.h" />
     <ClInclude Include="..\BaseHdr\Hal\AA64\aa64lowlevel.h" />
     <ClInclude Include="..\BaseHdr\Hal\AA64\gic.h" />
     <ClInclude Include="..\BaseHdr\Hal\AA64\profile.h" />
@@ -457,6 +459,17 @@
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="Hal\aa64switch.s">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">false</ExcludedFromBuild>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</DeploymentContent>
+      <FileType>Document</FileType>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">clang --target=aarch64-windows-msvc -c -o "$(IntDir)%(Filename).obj" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">$(IntDir)%(Filename).obj</Outputs>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">clang --target=aarch64-windows-msvc -c -o "$(IntDir)%(Filename).obj" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">$(IntDir)%(Filename).obj</Outputs>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">false</ExcludedFromBuild>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</DeploymentContent>
+    </CustomBuild>
+    <CustomBuild Include="Hal\aa64smpboot.s">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">false</ExcludedFromBuild>
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</DeploymentContent>
       <FileType>Document</FileType>

@@ -235,6 +235,55 @@ XE_EXTERN {
 
 	XE_LIB int _KeProcessFetch(XEProcessList * list, int num_proc_count);
 
+	/**
+	 * _sys_cpu_stats -- usage counters of one cpu core. Times are in
+	 * generic timer counter ticks (counter_freq per second) since the
+	 * core started scheduling; diff two samples for a usage figure.
+	 * Mirrors AA64CPUStats in BaseHdr/Hal/AA64/aa64smp.h (64 bytes)
+	 */
+	typedef struct _sys_cpu_stats_ {
+		uint32_t cpu;
+		uint32_t online;
+		uint64_t mpidr;
+		uint64_t busy_ticks;
+		uint64_t idle_ticks;
+		uint64_t context_switches;
+		uint64_t timer_irqs;
+		uint64_t counter_freq;
+		char current[8];
+	} XECpuStats;
+
+	/**
+	 * @brief _KeGetCPUStats -- fetch per core usage counters
+	 * @param stats -- array to fill
+	 * @param max_cpus -- capacity of stats
+	 * @return number of cores written, -1 on error
+	 */
+	XE_LIB int _KeGetCPUStats(XECpuStats * stats, int max_cpus);
+
+	/* XECpuStats::online flags */
+#define XE_CPU_ONLINE	(1u << 0) /* core schedules threads */
+#define XE_CPU_ISOLATED (1u << 1) /* reserved for bound threads */
+#define XE_CPU_NOTICK	(1u << 2) /* scheduler timer stopped */
+
+	/**
+	 * @brief _KeCpuSetIsolated -- reserve cores for bound threads (root)
+	 * @param mask -- bit n isolates core n, 0 = use all cores normally.
+	 * Core 0 can not be isolated
+	 * @return 0, -1 core 0 in mask, -2 offline core, -3 not permitted
+	 */
+	XE_LIB int _KeCpuSetIsolated(uint32_t mask);
+
+	/** @brief _KeCpuGetIsolated -- mask of isolated cores */
+	XE_LIB uint32_t _KeCpuGetIsolated();
+
+	/**
+	 * @brief _KeThreadSetAffinity -- bind the calling thread to a core
+	 * (isolated or not), -1 unbinds. Returns once running there
+	 * @return 0, -1 bad/offline core
+	 */
+	XE_LIB int _KeThreadSetAffinity(int cpu);
+
 	XE_LIB int _KeExitSubThread(int thread_id);
 
 	XE_LIB int _KeThreadWaitForTermination(int thread_id);

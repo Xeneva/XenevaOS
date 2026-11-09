@@ -35,6 +35,8 @@
 #endif
 #endif
 #include <Drivers/uart.h>
+#include <Hal/AA64/aa64lowlevel.h>
+#include <Hal/AA64/aa64percpu.h>
 #include <Mm/vmmngr.h>
 #include <aucon.h>
 #include <va_list.h>
@@ -121,7 +123,7 @@ extern void AuUartPutString(const char* s);
  * for early kernel using UART
  * @param text -- text to output
  */
-void UARTDebugOut_Call(const char* format, void* reg_save_area, void* entry_sp) {
+static void UARTDebugOut_CallUnlocked(const char* format, void* reg_save_area, void* entry_sp) {
 #ifdef __GNUC__
 	uint64_t* arg_ptr = (uint64_t*)((uint8_t*)reg_save_area + 8);
 #define AU_VA_ARG(type) ((type)(*arg_ptr++))
@@ -194,4 +196,32 @@ void UARTDebugOut_Call(const char* format, void* reg_save_area, void* entry_sp) 
 #ifndef __GNUC__
 	va_end(args);
 #endif
+}
+
+/* UART print lock: one message at a time across cores. Recursive on the
+ * owning core (a fault while printing still gets its report out) and IRQ
+ * safe (interrupt handlers print too) */
+extern void aa64_spinlock_acquire(uint32_t* lock);
+extern void aa64_spinlock_release(uint32_t* lock);
+static uint32_t s_uart_lock_word;
+static volatile uint32_t s_uart_owner;
+static uint32_t s_uart_depth;
+
+void UARTDebugOut_Call(const char* format, void* reg_save_area, void* entry_sp) {
+	uint64_t d = read_daif();
+	mask_irqs();
+	uint32_t me = AA64GetCPUNum() + 1;
+	if (s_uart_owner == me) {
+		s_uart_depth++;
+	} else {
+		aa64_spinlock_acquire(&s_uart_lock_word);
+		s_uart_owner = me;
+		s_uart_depth = 1;
+	}
+	UARTDebugOut_CallUnlocked(format, reg_save_area, entry_sp);
+	if (--s_uart_depth == 0) {
+		s_uart_owner = 0;
+		aa64_spinlock_release(&s_uart_lock_word);
+	}
+	restore_daif(d);
 }

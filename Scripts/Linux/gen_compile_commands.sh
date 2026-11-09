@@ -43,6 +43,7 @@ APPS=(
     "Process/DeodhaiAudio"
     "Process/Calender"
     "Process/Calculator"
+    "Process/Phulbari"
     "Process/AudioPlayer"
     "Process/Files"
     "Process/Control"

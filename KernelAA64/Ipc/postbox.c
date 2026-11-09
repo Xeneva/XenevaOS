@@ -191,12 +191,17 @@ void PostBoxPutEvent(PostEvent* event) {
 	AA64Thread* thread = AuThreadFindByID(owner_id);
 	if (!thread)
 		thread = AuThreadFindByIDBlockList(owner_id);
+	if (!thread)
+		thread = AuThreadFindByIDSleepList(owner_id);
 
-	if (thread != NULL && thread->state == THREAD_STATE_BLOCKED) {
+	if (thread != NULL) {
 		/* sometime i don't know, this happens */
 		if (strcmp(thread->name, "exec") == 0)
 			return;
-		AuUnblockThread(thread);
+		/* the owner may be running on another core between finding its
+		 * box empty and pausing: unpark wakes it if blocked, else leaves
+		 * a token so that pause returns at once (no lost wakeup) */
+		AuThreadUnpark(thread);
 	}
 
 	return;

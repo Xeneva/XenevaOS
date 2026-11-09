@@ -57,6 +57,9 @@ typedef struct _list_ list_t;
 #define THREAD_LEVEL_USER		 (1 << 1)
 #define THREAD_LEVEL_SUBTHREAD	 (1 << 2)
 #define THREAD_LEVEL_MAIN_THREAD (1 << 3)
+//! THREAD_LEVEL_NOPROC -- user mode thread that belongs to no process
+//! (kernel self tests); it may use the syscall fast path without one
+#define THREAD_LEVEL_NOPROC		 (1 << 4)
 
 //#pragma pack(push,1)
 /* AuUserEntry structure */
@@ -169,6 +172,26 @@ typedef struct _aa64_task_ {
 	/** absolute wake-up time (system us) of a sleeping thread; see AuSleepThread */
 	uint64_t sleep_until_us;
 	uint8_t blocked_on_poll;
+	/* SMP: 1 while some core executes on this thread's context or kernel
+	 * stack. A core claims it when it picks the thread and the switch
+	 * path in aa64switch.s drops it only once that core is off the stack,
+	 * so no two cores ever run on the same stack. Keep these two at the
+	 * end: aa64switch.s hard codes the offsets of the fields above. */
+	volatile uint32_t on_cpu;
+	/* BKL depth the thread held when it was switched out (Sync/bkl.h) */
+	uint32_t bkl_depth;
+	/* exception frame of the syscall this thread is executing, see
+	 * AA64GetCurrentRegCtx. Per thread: syscalls run on several cores */
+	AA64Registers* syscall_regs;
+	/* a wakeup arrived while the thread was not blocked; its next pause
+	 * returns at once instead of losing it (AuThreadPark) */
+	volatile uint32_t wake_pending;
+	/* scheduler list the thread is linked on (sched.c SCHED_LIST_*),
+	 * 0 when on none; guards against unlinking it from the wrong list */
+	uint32_t sched_list;
+	/* core the thread is bound to, + 1; 0 = may run on any general core.
+	 * Bound threads are the only ones an isolated core runs */
+	uint32_t cpu_bind;
 } AA64Thread;
 
 //#pragma pack(pop)
@@ -296,6 +319,8 @@ extern AA64Thread* AuEDFPickNext(void);
 extern uint64_t AuEDFGetMisses(AA64Thread* thread);
 extern void AuEDFSelfTestStart(void);
 extern void AuSoakStart(void);
+/* SMP user mode soak test (SMPSOAK=1 builds), see Hal/smp_soak.c */
+extern void AuSMPSoakStart(void);
 
 /**
  * @brief AuThreadWaitForTermination -- wait for desired thread
@@ -310,6 +335,74 @@ extern int AuThreadWaitForTermination(int thread_id);
  * needs to be freed
  */
 extern void AuThreadAwakeWaiters(AA64Thread* thread);
+
+/**
+ * @brief AuSchedCreateAPIdleThread -- create the idle thread of a
+ * secondary core, called on the boot core
+ * @param cpu_num -- logical cpu number of the secondary core
+ */
+extern AA64Thread* AuSchedCreateAPIdleThread(uint32_t cpu_num);
+
+/**
+ * @brief AuSchedEnterAPIdle -- start the calling secondary core's timer
+ * and switch onto its idle thread, never returns
+ */
+extern void AuSchedEnterAPIdle(void) __attribute__((noreturn));
+
+/**
+ * @brief AuSchedCanRunHere -- may the calling core resume this thread now
+ * (not running elsewhere, and kernel contexts only on the boot core).
+ * Call with the scheduler lock held.
+ */
+extern bool AuSchedCanRunHere(AA64Thread* thread);
+
+/**
+ * @brief AuThreadPark -- block the calling thread for a pause unless a
+ * wakeup is already pending for it
+ * @return true if it blocked (caller reschedules), false otherwise
+ */
+extern bool AuThreadPark(AA64Thread* thread);
+
+/**
+ * @brief AuThreadUnpark -- wake a paused thread, or leave it a wakeup
+ * token so its next pause returns at once
+ */
+extern void AuThreadUnpark(AA64Thread* thread);
+
+/*
+ * Core reservation (isolation). Two modes:
+ *  - all cores general (mask 0, the default): ordinary SMP scheduling;
+ *  - some cores isolated: an isolated core runs only threads bound to it
+ *    (AuThreadSetAffinity), gets no general work, no wake-up IPIs except
+ *    for its own threads, and stops its timer while a single bound thread
+ *    owns it, so that thread is never preempted. Meant for latency
+ *    critical workloads: LLM inference workers, HFT event loops, RT tasks.
+ * Core 0 stays general: it takes device interrupts and the system tick.
+ */
+
+/**
+ * @brief AuCpuSetIsolatedMask -- set the isolated cores (bit n = core n),
+ * 0 returns every core to general use
+ * @return 0, -1 if the mask names core 0, -2 if it names an offline core
+ */
+extern int AuCpuSetIsolatedMask(uint32_t mask);
+
+/** @brief AuCpuGetIsolatedMask -- currently isolated cores */
+extern uint32_t AuCpuGetIsolatedMask(void);
+
+/**
+ * @brief AuThreadSetAffinity -- bind a thread to one core, -1 unbinds.
+ * The thread moves there at its next reschedule
+ * @return 0, -1 for a bad or offline core
+ */
+extern int AuThreadSetAffinity(AA64Thread* thread, int cpu);
+
+/**
+ * @brief AuThreadWaitOffCPU -- wait until no core executes on the
+ * thread's context any more, call before freeing its stack or address
+ * space. Drops the BKL while waiting.
+ */
+extern void AuThreadWaitOffCPU(AA64Thread* thread);
 
 #endif
 

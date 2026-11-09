@@ -37,6 +37,11 @@
 #include <Drivers/uart.h>
 #include <Drivers/rtcmmio.h>
 #include <Hal/AA64/sched.h>
+#include <Hal/AA64/aa64percpu.h>
+#include <Sync/bkl.h>
+#include <Hal/AA64/aa64smp.h>
+
+extern bool AuAA64SyscallFast(AA64Registers* regs);
 #include <process.h>
 #include <_null.h>
 #include <Mm/vmarea.h>
@@ -73,9 +78,24 @@ void AuDumpRegisters(AA64Thread* thr, AA64Registers* regs) {
 void sync_el1_handler(AA64Registers* regs) {
 	uint64_t esr = read_esr_el1();
 
+	/* an exception from EL0 enters the kernel: take the BKL. Exceptions
+	 * from EL1 happen inside a kernel context that already holds it.
+	 * A syscall that switches away never comes back here on this path:
+	 * the scheduler hands its BKL depth over (Hal/sched.c) */
+	uint64_t entry_spsr;
+	__asm__ volatile("mrs %0, spsr_el1" : "=r"(entry_spsr));
+	bool from_el0 = (entry_spsr & 0xC) == 0;
+	/* a handful of syscalls have their own locking and skip the BKL */
+	if (from_el0 && (esr >> 26) == 0x15 && AuAA64SyscallFast(regs))
+		return;
+	if (from_el0)
+		AuBKLLock();
+
 	if ((esr >> 26) == 0x15) {
 		AuAA64SyscallHandler(regs);
 		// enable_irqs();
+		if (from_el0)
+			AuBKLUnlock();
 		return;
 	}
 
@@ -94,6 +114,8 @@ void sync_el1_handler(AA64Registers* regs) {
 		if ((spsr & 0xF) == 0 && elr >= 0xFFFF000000000000ull) {
 			spsr = (spsr & ~0xFFull) | 0x3C5ull;
 			__asm__ volatile("msr spsr_el1, %0" ::"r"(spsr));
+			/* keep the BKL: kernel code continues at EL1 and drops it
+			 * in AuProcessEntSubThread before aa64_enter_user */
 			return;
 		}
 	}
@@ -175,6 +197,8 @@ void sync_el1_handler(AA64Registers* regs) {
 				AuThreadMoveToTrash(currthr);
 		}
 		AuScheduleThread(regs);
+		if (from_el0)
+			AuBKLUnlock();
 		return;
 	}
 
@@ -184,6 +208,8 @@ void sync_el1_handler(AA64Registers* regs) {
 		UARTDebugOut("__search_fixup_table: found fixup address : %x \r\n", fixup);
 		if (fixup) {
 			regs->elr = fixup;
+			if (from_el0)
+				AuBKLUnlock();
 			return;
 		}
 
@@ -258,6 +284,92 @@ void setuprint() {
 	_userprint = 1;
 }
 
+/* ---------------------------------------------------------------------
+ * Interrupt work and the BKL
+ *
+ * Interrupt work (device handlers, timer callbacks) is kernel code and
+ * runs under the BKL, but an interrupt handler never spins for it: the
+ * owner may be a core waiting, IRQs enabled, for exactly this interrupt.
+ * When the BKL is taken elsewhere the work is queued (an SPI is masked at
+ * the distributor until then) and the owner core gets an IPI; it runs the
+ * queue nested in its own BKL hold, exactly like a single core would have
+ * taken the interrupt inside that kernel code.
+ * --------------------------------------------------------------------- */
+#define IRQ_DEFER_WORDS (1024 / 64)
+static volatile uint64_t s_irq_deferred[IRQ_DEFER_WORDS];
+
+static void irqTickWork(void) {
+	AuroraTimerRunExpired();
+#ifdef __XENEVA_BYPASS_VIRTIO_INPUT__
+	/* DCL virtio queues are polled; the input queue is fed from the
+	 * tick rather than an MSI because the native input drivers are
+	 * not bound on this build. */
+	extern void virtio_poll_input_vqs(void);
+	virtio_poll_input_vqs();
+#endif
+}
+
+static void irqRunWork(uint32_t irq) {
+	if (irq == 27) {
+		irqTickWork();
+	} else if (irq == 2) {
+		AuPL031RTCIRQHandle();
+	} else if (irq >= 32) {
+		GICCallSPIHandler(irq);
+		GICUnmaskIRQ(irq);
+	}
+}
+
+/* hand the queue to whoever owns the BKL (or to ourselves if it is free:
+ * the SGI is taken as soon as this core unmasks IRQs again) */
+static void irqDeferredKick(void) {
+	int owner = AuBKLOwnerCPU();
+	GICSendSGI(owner >= 0 ? (uint32_t)owner : AA64GetCPUNum(), AA64_IPI_DEFERRED_IRQ);
+}
+
+static void irqDefer(uint32_t irq) {
+	if (irq >= 32)
+		GICMaskIRQ(irq);
+	__atomic_fetch_or(&s_irq_deferred[irq / 64], 1ULL << (irq % 64), __ATOMIC_RELEASE);
+	irqDeferredKick();
+}
+
+/* run interrupt work now if the BKL is ours to take, else defer it */
+static void irqRunOrDefer(uint32_t irq) {
+	if (AuBKLTryLock()) {
+		irqRunWork(irq);
+		AuBKLUnlock();
+	} else {
+		irqDefer(irq);
+	}
+}
+
+/**
+ * @brief AuDeferredIRQRun -- run queued interrupt work, or pass it on to
+ * the current BKL owner
+ */
+static void AuDeferredIRQRun(void) {
+	bool any = false;
+	for (int w = 0; w < IRQ_DEFER_WORDS; w++)
+		if (s_irq_deferred[w])
+			any = true;
+	if (!any)
+		return;
+	if (!AuBKLTryLock()) {
+		irqDeferredKick();
+		return;
+	}
+	for (int w = 0; w < IRQ_DEFER_WORDS; w++) {
+		uint64_t bits = __atomic_exchange_n(&s_irq_deferred[w], 0, __ATOMIC_ACQ_REL);
+		while (bits) {
+			uint32_t bit = (uint32_t)__builtin_ctzll(bits);
+			bits &= bits - 1;
+			irqRunWork((uint32_t)w * 64 + bit);
+		}
+	}
+	AuBKLUnlock();
+}
+
 void irq_el1_handler(AA64Registers* regs) {
 #ifdef __TARGET_BOARD_RPI3__
 	RPI3_IRQ_handler(regs);
@@ -268,6 +380,20 @@ void irq_el1_handler(AA64Registers* regs) {
 		/* logging here floods serial and livelocks boot on a spurious storm --axiss */
 		return;
 	}
+	if (irq == AA64_IPI_RESCHED) {
+		GICSendEOI(iar);
+		AA64PerCPU* c = AA64GetPerCPU();
+		if (c)
+			__atomic_store_n(&c->ipi_pending, 0, __ATOMIC_RELEASE);
+		AuDeferredIRQRun();
+		AuScheduleThread(regs);
+		return;
+	}
+	if (irq == AA64_IPI_DEFERRED_IRQ) {
+		GICSendEOI(iar);
+		AuDeferredIRQRun();
+		return;
+	}
 	if (irq == 27) {
 		//suspendTimer(); //<--- suspecting this line
 		resetTimer();
@@ -275,15 +401,24 @@ void irq_el1_handler(AA64Registers* regs) {
 		GICSendEOI(iar);
 		GICCheckPending(irq);
 
-		/** handle expired timers **/
-		AuroraTimerTick();
-#ifdef __XENEVA_BYPASS_VIRTIO_INPUT__
-		/* DCL virtio queues are polled; the input queue is fed from the
-		 * tick rather than an MSI because the native input drivers are
-		 * not bound on this build. */
-		extern void virtio_poll_input_vqs(void);
-		virtio_poll_input_vqs();
-#endif
+		AA64PerCPU* cpu = AA64GetPerCPU();
+		if (cpu) {
+			cpu->tick_count++;
+			cpu->sched_tick = 1;
+		}
+		/* secondary cores only schedule on their tick: kernel timers and
+		 * virtio polling stay on the boot core */
+		if (cpu && cpu->cpu_num != 0) {
+			AuScheduleThread(regs);
+			return;
+		}
+
+		/* timekeeping has its own lock and runs every tick */
+		AuroraTimerUpdateClock();
+		/* timer callbacks and polling are kernel code: BKL, or deferred
+		 * to its owner (never spun for in interrupt context) */
+		irqRunOrDefer(27);
+		AuDeferredIRQRun();
 		AuScheduleThread(regs);
 		return;
 	}
@@ -302,7 +437,7 @@ void irq_el1_handler(AA64Registers* regs) {
 	}
 	if (irq == 2) {
 		AuTextOut("PL031 RTC IRQ %d \n", irq);
-		AuPL031RTCIRQHandle();
+		irqRunOrDefer(2);
 		GICSendEOI(iar);
 		GICCheckPending(irq);
 		return;
@@ -310,7 +445,8 @@ void irq_el1_handler(AA64Registers* regs) {
 	// GICClearPendingIRQ(irq);
 
 	if (irq >= 32 && irq < 1020) {
-		GICCallSPIHandler(irq);
+		/* masked at the distributor first if deferred, then EOI */
+		irqRunOrDefer(irq);
 		GICSendEOI(iar);
 	}
 
