@@ -235,6 +235,32 @@ XE_EXTERN {
 
 	XE_LIB int _KeProcessFetch(XEProcessList * list, int num_proc_count);
 
+	/**
+	 * _sys_cpu_stats -- usage counters of one cpu core. Times are in
+	 * generic timer counter ticks (counter_freq per second) since the
+	 * core started scheduling; diff two samples for a usage figure.
+	 * Mirrors AA64CPUStats in BaseHdr/Hal/AA64/aa64smp.h (64 bytes)
+	 */
+	typedef struct _sys_cpu_stats_ {
+		uint32_t cpu;
+		uint32_t online;
+		uint64_t mpidr;
+		uint64_t busy_ticks;
+		uint64_t idle_ticks;
+		uint64_t context_switches;
+		uint64_t timer_irqs;
+		uint64_t counter_freq;
+		char current[8];
+	} XECpuStats;
+
+	/**
+	 * @brief _KeGetCPUStats -- fetch per core usage counters
+	 * @param stats -- array to fill
+	 * @param max_cpus -- capacity of stats
+	 * @return number of cores written, -1 on error
+	 */
+	XE_LIB int _KeGetCPUStats(XECpuStats * stats, int max_cpus);
+
 	XE_LIB int _KeExitSubThread(int thread_id);
 
 	XE_LIB int _KeThreadWaitForTermination(int thread_id);

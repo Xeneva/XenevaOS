@@ -47,6 +47,7 @@
 #include <Hal/AA64/profile.h>
 #include <timer.h>
 #include <Fs/vfsmod.h>
+#include <Sync/bkl.h>
 
 #define LOADER_SCRATCH_VIRT 0xFFFFC00000700000
 
@@ -98,6 +99,8 @@ void AuProcessEntUser(uint64_t rcx) {
 				kfree(uentry->argvs);
 				uentry->argvs = 0;
 			}
+			/* leaving the kernel for EL0 */
+			AuBKLReleaseAll();
 			aa64_enter_user(uentry->rsp, uentry->entrypoint, 0);
 			while (1) {}
 		}
@@ -153,6 +156,8 @@ void AuProcessEntUser(uint64_t rcx) {
 	uint64_t* check_sp = (uint64_t*)uentry->rsp;
 	//UARTDebugOut("[loader]: stack check [0]: %x, [1]: %x\r\n", check_sp[0], check_sp[1]);
 
+	/* leaving the kernel for EL0 */
+	AuBKLReleaseAll();
 	aa64_enter_user(uentry->rsp, uentry->entrypoint, 0);
 	while (1) {}
 }
@@ -166,6 +171,8 @@ void AuProcessEntSubThread(uint64_t rcx) {
 	AA64Thread* t = AuGetCurrentThread();
 	t->start_time_us = AuGetCurrentUS();
 	AuUserEntry* uentry = t->uentry;
+	/* leaving the kernel for EL0 */
+	AuBKLReleaseAll();
 	aa64_enter_user(uentry->rsp, uentry->entrypoint, uentry->argvaddr);
 }
 

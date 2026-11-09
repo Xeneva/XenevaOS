@@ -315,6 +315,10 @@ static int64_t linux_clone(uint64_t flags, uint64_t newsp, uint64_t parent_tid, 
 	frame->x0 = 0;
 	frame->EL0SP = (int64_t)newsp;
 
+	/* AuCreateSubKthread publishes the child on the ready list. Keep it
+	 * locked until its resume state, process membership and TIDs are
+	 * initialized so another core cannot run a partially published child. */
+	uint64_t sched_daif = AuSchedLock();
 	AA64Thread* child = AuCreateSubKthread(AuProcessEntSubThread, (uint64_t)frame, proc->cr3, "lthr");
 	child->threadType = THREAD_LEVEL_USER | THREAD_LEVEL_SUBTHREAD;
 	child->procSlot = proc;
@@ -332,6 +336,7 @@ static int64_t linux_clone(uint64_t flags, uint64_t newsp, uint64_t parent_tid, 
 		linux_write_tid(parent_tid, tid);
 	if (flags & LNX_CLONE_CHILD_SETTID)
 		linux_write_tid(child_tid, tid);
+	AuSchedUnlock(sched_daif);
 	return (int64_t)tid;
 }
 

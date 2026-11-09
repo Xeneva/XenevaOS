@@ -30,6 +30,7 @@ The AArch64 LLVM/Clang work below is recorded alongside the previously documente
 
 ### Fixed
 
+- **fix(ARM64 merge)**: reconciled the native/Linux futex and pthread work with the SMP scheduler, retaining CPU statistics syscall 86 and native futex syscall 94. Waiter publication, wake/requeue, timeout results, and saved exception-frame updates now share the scheduler lock; Linux clone initialization stays locked until the child is fully published.
 - **fix(virtionet)**: the TX path round-robined 8 buffers without ever consuming completions, so bursts rewrote descriptors QEMU had not finished with and the wire saw spliced frames. Transmit now reclaims `tx_used` before reusing a slot (bounded spin, drop-and-retry past it) and propagates the result through the NIC write callback.
 - **fix(XEClib)**: removed per-call serial debug prints from `fopen`/`fwrite`/`puts` that flooded the console during TLS handshakes and distorted timing.
 - **fix(BootAA64)**: `ExitBootServices` retry loop maybe livelock through all 16 retries and hang before the kernel ever ran — the `EFI_BUFFER_TOO_SMALL`

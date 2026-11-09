@@ -94,6 +94,18 @@ AU_EXTERN AU_EXPORT void AuroraTimerCancel(int tNum);
  */
 void AuroraTimerTick();
 
+/**
+ * @brief AuroraTimerUpdateClock -- system time and wall clock, every tick
+ * on the boot core, needs no BKL
+ */
+extern void AuroraTimerUpdateClock(void);
+
+/**
+ * @brief AuroraTimerRunExpired -- run expired kernel timer callbacks,
+ * caller holds the BKL (callbacks are ordinary kernel code)
+ */
+extern void AuroraTimerRunExpired(void);
+
 
 AU_EXTERN AU_EXPORT uint64_t AuGetCurrentMS();
 

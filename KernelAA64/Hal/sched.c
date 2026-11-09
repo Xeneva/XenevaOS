@@ -32,6 +32,9 @@
 #include <stdint.h>
 #include <Hal/AA64/aa64cpu.h>
 #include <Hal/AA64/sched.h>
+#include <Hal/AA64/aa64percpu.h>
+#include <Sync/bkl.h>
+#include <Sync/ticketlock.h>
 #include <Mm/pmmngr.h>
 #include <Mm/kmalloc.h>
 #include <Mm/vmmngr.h>
@@ -76,39 +79,231 @@ AA64Thread* trash_thr_last;
 AA64Thread* sleep_thr_head;
 AA64Thread* sleep_thr_last;
 
-AA64Thread* current_thread;
+/* The running thread lives in this core's per cpu block (tpidr_el1);
+ * every use of current_thread below reads or writes the calling core's
+ * slot. AuGetCurrentThread is the NULL safe accessor for code that may
+ * run before per cpu setup. */
+#define current_thread (AA64GetPerCPU()->currentThread)
+
+/* boot core's idle thread; secondary cores have their own in
+ * AA64PerCPU::idleThread, see schedIdleThread */
 AA64Thread* _idle_thr;
 uint64_t thread_id;
 bool _scheduler_initialized;
 uint64_t scheduler_tick;
 static uint64_t _global_idle_time;
 
-/* Serializes all scheduler list mutations. UP rule: thread context must
- * hold this with IRQs masked (SchedLock does both); the tick path runs
- * masked already. DAIF is save/restored so masked callers (fault path,
- * scheduler tail) are not wrongly unmasked. */
-static Spinlock* s_sched_lock;
+/* idle thread of the calling core */
+static AA64Thread* schedIdleThread(void) {
+	AA64PerCPU* p = AA64GetPerCPU();
+	if (p && p->idleThread)
+		return p->idleThread;
+	return _idle_thr;
+}
+
+static bool schedIsIdle(AA64Thread* t) {
+	return t == _idle_thr || t == schedIdleThread();
+}
+
+/* charge the time since this core's last switch to busy or idle, and
+ * note who runs next. Owning core only, IRQs masked */
+static void schedAccount(AA64PerCPU* p, AA64Thread* outgoing, AA64Thread* incoming) {
+	uint64_t now = get_cntpct_el0();
+	uint64_t last = p->acct_last;
+	p->acct_last = now;
+	if (last && now > last) {
+		if (schedIsIdle(outgoing))
+			p->idle_cnt += now - last;
+		else
+			p->busy_cnt += now - last;
+	}
+	memcpy(p->cur_name, incoming->name, sizeof(p->cur_name));
+}
+
+/* does resuming t continue kernel code (as opposed to eret to EL0)?
+ * first runs, AuScheduleNext parks and EL1 exception frames all do */
+static bool schedResumesInKernel(AA64Thread* t) {
+	if (t->state == THREAD_STATE_LEFT_IN_KERNEL || !t->justStored)
+		return true;
+	if (t->elr_el1 >= 0xFFFF000000000000ULL)
+		return true;
+	return (t->spsr_el1 & 0xC) != 0; /* SPSR.M[3:2] = EL */
+}
+
+/**
+ * @brief AuSchedCanRunHere -- may the calling core resume this thread now.
+ * Call with the scheduler lock held.
+ *
+ * - on_cpu: another core still executes on its context (the outgoing
+ *   thread of this very core is fine, it may simply continue)
+ * - kernel contexts resume on the boot core only. All device interrupts
+ *   are delivered there, so a kernel thread that holds the BKL with IRQs
+ *   enabled always gets its interrupts nested on its own core instead of
+ *   deadlocking against an interrupt handler spinning on another core.
+ *   Secondary cores run user mode, and syscalls (IRQs masked) from it.
+ */
+/* may cpu resume t's context at all (ignoring on_cpu)? Kernel contexts of
+ * user threads (a parked syscall, a first run) run IRQs masked, or hand
+ * any interrupt they wait for over through the BKL deferral, so they go
+ * anywhere. Pure kernel threads stay on the boot core for now: drivers
+ * there still assume the core that set up their interrupt */
+static bool schedCanRunOn(AA64Thread* t, uint32_t cpu) {
+	if (cpu == 0 || !schedResumesInKernel(t))
+		return true;
+	return (t->threadType & THREAD_LEVEL_USER) != 0;
+}
+
+bool AuSchedCanRunHere(AA64Thread* t) {
+	if (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE) && t != current_thread)
+		return false;
+	return schedCanRunOn(t, AA64GetCPUNum());
+}
+
+/* t just became runnable: wake one idle core that may run it, instead
+ * of letting it wait up to a tick. Called with the scheduler lock held */
+static void schedKick(AA64Thread* t) {
+	if (!_scheduler_initialized)
+		return;
+	uint32_t self = AA64GetCPUNum();
+	for (uint32_t k = 1; k <= AA64_SMP_MAX_CPUS; k++) {
+		uint32_t cpu = (self + k) % AA64_SMP_MAX_CPUS;
+		AA64PerCPU* p = &_aa64_percpu[cpu];
+		if (p->magic != AA64_PERCPU_MAGIC || p->state != AA64_CPU_STATE_ONLINE || !p->idleThread)
+			continue;
+		if (cpu != 0 && !p->sched_release)
+			continue;
+		if (p->currentThread != p->idleThread || !schedCanRunOn(t, cpu))
+			continue;
+		if (__atomic_exchange_n(&p->ipi_pending, 1, __ATOMIC_ACQ_REL))
+			continue; /* already on its way to reschedule */
+		GICSendSGI(cpu, AA64_IPI_RESCHED);
+		return;
+	}
+}
+
+/* Serializes all scheduler list and thread state changes across cores.
+ * Callers hold it with IRQs masked (AuSchedLock does both); DAIF is
+ * save/restored so masked callers (fault path, scheduler tail) are not
+ * wrongly unmasked.
+ *
+ * Recursive on the owning core: the tick path holds it across sleep
+ * handling, EDF releases and the pick, and those helpers lock again on
+ * their own. Other cores spin until the outermost unlock. Masking IRQs
+ * first means the owner can never be interrupted into a second,
+ * unrelated critical section on the same core. */
+extern void aa64_spinlock_acquire(uint32_t* lock);
+extern void aa64_spinlock_release(uint32_t* lock);
+/* FIFO, every core's tick contends for it */
+static AuTicketLock s_sched_lock_word __attribute__((aligned(8)));
+static volatile uint32_t s_sched_owner; /* owning cpu_num + 1, 0 when free */
+static uint32_t s_sched_depth;
+static bool s_sched_lock_ready;
 
 uint64_t AuSchedLock(void) {
 	uint64_t d = 0;
-	if (s_sched_lock) {
-		d = read_daif();
-		mask_irqs();
-		AuAcquireSpinlock(s_sched_lock);
+	if (!s_sched_lock_ready)
+		return d;
+	d = read_daif();
+	mask_irqs();
+	/* only this core ever writes its own id into s_sched_owner, and it
+	 * clears it before releasing, so a match means we already hold it */
+	uint32_t me = AA64GetCPUNum() + 1;
+	if (s_sched_owner == me) {
+		s_sched_depth++;
+		return d;
 	}
+	AuTicketLockAcquire(&s_sched_lock_word);
+	s_sched_owner = me;
+	s_sched_depth = 1;
 	return d;
 }
 
 void AuSchedUnlock(uint64_t d) {
-	if (s_sched_lock) {
-		AuReleaseSpinlock(s_sched_lock);
+	if (!s_sched_lock_ready)
+		return;
+	if (s_sched_depth == 0 || s_sched_owner != AA64GetCPUNum() + 1) {
+		/* unbalanced unlock, do not release someone else's lock */
 		restore_daif(d);
+		return;
 	}
+	if (--s_sched_depth == 0) {
+		s_sched_owner = 0;
+		AuTicketLockRelease(&s_sched_lock_word);
+	}
+	restore_daif(d);
 }
 
 /* Unlocked cores: caller must hold the sched lock (or run masked in
  * the tick path, which is atomic against masked thread-side holders). */
+/* Every thread records which list it is linked on. schedUnlink only
+ * patches the head/tail of the list it is handed: unlinking a thread from
+ * a list it is not on leaves that list's head pointing at it and cuts off
+ * the rest of the list it really is on (a whole run queue can vanish).
+ * Mismatches are reported and redirected to the right list. */
+#define SCHED_LIST_NONE	   0
+#define SCHED_LIST_READY   1
+#define SCHED_LIST_BLOCKED 2
+#define SCHED_LIST_SLEEP   3
+#define SCHED_LIST_TRASH   4
+
+static uint32_t schedListId(AA64Thread** head) {
+	if (head == &thread_list_head)
+		return SCHED_LIST_READY;
+	if (head == &blocked_thr_head)
+		return SCHED_LIST_BLOCKED;
+	if (head == &sleep_thr_head)
+		return SCHED_LIST_SLEEP;
+	if (head == &trash_thr_head)
+		return SCHED_LIST_TRASH;
+	return SCHED_LIST_NONE;
+}
+
+static void schedListPtrs(uint32_t id, AA64Thread*** head, AA64Thread*** last) {
+	switch (id) {
+	case SCHED_LIST_READY:
+		*head = &thread_list_head;
+		*last = &thread_list_last;
+		break;
+	case SCHED_LIST_BLOCKED:
+		*head = &blocked_thr_head;
+		*last = &blocked_thr_last;
+		break;
+	case SCHED_LIST_SLEEP:
+		*head = &sleep_thr_head;
+		*last = &sleep_thr_last;
+		break;
+	case SCHED_LIST_TRASH:
+		*head = &trash_thr_head;
+		*last = &trash_thr_last;
+		break;
+	default:
+		*head = NULL;
+		*last = NULL;
+		break;
+	}
+}
+
+static uint32_t s_sched_list_reports;
+static void schedListReport(const char* what, AA64Thread* t, uint32_t want, void* caller) {
+	if (s_sched_list_reports >= 32)
+		return;
+	s_sched_list_reports++;
+	UARTDebugOut("[sched]: %s %s state %d: list %d, but it is on %d (cpu %d, caller %x)\r\n",
+				 what, t->name, (int)t->state, want, t->sched_list, AA64GetCPUNum(), caller);
+}
+
+static void schedUnlinkRaw(AA64Thread** head, AA64Thread** last, AA64Thread* thread);
+
 static void schedLink(AA64Thread** head, AA64Thread** last, AA64Thread* t) {
+	uint32_t id = schedListId(head);
+	if (t->sched_list != SCHED_LIST_NONE) {
+		/* already linked: a second link would corrupt both lists */
+		schedListReport("link", t, id, __builtin_return_address(0));
+		AA64Thread **h, **l;
+		schedListPtrs(t->sched_list, &h, &l);
+		if (h)
+			schedUnlinkRaw(h, l, t);
+	}
 	t->next = NULL;
 	t->prev = NULL;
 	if (*head == NULL) {
@@ -119,10 +314,25 @@ static void schedLink(AA64Thread** head, AA64Thread** last, AA64Thread* t) {
 		t->prev = *last;
 	}
 	*last = t;
+	t->sched_list = id;
 }
 
 static void schedUnlink(AA64Thread** head, AA64Thread** last, AA64Thread* thread) {
-	if (!thread || !head || !last || *head == NULL)
+	if (!thread || !head || !last)
+		return;
+	uint32_t id = schedListId(head);
+	if (thread->sched_list != id) {
+		if (thread->sched_list == SCHED_LIST_NONE)
+			return; /* on no list: nothing to take it off */
+		schedListReport("unlink", thread, id, __builtin_return_address(0));
+		schedListPtrs(thread->sched_list, &head, &last);
+	}
+	schedUnlinkRaw(head, last, thread);
+}
+
+static void schedUnlinkRaw(AA64Thread** head, AA64Thread** last, AA64Thread* thread) {
+	thread->sched_list = SCHED_LIST_NONE;
+	if (*head == NULL)
 		return;
 	if (thread->prev)
 		thread->prev->next = thread->next;
@@ -140,9 +350,15 @@ static void schedUnlink(AA64Thread** head, AA64Thread** last, AA64Thread* thread
 	 * these fields untouched --axiss */
 }
 
+/* link onto the ready list and wake an idle core for it */
+static void schedLinkReady(AA64Thread* t) {
+	schedLink(&thread_list_head, &thread_list_last, t);
+	schedKick(t);
+}
+
 void AuThreadInsert(AA64Thread* new_task) {
 	uint64_t d = AuSchedLock();
-	schedLink(&thread_list_head, &thread_list_last, new_task);
+	schedLinkReady(new_task);
 	AuSchedUnlock(d);
 }
 
@@ -202,13 +418,22 @@ void AA64NextThread() {
 	 * AuScheduleThread): resuming SLEEP/BLOCKED/KILLABLE threads here
 	 * breaks whatever parked them. The walk is bounded so a cyclic list
 	 * can never wedge the tick; with nothing runnable we park on idle. --axiss */
-	AA64Thread* start =
-		(current_thread && current_thread->next) ? current_thread->next : thread_list_head;
+	/* Continue the round-robin after the current thread only while it is
+	 * still on the ready list. A thread that just went to sleep or blocked
+	 * sits on another list and its next pointer walks that list: the old
+	 * code then picked a parked LEFT_IN_KERNEL sleeper straight off the
+	 * sleep list, resumed it early while still linked there, and its next
+	 * AuSleepThread unlinked it from the ready list it was not on, cutting
+	 * the run queue (every thread behind it stopped being scheduled). */
+	AA64Thread* cur = current_thread;
+	AA64Thread* start = (cur && cur->sched_list == SCHED_LIST_READY && cur->next) ? cur->next
+																			   : thread_list_head;
 
 	AA64Thread* cursor = start; //current_thread ? current_thread->next : NULL;
 	for (int i = 0; i < SCHED_VALIDATE_STEPS && cursor; i++) {
-		if (cursor != _idle_thr &&
-			(cursor->state == THREAD_STATE_READY || cursor->state == THREAD_STATE_LEFT_IN_KERNEL)) {
+		if (cursor != _idle_thr && cursor->sched_list == SCHED_LIST_READY &&
+			(cursor->state == THREAD_STATE_READY || cursor->state == THREAD_STATE_LEFT_IN_KERNEL) &&
+			AuSchedCanRunHere(cursor)) {
 			current_thread = cursor;
 			return;
 		}
@@ -217,7 +442,7 @@ void AA64NextThread() {
 		if (cursor == start)
 			break;
 	}
-	current_thread = _idle_thr;
+	current_thread = schedIdleThread();
 }
 
 /**
@@ -250,7 +475,7 @@ AA64Thread* AuCreateKthread(void (*entry)(uint64_t), uint64_t* pml, char* name) 
 	t->sp -= 64;
 	t->originalKSp = t->sp;
 	t->state = THREAD_STATE_READY;
-	t->thread_id = thread_id++;
+	t->thread_id = __atomic_fetch_add(&thread_id, 1, __ATOMIC_RELAXED);
 	t->fpsr = 0;
 	t->fpcr = 0;
 	t->waitlist = initialize_list();
@@ -285,7 +510,7 @@ AA64Thread* AuCreateSubKthread(void (*entry)(uint64_t), uint64_t stack, uint64_t
 	t->sp = stack;
 	t->originalKSp = t->sp;
 	t->state = THREAD_STATE_READY;
-	t->thread_id = thread_id++;
+	t->thread_id = __atomic_fetch_add(&thread_id, 1, __ATOMIC_RELAXED);
 	t->fpsr = 0;
 	t->fpcr = 0;
 	t->waitlist = initialize_list();
@@ -306,6 +531,8 @@ static void AuSchedHeartbeat(void) {
 	static uint32_t idle_iters;
 	if ((++idle_iters % 20000) != 0)
 		return;
+	/* the console and the lists below are kernel state */
+	AuBKLLock();
 	int ready = 0, sleep = 0, blocked = 0, leftk = 0, other = 0;
 	int sleeplist = 0, edfready = 0;
 	char names[5][8];
@@ -366,6 +593,7 @@ static void AuSchedHeartbeat(void) {
 		UARTDebugOut("[sched-dbg]: edf_ready=%d\n", edfready);
 	for (int i = 0; i < shown; i++)
 		UARTDebugOut("[sched-dbg]: thr %s state=%d quanta=%d \n", names[i], states[i], quantas[i]);
+	AuBKLUnlock();
 }
 
 /* the idle loop body, factored out of AuIdleThread so aa64_schedule_init can
@@ -382,15 +610,19 @@ static void AuSchedHeartbeat(void) {
 void AuIdleLoop(void) {
 	while (1) {
 		enable_irqs();
-		AuSchedHeartbeat();
+		/* aa64_schedule_init re-enters this loop on every core's idle */
+		if (AA64GetCPUNum() == 0)
+			AuSchedHeartbeat();
 		_wfi();
 	}
 }
 
 void AuIdleThread(uint64_t ctx) {
 	mask_irqs();
+	AuBKLLock();
 	UARTDebugOut("Idle thread running \r\n");
 	AuTextOut("Starting up Xeneva please wait...\r\n");
+	AuBKLUnlock();
 	_idle_thr->start_time_us = AuGetCurrentUS();
 	enable_irqs();
 	AuIdleLoop();
@@ -449,7 +681,7 @@ void AuHandleSleepThreads() {
 			if (sleep_thr->state != THREAD_STATE_LEFT_IN_KERNEL)
 				sleep_thr->state = THREAD_STATE_READY;
 			schedUnlink(&sleep_thr_head, &sleep_thr_last, sleep_thr);
-			schedLink(&thread_list_head, &thread_list_last, sleep_thr);
+			schedLinkReady(sleep_thr);
 		}
 		sleep_thr = next;
 	}
@@ -483,6 +715,11 @@ void AuScheduleThread(AA64Registers* regs) {
 	}
 	mask_irqs();
 	AA64Thread* runThr = current_thread;
+
+	/* Publish the outgoing frame, futex result, state changes and the pick
+	 * in one critical section. Futex wake and timeout paths take this lock
+	 * before patching the saved frame or making the thread runnable. */
+	uint64_t sched_daif = AuSchedLock();
 
 	/* the vector wrapper already captured the full interrupted register set,
 	 * so i treat this frame as the only valid resume point for a preempted
@@ -537,59 +774,101 @@ void AuScheduleThread(AA64Registers* regs) {
 
 	if (runThr->procSlot != NULL) {
 		AuProcess* proc = (AuProcess*)runThr->procSlot;
-		proc->total_runtime_us += delta;
-		proc->window_runtime_us += delta;
+		/* threads of one process may switch out on several cores at once */
+		__atomic_fetch_add(&proc->total_runtime_us, delta, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&proc->window_runtime_us, delta, __ATOMIC_RELAXED);
 	} else {
-		_global_idle_time += delta;
+		__atomic_fetch_add(&_global_idle_time, delta, __ATOMIC_RELAXED);
 	}
 
 	/** change thread's running state to ready state */
 	if (runThr->state == THREAD_STATE_RUNNING)
 		runThr->state = THREAD_STATE_READY;
 
-	scheduler_tick++;
-	AuHandleSleepThreads();
-	AuEDFHandleReleases(now);
+	/* system tick bookkeeping is the boot core's job, once per tick (not
+	 * on IPI or syscall driven reschedules) */
+	AA64PerCPU* this_cpu = AA64GetPerCPU();
+	bool from_tick = this_cpu->sched_tick;
+	this_cpu->sched_tick = 0;
+	if (AA64GetCPUNum() == 0 && from_tick) {
+		scheduler_tick++;
+		AuHandleSleepThreads();
+		AuEDFHandleReleases(now);
+	}
 	AA64NextThread();
+	AA64Thread* next = current_thread;
 
-	current_thread->start_time_us = now;
+	/* claim next for this core. runThr stays claimed until the switch
+	 * path has moved off its stack (sched_finish_switch) */
+	__atomic_store_n(&next->on_cpu, 1, __ATOMIC_RELAXED);
+	next->start_time_us = now;
+	bool left_in_kernel = (next->state == THREAD_STATE_LEFT_IN_KERNEL);
+	bool resume_kernel = schedResumesInKernel(next);
 
 	/* mark this thread as running */
-	if (current_thread->state == THREAD_STATE_READY)
-		current_thread->state = THREAD_STATE_RUNNING;
+	if (next->state == THREAD_STATE_READY)
+		next->state = THREAD_STATE_RUNNING;
+	else if (left_in_kernel)
+		next->state = THREAD_STATE_READY;
 
-	write_both_ttbr(V2P(current_thread->pml));
+	AuSchedUnlock(sched_daif);
+
+	/* per core statistics, read by debuggers, the heartbeat and
+	 * SYS_GET_CPU_STATS */
+	schedAccount(this_cpu, runThr, next);
+	if (next != runThr)
+		this_cpu->context_switches++;
+	if (schedIsIdle(next))
+		this_cpu->idle_tick++;
+
+	/* BKL hand over, outside the scheduler lock (order is BKL -> sched).
+	 * runThr keeps the depth it held for its next resume; next gets back
+	 * what it needs: its saved depth if it continues kernel code (kernel
+	 * threads hold at least one level whenever they run), none for EL0 */
+	runThr->bkl_depth = AuBKLReleaseAll();
+	this_cpu->switchRelease = (next != runThr) ? &runThr->on_cpu : NULL;
+	if (resume_kernel) {
+		/* a first run enters kernel code (AuProcessEntUser, a kthread
+		 * body) and needs a level. A pure kernel thread holds at least
+		 * one whenever it runs. A user thread's parked syscall gets back
+		 * exactly what it held: 0 for a BKL free fast path syscall */
+		uint32_t depth = next->bkl_depth;
+		if (depth == 0 && !schedIsIdle(next) &&
+			(!next->justStored || !(next->threadType & THREAD_LEVEL_USER)))
+			depth = 1;
+		AuBKLAcquireDepth(depth);
+	}
+
+	/* ASID tagged switch, no TLB flush */
+	AuVmmActivate(next->pml);
 
 	//tlb_flush_vmalle1is();
-	aa64_restore_fp(current_thread->fp_regs,
-					(uint64_t*)&current_thread->fpcr,
-					(uint64_t*)&current_thread->fpsr);
+	aa64_restore_fp(next->fp_regs, (uint64_t*)&next->fpcr, (uint64_t*)&next->fpsr);
 	dsb_sy_barrier();
 
 	/** check if the thread was left somewhere in kernel space **/
-	if (current_thread->state == THREAD_STATE_LEFT_IN_KERNEL) {
-		current_thread->state = THREAD_STATE_READY;
-		aa64_restore_sp(current_thread);
+	if (left_in_kernel) {
+		aa64_restore_sp(next);
 		/* should not reach here */
 		for (;;)
 			;
 	}
 
-	AuSignalDeliver(current_thread);
-	aa64_set_tpidr_el0(current_thread->linux_tls);
+	AuSignalDeliver(next);
+	aa64_set_tpidr_el0(next->linux_tls);
 
-	if (!current_thread->justStored) {
+	if (!next->justStored) {
 		/* first_time_sex (lol) installs the initial kernel entry, stack and
 		 * PSTATE and never returns. user threads go through
 		 * AuProcessEntUser instead, which builds their EL0 stack before
 		 * its own eret --axiss */
-		first_time_sex(current_thread); //unskippable function name holy shit --axiss
+		first_time_sex(next); //unskippable function name holy shit --axiss
 		__builtin_unreachable();
 	}
 
-	AA64Registers* return_frame = (AA64Registers*)current_thread->sp;
-	current_thread->data = return_frame;
-	aa64_resume_exception_frame(return_frame, current_thread->elr_el1, current_thread->spsr_el1);
+	AA64Registers* return_frame = (AA64Registers*)next->sp;
+	next->data = return_frame;
+	aa64_resume_exception_frame(return_frame, next->elr_el1, next->spsr_el1);
 	__builtin_unreachable();
 }
 
@@ -599,7 +878,7 @@ int AuSchedYieldMs(uint64_t ms) {
 	if (_scheduler_initialized == 0)
 		return -1;
 	thr = current_thread;
-	if (!thr || thr == _idle_thr)
+	if (!thr || thr == schedIdleThread())
 		return -1;
 	if (ms == 0)
 		ms = 1;
@@ -616,12 +895,34 @@ void AuScheduleNext() {
 	if (_scheduler_initialized == 0)
 		return;
 
-	current_thread->state = THREAD_STATE_LEFT_IN_KERNEL;
+	/* masked until the resume (aa64_restore_sp returns with IRQs still
+	 * masked, as before): a tick between here and aa64_schedule_init
+	 * would save this context as if it were the idle thread's */
+	mask_irqs();
 	AA64Thread* storeThr = current_thread;
+	AA64Thread* idle = schedIdleThread();
+
+	uint64_t d = AuSchedLock();
+	/* an exiting thread stays KILLABLE on the trash list. idle never
+	 * parks: aa64_schedule_init re-enters its loop fresh */
+	if (storeThr != idle && storeThr->state != THREAD_STATE_KILLABLE)
+		storeThr->state = THREAD_STATE_LEFT_IN_KERNEL;
+	current_thread = idle;
+	__atomic_store_n(&idle->on_cpu, 1, __ATOMIC_RELAXED);
+	AuSchedUnlock(d);
+
 	aa64_store_fp(storeThr->fp_regs, &storeThr->fpcr, &storeThr->fpsr);
 	__asm__ volatile("msr cntv_tval_el0, %0\n isb" ::"r"(1ULL));
-	current_thread = _idle_thr;
-	aa64_schedule_init(storeThr, current_thread, V2P(current_thread->pml));
+
+	/* idle holds no BKL. storeThr gets its depth back on the boot core,
+	 * the only core that resumes parked kernel contexts */
+	schedAccount(AA64GetPerCPU(), storeThr, idle);
+	storeThr->bkl_depth = AuBKLReleaseAll();
+	/* idle's address space, ASID tagged; aa64_schedule_init no longer
+	 * touches TTBR0 */
+	AuVmmActivate(idle->pml);
+	AA64GetPerCPU()->switchRelease = (storeThr != idle) ? &storeThr->on_cpu : NULL;
+	aa64_schedule_init(storeThr, idle, 0);
 }
 
 static int ke_stack_idx;
@@ -634,13 +935,13 @@ static int ke_stack_idx;
  */
 uint64_t AuCreateKernelStack(uint64_t* pml) {
 	uint64_t location = KERNEL_STACK_LOCATION;
-	location += (uint64_t)ke_stack_idx * KERNEL_STACK_SIZE;
+	int idx = __atomic_fetch_add(&ke_stack_idx, 2, __ATOMIC_RELAXED);
+	location += (uint64_t)idx * KERNEL_STACK_SIZE;
 	for (int i = 0; i < (KERNEL_STACK_SIZE) / 0x1000; i++) {
 		uint64_t addr = (uint64_t)P2V((uint64_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
 		memset((void*)addr, 0, PAGE_SIZE);
 		AuMapPage(V2P(addr), (location + (uint64_t)i * 4096), PTE_AP_RW | PTE_NORMAL_MEM);
 	}
-	ke_stack_idx += 2;
 	return (location + KERNEL_STACK_SIZE);
 }
 
@@ -667,7 +968,7 @@ uint64_t AuCreateSubKernelStack(AuProcess* proc, uint64_t* pml) {
  *	@brief AuSchedulerInitialize -- initialize the scheduler
  */
 void AuSchedulerInitialize() {
-	s_sched_lock = AuCreateSpinlock(true);
+	s_sched_lock_ready = true;
 	thread_list_head = NULL;
 	thread_list_last = NULL;
 	thread_id = 0;
@@ -676,6 +977,7 @@ void AuSchedulerInitialize() {
 	AA64Thread* idle_ = AuCreateKthread(AuIdleThread, idle_pd, "Idle");
 	//idle_->elr_el1 = (uint64_t)AuIdleThread;
 	_idle_thr = idle_;
+	AA64GetPerCPU()->idleThread = idle_;
 	current_thread = idle_;
 	_scheduler_initialized = false;
 	scheduler_tick = 0;
@@ -685,26 +987,40 @@ void AuSchedulerInitialize() {
  * @brief AuSchedulerStart -- start the scheduler
  */
 void AuSchedulerStart() {
+	/* secondary cores get their idle threads first, kmalloc and the
+	 * kernel stack allocator only run on the boot core */
+	AA64SMPStartSchedulers();
 	mask_irqs();
 	AA64Thread* idle = current_thread;
+	__atomic_store_n(&idle->on_cpu, 1, __ATOMIC_RELAXED);
+	AA64SMPIPILocalInit();
+	AA64GetPerCPU()->acct_last = get_cntpct_el0();
 	_scheduler_initialized = true;
 #ifndef __TARGET_BOARD_RPI3__
 	GICClearPendingIRQ(27);
 #endif
 	tlb_flush_vmalle1is();
-	write_both_ttbr(V2P(idle->pml));
+	AuVmmActivate(idle->pml);
 	aa64_restore_fp(idle->fp_regs, (uint64_t*)&idle->fpcr, (uint64_t*)&idle->fpsr);
 	suspendTimer();
 	setupTimerIRQ();
 	first_time_sex(idle);
 }
 
+/**
+ * @brief AuGetIdleThread -- idle thread of the calling core
+ */
 AA64Thread* AuGetIdleThread() {
-	return _idle_thr;
+	return schedIdleThread();
 }
 
+/**
+ * @brief AuGetCurrentThread -- thread running on the calling core,
+ * NULL before per cpu data or the scheduler is set up
+ */
 AA64Thread* AuGetCurrentThread() {
-	return current_thread;
+	AA64PerCPU* p = AA64GetPerCPU();
+	return p ? p->currentThread : NULL;
 }
 
 /**
@@ -746,7 +1062,7 @@ void AuUnblockThread(AA64Thread* thread) {
 		}
 	}
 	if (found_) {
-		schedLink(&thread_list_head, &thread_list_last, thread);
+		schedLinkReady(thread);
 	}
 	AuSchedUnlock(d);
 }
@@ -780,7 +1096,7 @@ void AuThreadWakePoller(AA64Thread* t) {
 	if (moved) {
 		if (t->state != THREAD_STATE_LEFT_IN_KERNEL)
 			t->state = THREAD_STATE_READY;
-		schedLink(&thread_list_head, &thread_list_last, t);
+		schedLinkReady(t);
 	}
 	AuSchedUnlock(d);
 }
@@ -806,15 +1122,63 @@ void AuSleepThread(AA64Thread* thread, uint64_t ms) {
  * @param thread -- pointer to thread struct
  */
 void AuThreadMakeReady(AA64Thread* thread) {
+	/* state check and move are one step, another core may be changing
+	 * the same thread's state */
+	uint64_t d = AuSchedLock();
 	if (thread->state == THREAD_STATE_SLEEP) {
-		uint64_t d = AuSchedLock();
 		thread->sleepQuanta = 0;
 		schedUnlink(&sleep_thr_head, &sleep_thr_last, thread);
-		schedLink(&thread_list_head, &thread_list_last, thread);
+		schedLinkReady(thread);
 		thread->state = THREAD_STATE_READY;
-		AuSchedUnlock(d);
-	} else if (thread->state == THREAD_STATE_BLOCKED)
+	} else if (thread->state == THREAD_STATE_BLOCKED) {
 		AuUnblockThread(thread);
+	} else if (thread->state != THREAD_STATE_KILLABLE) {
+		/* running (maybe on another core) on its way to a pause: do not
+		 * lose this wakeup, see AuThreadPark */
+		thread->wake_pending = 1;
+	}
+	AuSchedUnlock(d);
+}
+
+/**
+ * @brief AuThreadPark -- block the calling thread for PauseThread, unless
+ * a wakeup already arrived for it.
+ *
+ * User space waits in two syscalls: look for an event (postbox get), then
+ * pause if there was none. A waker that runs in between, on another core,
+ * finds the thread still running and used to drop the wakeup, leaving it
+ * blocked with its event already queued. Wakers now leave a token instead
+ * (AuThreadUnpark, AuThreadMakeReady) and the pause consumes it.
+ * @param thread -- the calling thread
+ * @return true if it blocked (the caller reschedules), false if a wakeup
+ * was pending and it should return at once
+ */
+bool AuThreadPark(AA64Thread* thread) {
+	uint64_t d = AuSchedLock();
+	if (thread->wake_pending) {
+		thread->wake_pending = 0;
+		AuSchedUnlock(d);
+		return false;
+	}
+	thread->state = THREAD_STATE_BLOCKED;
+	schedUnlink(&thread_list_head, &thread_list_last, thread);
+	schedLink(&blocked_thr_head, &blocked_thr_last, thread);
+	AuSchedUnlock(d);
+	return true;
+}
+
+/**
+ * @brief AuThreadUnpark -- wake a paused thread, or leave it a wakeup
+ * token if it is not blocked right now (see AuThreadPark)
+ * @param thread -- thread to wake
+ */
+void AuThreadUnpark(AA64Thread* thread) {
+	uint64_t d = AuSchedLock();
+	if (thread->state == THREAD_STATE_BLOCKED)
+		AuUnblockThread(thread);
+	else if (thread->state != THREAD_STATE_KILLABLE)
+		thread->wake_pending = 1;
+	AuSchedUnlock(d);
 }
 /**
  * @brief AuThreadFindByID -- finds a thread by its id from
@@ -999,6 +1363,67 @@ uint64_t AuGetSystemTimerTick() {
  */
 void AuSetIdleThread(AA64Thread* thr) {
 	_idle_thr = thr;
+	_aa64_percpu[0].idleThread = thr;
+}
+
+/* body of a secondary core's idle thread. The boot core's AuIdleThread
+ * also prints the boot banner and the scheduler heartbeat, keep the
+ * console off the other cores */
+static void AuAPIdleThread(uint64_t ctx) {
+	(void)ctx;
+	while (1) {
+		enable_irqs();
+		_wfi();
+	}
+}
+
+/**
+ * @brief AuSchedCreateAPIdleThread -- create the idle thread of a
+ * secondary core. Runs on the boot core: kmalloc and the kernel stack
+ * allocator are not used from other cores yet. The thread is taken off
+ * the shared ready list again, only its own core may ever run it.
+ * @param cpu_num -- logical cpu number of the secondary core
+ */
+AA64Thread* AuSchedCreateAPIdleThread(uint32_t cpu_num) {
+	char name[8] = {'I', 'd', 'l', 'e', (char)('0' + (cpu_num % 10)), 0, 0, 0};
+	/* own address space like the boot idle: AuCreateKthread maps the
+	 * signal trampoline into it at a fixed address */
+	uint64_t* pd = AuCreateVirtualAddressSpace();
+	if (!pd)
+		return NULL;
+	AA64Thread* t = AuCreateKthread(AuAPIdleThread, pd, name);
+	AuThreadDelete(t);
+	t->next = NULL;
+	t->prev = NULL;
+	return t;
+}
+
+/**
+ * @brief AuSchedEnterAPIdle -- start the calling secondary core's timer
+ * and switch onto its idle thread, never returns
+ */
+void AuSchedEnterAPIdle(void) {
+	mask_irqs();
+	AA64PerCPU* p = AA64GetPerCPU();
+	AA64Thread* idle = p->idleThread;
+	p->currentThread = idle;
+	p->switchRelease = NULL;
+	__atomic_store_n(&idle->on_cpu, 1, __ATOMIC_RELAXED);
+	idle->state = THREAD_STATE_RUNNING;
+	AuVmmActivate(idle->pml);
+	aa64_restore_fp(idle->fp_regs, (uint64_t*)&idle->fpcr, (uint64_t*)&idle->fpsr);
+#ifndef __TARGET_BOARD_RPI3__
+	AA64SMPIPILocalInit();
+	p->acct_last = get_cntpct_el0();
+	/* the virtual timer and its PPI are banked per core */
+	suspendTimer();
+	GICEnablePPILocal(27);
+	setupTimerIRQ();
+#endif
+	/* erets into AuAPIdleThread on the idle thread's own kernel stack,
+	 * spsr 0x345 unmasks IRQs */
+	first_time_sex(idle);
+	__builtin_unreachable();
 }
 
 /**
@@ -1074,4 +1499,24 @@ void AuThreadAwakeWaiters(AA64Thread* thread) {
 
 		AuUnblockThread(unblockable);
 	}
+}
+
+/**
+ * @brief AuThreadWaitOffCPU -- wait until no core executes on the
+ * thread's context any more. Call before freeing its kernel stack or its
+ * address space. A thread killed while running on another core leaves
+ * that core at its next tick.
+ * @param t -- thread to wait for
+ */
+void AuThreadWaitOffCPU(AA64Thread* t) {
+	if (!t || t == AuGetCurrentThread())
+		return;
+	if (!__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE))
+		return;
+	/* never spin on another core's progress holding the BKL: that core
+	 * may need it to finish what it is doing and get off t's stack */
+	uint32_t depth = AuBKLReleaseAll();
+	while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE))
+		__asm__ volatile("yield");
+	AuBKLAcquireDepth(depth);
 }

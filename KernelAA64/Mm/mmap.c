@@ -174,18 +174,18 @@ void* CreateMemMapping(void* address, size_t len, int prot, int flags, int fd, u
 	 * existing contiguous proc_mmap_len cleanup contract. */
 	size_t lookup_addr;
 	if (!address) {
-		AuAcquireSpinlock(proc->mmap_lock);
+		uint64_t mmap_daif = AuAcquireSpinlockIrqSave(proc->mmap_lock);
 		lookup_addr = proc->mmap_next;
 		proc->mmap_next += len;
 		proc->proc_mmap_len += len;
-		AuReleaseSpinlock(proc->mmap_lock);
+		AuReleaseSpinlockIrqRestore(proc->mmap_lock, mmap_daif);
 	} else {
 		lookup_addr = (size_t)address;
-		AuAcquireSpinlock(proc->mmap_lock);
+		uint64_t mmap_daif = AuAcquireSpinlockIrqSave(proc->mmap_lock);
 		if (lookup_addr + len > proc->mmap_next)
 			proc->mmap_next = lookup_addr + len;
 		proc->proc_mmap_len += len;
-		AuReleaseSpinlock(proc->mmap_lock);
+		AuReleaseSpinlockIrqRestore(proc->mmap_lock, mmap_daif);
 	}
 	AuMMFileBack* fb = NULL;
 
@@ -326,6 +326,8 @@ void* CreateMemMapping(void* address, size_t len, int prot, int flags, int fd, u
 			page->bits.ap = 0b01; //RW for both EL0 EL1
 			isb_flush();
 		}
+		/* the live entry changed: drop cached translations (all ASIDs) */
+		tlb_flush(lookup_addr + i * PAGE_SIZE);
 
 		/*if (flags & MEMMAP_FLAG_COW) 
 			page->bits.cow = 1;*/
@@ -395,6 +397,8 @@ void MemMapDirty(void* startingVaddr, size_t len, int flags, int prot) {
 				UARTDebugOut("Memmap dirty setting : write \n");
 				isb_flush();
 			}
+			/* the live entry changed: drop cached translations (all ASIDs) */
+			tlb_flush(startAddr + i * PAGE_SIZE);
 
 			/*if (flags & MEMMAP_FLAG_COW)
 				page->bits.cow = 1;*/
@@ -427,9 +431,8 @@ void UnmapMemMapping(void* address, size_t len) {
 			AuVmmngrGetPage(addr + i * PAGE_SIZE, VIRT_GETPAGE_ONLY_RET, VIRT_GETPAGE_ONLY_RET);
 		if (page) {
 			uint64_t phys = page->bits.page << PAGE_SHIFT;
-			if (phys) {
-				AuPmmngrReleasePage((uint64_t)phys);
-			}
+			/* unmap and invalidate first, free after: another core may
+			 * run this address space and reach the page until then */
 			page->bits.page = 0;
 			isb_flush();
 			page->bits.present = 0;
@@ -437,6 +440,9 @@ void UnmapMemMapping(void* address, size_t len) {
 			tlb_flush_vmalle1is();
 			dsb_ish();
 			isb_flush();
+			if (phys) {
+				AuPmmngrReleasePage((uint64_t)phys);
+			}
 		}
 	}
 }

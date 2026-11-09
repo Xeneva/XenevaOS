@@ -179,13 +179,17 @@ int ProcessHeapUnmap(void* ptr, size_t sz) {
 			uint64_t phys_page = page_->bits.page << PAGE_SHIFT;
 			//UARTDebugOut("Unmap phys page : %x \n", phys_page);
 			if (phys_page) {
-				AuPmmngrReleasePage((uint64_t)phys_page);
 				//page_->raw = 0;
 				page_->bits.present = 0;
 				isb_flush();
 				page_->bits.page = 0;
 				isb_flush();
-				/* flush all PTE entries in TLB*/
+				/* this used to rely on the full TLB flush every context
+				 * switch did. With ASIDs the translation survives, and on
+				 * SMP another thread of the process may be using it right
+				 * now: invalidate (all ASIDs, all cores), then free */
+				tlb_flush(start_addr + i * PAGE_SIZE);
+				AuPmmngrReleasePage((uint64_t)phys_page);
 			}
 		}
 	}

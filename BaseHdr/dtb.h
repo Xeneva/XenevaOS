@@ -119,6 +119,22 @@ AU_EXTERN AU_EXPORT uint32_t AuDeviceTreeGetU32Property(uint32_t* node, const ch
 
 AU_EXTERN AU_EXPORT uint32_t* AuDeviceTreeGetPropCells(uint32_t* node, const char* property, uint32_t* out_num_cells);
 
+/**
+ * @brief AuDeviceTreeGetStringProperty -- returns the string value of
+ * a property, or NULL if the node doesnt have it
+ * @param node -- Pointer to node
+ * @param property -- Property name
+ */
+AU_EXTERN AU_EXPORT const char* AuDeviceTreeGetStringProperty(uint32_t* node, const char* property);
+
+/**
+ * @brief AuDeviceTreeGetChildNode -- returns the index-th direct child
+ * of a node, grand children are skipped
+ * @param node -- Pointer to parent node (as returned by AuDeviceTreeGetNode)
+ * @param index -- zero based child index
+ */
+AU_EXTERN AU_EXPORT uint32_t* AuDeviceTreeGetChildNode(uint32_t* node, uint32_t index);
+
 AU_EXTERN AU_EXPORT void AuDeviceTreeDumpAll();
 AU_EXTERN AU_EXPORT void AuDeviceTreeDumpAllProps(const char* node_name);
 /**

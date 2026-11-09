@@ -272,11 +272,11 @@ bool AuHwdevHandleOwnsDma(AuProcess* proc, int fd, uint64_t phys,
 }
 
 static uint64_t hw_reserve_va(AuProcess* proc, uint64_t len) {
-	AuAcquireSpinlock(proc->mmap_lock);
+	uint64_t mmap_daif = AuAcquireSpinlockIrqSave(proc->mmap_lock);
 	uint64_t va = proc->mmap_next;
 	proc->mmap_next += len;
 	proc->proc_mmap_len += len;
-	AuReleaseSpinlock(proc->mmap_lock);
+	AuReleaseSpinlockIrqRestore(proc->mmap_lock, mmap_daif);
 	return va;
 }
 

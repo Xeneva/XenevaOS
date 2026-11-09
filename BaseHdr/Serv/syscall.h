@@ -87,9 +87,10 @@
 #define SYS_FILE_POLL					83
 #define SYS_FILE_CHMOD					84
 #define SYS_FILE_FSYS_OWN				85
+#define SYS_GET_CPU_STATS				86
 #define SYS_FUTEX						94
 
-/* Extended native socket ABI. 86..93 and 95..178 stay reserved so older
+/* Extended native socket ABI. 87..93 and 95..178 stay reserved so older
  * binaries keep their numbers stable. */
 #define SYS_SOCKETPAIR	   179
 #define SYS_GETSOCKOPT	   180

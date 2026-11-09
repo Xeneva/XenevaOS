@@ -59,7 +59,8 @@ int AuAllocSignal(AA64Thread* thr, int signum) {
 	/* check if all tokens are sold out !!*/
 
 	/** let's go with standard posix signal **/
-	thr->sig_pending |= (1UL << signum);
+	/* the target may be taking a signal on another core right now */
+	__atomic_fetch_or(&thr->sig_pending, (1UL << signum), __ATOMIC_RELEASE);
 
 	AuThreadMakeReady(thr);
 	return 0;
@@ -80,15 +81,14 @@ static inline int ctzl(uint64_t x) {
  * @param thr -- pointer to thread
  */
 int AuSignalDispatch(AA64Thread* thr) {
-	//lock here
+	/* atomic against AuAllocSignal posting on another core */
 	int result = 0;
-	uint64_t deliverable = thr->sig_pending;
+	uint64_t deliverable = __atomic_load_n(&thr->sig_pending, __ATOMIC_ACQUIRE);
 	if (deliverable) {
 		int signo = ctzl(deliverable);
-		thr->sig_pending &= ~(1UL << signo);
+		__atomic_fetch_and(&thr->sig_pending, ~(1UL << signo), __ATOMIC_ACQ_REL);
 		result = signo;
 	}
-	//unlock here
 	//UARTDebugOut("SignalDispatch sig number : %d \r\n", result);
 	return result;
 }

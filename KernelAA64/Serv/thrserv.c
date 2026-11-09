@@ -172,7 +172,10 @@ int PauseThread() {
 	AA64Thread* current_thr = AuGetCurrentThread();
 	AA64Registers* regs = AA64GetCurrentRegCtx();
 	//current_thr->sp = (uint64_t)regs;
-	AuBlockThread(current_thr);
+	/* a wakeup that came in after the caller last found nothing to do
+	 * (another core posted an event in between) returns right away */
+	if (!AuThreadPark(current_thr))
+		return 1;
 	AuScheduleThread(regs);
 	return 1;
 }
