@@ -192,6 +192,32 @@ uint32_t * dtb_node_find_property(uint32_t * node, const char * property) {
 	return out;
 }
 
+uint32_t LBDTBPropLength(uint32_t* prop){
+    return swizzle(prop[0]);
+}
+
+uint64_t LBDTBPropReadCells(uint32_t* prop, int index, int ncells){
+    uint64_t value = 0;
+    for (int i = 0; i < ncells; i++)
+        value = (value << 32) | swizzle(prop[2 + index + i]);
+    return value;
+}
+
+void LBDTBGetRootCells(int* address_cells, int* size_cells){
+    /* defaults from the devicetree spec */
+    *address_cells = 2;
+    *size_cells = 1;
+    uint32_t* root = dtb_find_node_prefix("");
+    if (!root)
+        return;
+    uint32_t* ac = dtb_node_find_property(root, "#address-cells");
+    uint32_t* sc = dtb_node_find_property(root, "#size-cells");
+    if (ac)
+        *address_cells = (int)LBDTBPropReadCells(ac, 0, 1);
+    if (sc)
+        *size_cells = (int)LBDTBPropReadCells(sc, 0, 1);
+}
+
 /*
  * LBDTBGetMemorySize -- gets memory size from
  * device tree blob
@@ -212,15 +238,15 @@ void LBDTBGetMemorySize(uint64_t *memaddr, size_t *physSize) {
         LBUartPutString("DTB: Memory node has no regs \n");
         return;
     }
-#ifdef RASPBERRY_PI
-    uint64_t memaddr_ = (uint64_t)swizzle(regs[0]); //(uint64_t)swizzle(regs[1]) | ((uint64_t)swizzle(regs[0]) << 32UL);
-    uint64_t memsize_ = (uint64_t)swizzle(regs[3]) | ((uint64_t)swizzle(regs[2]) << 32UL);
-#else
-    uint64_t memaddr_ = (uint64_t)swizzle(regs[3]) | ((uint64_t)swizzle(regs[0]) << 32UL);
-    uint64_t memsize_ = (uint64_t)swizzle(regs[5]) | ((uint64_t)swizzle(regs[4]) << 32UL);
-#endif
+    /* regs[0] is the property length, the <address size> cells follow
+     * (BCM2837: #address-cells = <1>, #size-cells = <1>) */
+    int address_cells, size_cells;
+    LBDTBGetRootCells(&address_cells, &size_cells);
+    uint64_t memaddr_ = LBDTBPropReadCells(regs, 0, address_cells);
+    uint64_t memsize_ = LBDTBPropReadCells(regs, address_cells, size_cells);
     LBUartPutString("DTB: Memory node found \n");
-    LBUartPrintHex(regs[0]);
+    LBUartPrintHex(memaddr_);
+    LBUartPrintHex(memsize_);
     *memaddr = memaddr_;
     *physSize = memsize_;
 }
@@ -252,5 +278,6 @@ uint32_t LBDTBGetTotalSize(){
     if (!dtb_)
        return 0;
     fdt_header_t* fdt = (fdt_header_t*)dtb_;
-    return fdt->totalSize;
-}
+    /* FDT header fields are big endian */
+    return swizzle(fdt->totalSize);
+}

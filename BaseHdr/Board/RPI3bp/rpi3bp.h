@@ -83,28 +83,93 @@ enum rpi_power_domain{
 	RPI_POWERUP_CCP2TX
 };
 
+/*
+ * AuRPI3LocalIRQGetPending -- interrupt sources (INT_SRC_*) pending on
+ * the calling core
+ */
 extern uint32_t AuRPI3LocalIRQGetPending();
 
 /*
- * AuRPI3PeripheralIRQGetPending -- read pending interrupts from
- * peripheral base
+ * AuRPI3PeripheralIRQGetPending1/2 -- raw BCM2835 pending registers
  */
 extern uint32_t AuRPI3PeripheralIRQGetPending2();
-
 extern uint32_t AuRPI3PeripheralIRQGetPending1();
+
+/*
+ * AuRPI3PeripheralIRQPending -- pending and enabled peripheral irqs,
+ * bit n = BCM2835 irq n
+ */
+extern uint64_t AuRPI3PeripheralIRQPending();
+
 /*
  * AuRPI3Initialize -- initialize the basic board requirement
  */
 extern void AuRPI3Initialize();
 
-/* RPI3ICInit -- initialize RPI3 local interrupt controller */
+/*
+ * AuRPI3PostSchedulerInitialize -- start board driver threads
+ */
+extern void AuRPI3PostSchedulerInitialize();
+
+/* firmware clock ids (mailbox property interface) */
+#define RPI_FW_CLOCK_UART 2
+#define RPI_FW_CLOCK_CORE 4
+
+/* firmware GPIO expander: line n is gpio 128 + n. On the 3B+ line 0 is
+ * BT_ON (Bluetooth regulator enable) and line 1 is WL_ON */
+#define RPI_EXP_GPIO_BASE  128
+#define RPI_EXP_GPIO_BT_ON (RPI_EXP_GPIO_BASE + 0)
+
+/*
+ * AuRPIGetClockRate -- firmware clock rate in Hz (4 = CORE), 0 on failure
+ */
+AU_EXTERN AU_EXPORT uint32_t AuRPIGetClockRate(uint32_t clock_id);
+
+/*
+ * AuRPISetClockRate -- ask the firmware to run a clock at rate Hz,
+ * returns the rate it actually set, 0 on failure
+ */
+AU_EXTERN AU_EXPORT uint32_t AuRPISetClockRate(uint32_t clock_id, uint32_t rate);
+
+/*
+ * AuRPISetExpGPIO -- drive a firmware expander gpio (128 + n) as an
+ * output at the given level, returns 1 on success
+ */
+AU_EXTERN AU_EXPORT int AuRPISetExpGPIO(uint32_t gpio, uint32_t level);
+
+/*
+ * AuRPIGetBoardSerial -- 64-bit board serial number, 0 on failure
+ */
+AU_EXTERN AU_EXPORT uint64_t AuRPIGetBoardSerial();
+
+/* AuRPI3ICInit -- initialize RPI3 local interrupt controller (boot core) */
 extern void AuRPI3ICInit();
 
 /*
- * RPI3_IRQ_handler -- handle pending IRQs
- * @param regs -- Pointer to AA64 register struct
+ * AuRPI3LocalCoreInit -- reset the calling core's local interrupt state
  */
-extern void RPI3_IRQ_handler(AA64Registers* regs);
+extern void AuRPI3LocalCoreInit();
+
+/*
+ * AuRPI3EnableLocalIRQ -- enable the calling core's timer (27) or IPI
+ * mailbox (irq < 16) interrupt
+ */
+extern void AuRPI3EnableLocalIRQ(uint32_t irq);
+
+/*
+ * AuRPI3SendIPI -- set bit 'ipi' in core 'core's local mailbox 0
+ */
+extern void AuRPI3SendIPI(uint32_t core, uint32_t ipi);
+
+/*
+ * AuRPI3IPIReadClear -- read and acknowledge the calling core's IPIs
+ */
+extern uint32_t AuRPI3IPIReadClear();
+
+/*
+ * AuRPI3GetCoreID -- physical core number of the caller
+ */
+extern uint32_t AuRPI3GetCoreID();
 
 /*
  * AuRPI3PeripheralIRQEnable -- enable particular peripheral irq
@@ -112,6 +177,10 @@ extern void RPI3_IRQ_handler(AA64Registers* regs);
  */
 AU_EXTERN AU_EXPORT void AuRPI3PeripheralIRQEnable(uint32_t irq_num);
 
+/*
+ * AuRPI3PeripheralIRQDisable -- disable particular peripheral irq
+ */
+extern void AuRPI3PeripheralIRQDisable(uint32_t irq_num);
 
 extern void AuVC4DSIInit();
 
@@ -137,4 +206,4 @@ AU_EXTERN AU_EXPORT int AuRPISetPowerState(uint32_t device_id);
 #endif
 
 
-#endif
+#endif

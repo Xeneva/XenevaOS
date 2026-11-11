@@ -38,6 +38,12 @@
 extern void AuAA64BoardInitialize();
 
 /*
+ * AuAA64BoardPostSchedulerInitialize -- board work that needs the
+ * scheduler (driver kernel threads); no-op on boards without any
+ */
+extern void AuAA64BoardPostSchedulerInitialize();
+
+/*
  * AuAA64BoardSleepUS -- calls board specific sleep function
  */
 extern void AuAA64BoardSleepUS(uint32_t us);

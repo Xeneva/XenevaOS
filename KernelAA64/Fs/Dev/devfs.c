@@ -231,7 +231,9 @@ AuVFSNode* AuDevFSOpen(AuVFSNode* fs, char* path) {
 		pathname[i] = 0;
 		//aa64_data_cache_clean_range(&pathname, 16);
 		//AA64SleepUS(600);
+#ifdef AU_DEVFS_DEBUG
 		UARTDebugOut("devfs: open: %s \r\n", pathname);
+#endif
 		for (int j = 0; j < first_list->childs->pointer; j++) {
 			AuVFSNode* node_ = (AuVFSNode*)list_get_at(first_list->childs, j);
 			//UARTDebugOut("node_->filename : %s \r\n", node_->filename);
@@ -252,6 +254,9 @@ AuVFSNode* AuDevFSOpen(AuVFSNode* fs, char* path) {
 	if (node_to_ret)
 		return node_to_ret;
 
+	/* no such device is a normal answer: the node dump is for debugging
+	 * only (at 115200 baud it held the BKL for ~100 ms per failed open) */
+#ifdef AU_DEVFS_DEBUG
 	UARTDebugOut(
 		"[devfs]: open failed for '%s', container entries=%d\r\n", path, entries->childs->pointer);
 	for (int j = 0; j < (int)entries->childs->pointer; j++) {
@@ -262,6 +267,7 @@ AuVFSNode* AuDevFSOpen(AuVFSNode* fs, char* path) {
 		}
 		UARTDebugOut("[devfs]:   [%d] '%s' flags=%x\r\n", j, node_->filename, node_->flags);
 	}
+#endif
 	return NULL;
 }
 

@@ -370,9 +370,63 @@ static void AuDeferredIRQRun(void) {
 	AuBKLUnlock();
 }
 
+#ifdef __TARGET_BOARD_RPI3__
+/*
+ * Raspberry Pi 3: no GIC. The calling core's local source register says
+ * what is pending (see Board/Rpi3bp/rpi3bp.c for the id mapping); each
+ * source is handled the way the GIC path below handles the matching id,
+ * and the scheduler runs at most once per entry.
+ */
+static void rpi3_irq_dispatch(AA64Registers* regs) {
+	uint32_t src = AuRPI3LocalIRQGetPending();
+	AA64PerCPU* cpu = AA64GetPerCPU();
+	bool resched = false;
+
+	if (src & INT_SRC_MAILBOX0) {
+		uint32_t ipi = AuRPI3IPIReadClear();
+		if (ipi & (1u << AA64_IPI_RESCHED)) {
+			if (cpu)
+				__atomic_store_n(&cpu->ipi_pending, 0, __ATOMIC_RELEASE);
+			resched = true;
+		}
+		if (ipi & ((1u << AA64_IPI_RESCHED) | (1u << AA64_IPI_DEFERRED_IRQ)))
+			AuDeferredIRQRun();
+	}
+
+	if (src & INT_SRC_GPU) {
+		/* level triggered: a deferred line is masked by irqDefer until
+		 * its handler has run */
+		uint64_t pend = AuRPI3PeripheralIRQPending();
+		while (pend) {
+			uint32_t bit = (uint32_t)__builtin_ctzll(pend);
+			pend &= pend - 1;
+			irqRunOrDefer(32 + bit);
+		}
+	}
+
+	if (src & INT_SRC_CNTVIRQ) {
+		resetTimer();
+		if (cpu) {
+			cpu->tick_count++;
+			cpu->sched_tick = 1;
+		}
+		/* kernel timers and timekeeping stay on the boot core */
+		if (!cpu || cpu->cpu_num == 0) {
+			AuroraTimerUpdateClock();
+			irqRunOrDefer(27);
+			AuDeferredIRQRun();
+		}
+		resched = true;
+	}
+
+	if (resched)
+		AuScheduleThread(regs);
+}
+#endif
+
 void irq_el1_handler(AA64Registers* regs) {
 #ifdef __TARGET_BOARD_RPI3__
-	RPI3_IRQ_handler(regs);
+	rpi3_irq_dispatch(regs);
 #else
 	uint32_t iar = GICReadIAR();
 	uint32_t irq = iar & 0x3FF;

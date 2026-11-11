@@ -115,7 +115,12 @@ int OpenFile(char* filename, int mode) {
 	if (AuCredCheckPermissions(file, &current_proc->creds) &&
 		(privileged_node || !((mode & FILE_OPEN_CREAT) || (mode & FILE_OPEN_WRITE)))) {
 		if (!file) {
+			/* a missing node is an ordinary answer (programs probe for
+			 * devices and files); printing it ran the UART for ~ms inside
+			 * the syscall, under the BKL, every time */
+#ifdef AU_FSERV_DEBUG
 			UARTDebugOut("[fserv]: open '%s' denied: no node\r\n", fname);
+#endif
 			return -1;
 		}
 		UARTDebugOut("[fserv]: open '%s' denied: creds uid=%d gid=%d nsgid=%d vs node uid=%d "
@@ -138,7 +143,9 @@ int OpenFile(char* filename, int mode) {
 				file = AuVFSCreateFile(fsys, filename);
 				created = true;
 			} else {
+#ifdef AU_FSERV_DEBUG
 				UARTDebugOut("[fserv]: open '%s' failed: no node, mode=%x\r\n", fname, mode);
+#endif
 				return -1;
 			}
 		}

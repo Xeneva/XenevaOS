@@ -1343,7 +1343,7 @@ broadcast:
 }
 
 static void DeodhaiHandleMouseInput(ChCanvas* canv, const AuInputMessage* input) {
-	if (!canv || !input || input->type != AU_INPUT_MOUSE)
+	if (!canv || !input || (input->type != AU_INPUT_MOUSE && input->type != AU_INPUT_TOUCH))
 		return;
 
 	currentCursor->xpos = input->xpos;
@@ -1370,6 +1370,191 @@ static void DeodhaiHandleMouseInput(ChCanvas* canv, const AuInputMessage* input)
 		currentCursor->xpos = 0;
 	if (currentCursor->ypos >= canv->screenHeight)
 		currentCursor->ypos = 0;
+}
+
+/* ------------------------------------------------------------------
+ * Touch screen gestures
+ *
+ * The touch driver reports the finger as an absolute position with the
+ * left button held while it is down. Fed straight in as a mouse that
+ * makes every tap a tiny drag (resistive panels jitter by several pixels
+ * under a finger) and gives no way to scroll, so contacts are turned into
+ * gestures here, where the window under the finger is known:
+ *
+ *   tap         finger lifted within the slop radius: a left click at the
+ *               averaged touch-down point
+ *   long press  held still for TOUCH_LONG_PRESS_MS: a right click there
+ *   drag        moved past the slop horizontally, or started on a title
+ *               bar: an ordinary press + drag from the touch-down point
+ *   scroll      moved past the slop vertically over content: one wheel
+ *               step per TOUCH_SCROLL_STEP pixels to the window under the
+ *               touch-down point, natural direction (finger up scrolls the
+ *               content down)
+ * ------------------------------------------------------------------ */
+
+#define TOUCH_LONG_PRESS_MS 600
+#define TOUCH_TITLEBAR_H	26
+
+enum { TOUCH_IDLE, TOUCH_PENDING, TOUCH_DRAG, TOUCH_SCROLL, TOUCH_DONE };
+
+static struct {
+	int mode;
+	int sx, sy;		  /* averaged touch-down point */
+	int64_t sum_x, sum_y;
+	int samples;
+	int last_y;
+	int scroll_acc;
+	uint64_t t_down;
+} touch;
+
+static int DeodhaiTouchSlop(ChCanvas* canv) {
+	/* about 1/50 of the screen width: 12 px at 640, 16 px at 800 */
+	int s = (int)canv->screenWidth / 50;
+	return s < 8 ? 8 : s;
+}
+
+static int DeodhaiTouchScrollStep(ChCanvas* canv) {
+	int s = (int)canv->screenHeight / 20;
+	return s < 16 ? 16 : s;
+}
+
+/* feed one synthetic pointer event through the normal mouse path */
+static void DeodhaiTouchPointer(ChCanvas* canv, int x, int y, uint8_t button) {
+	AuInputMessage m;
+	memset(&m, 0, sizeof(m));
+	m.type = AU_INPUT_MOUSE;
+	m.xpos = x;
+	m.ypos = y;
+	m.button_state = button;
+	DeodhaiHandleMouseInput(canv, &m);
+}
+
+/* would a press at (x, y) grab a window title bar (same test as
+ * DeodhaiWindowCheckDraggable) */
+static bool DeodhaiTouchOnTitleBar(int x, int y) {
+	for (Window* win = lastWin; win != NULL; win = win->prev) {
+		WinSharedInfo* info = (WinSharedInfo*)win->sharedInfo;
+		if (info->hide || info->zoomed)
+			continue;
+		if (!(x >= (info->x + DeodhaiDragZoneX0(win->flags)) &&
+			  x < (info->x + DeodhaiDragZoneX1(win->flags, info->width)) && y >= info->y &&
+			  y < (info->y + info->height)))
+			continue;
+		if (y >= info->y + TOUCH_TITLEBAR_H)
+			return false;
+		if (DeodhaiCheckWindowPointOcclusion(win, x, y))
+			return false;
+		return !(win->flags & WINDOW_FLAG_STATIC);
+	}
+	return false;
+}
+
+/* one wheel step to the window under the touch-down point; the cursor
+ * stays there so the step lands in that window, not where the finger is */
+static void DeodhaiTouchScroll(ChCanvas* canv, uint8_t direction) {
+	(void)canv;
+	currentCursor->xpos = touch.sx;
+	currentCursor->ypos = touch.sy;
+	DeodhaiBroadcastMouse(touch.sx, touch.sy, direction);
+	DeodhaiBroadcastMouse(touch.sx, touch.sy, 0);
+}
+
+static void DeodhaiHandleTouchInput(ChCanvas* canv, const AuInputMessage* input) {
+	if (!canv || !input)
+		return;
+	int x = input->xpos;
+	int y = input->ypos;
+	bool down = (input->button_state & DEODHAI_BUTTON_LEFT) != 0;
+	int slop = DeodhaiTouchSlop(canv);
+
+	if (down && touch.mode == TOUCH_IDLE) {
+		touch.mode = TOUCH_PENDING;
+		touch.sum_x = x;
+		touch.sum_y = y;
+		touch.samples = 1;
+		touch.sx = x;
+		touch.sy = y;
+		touch.last_y = y;
+		touch.scroll_acc = 0;
+		touch.t_down = _KeGetCurrentMS();
+		/* move the pointer there without a button: hover feedback */
+		DeodhaiTouchPointer(canv, x, y, 0);
+		return;
+	}
+
+	if (down) {
+		int dx = x - touch.sx;
+		int dy = y - touch.sy;
+		switch (touch.mode) {
+		case TOUCH_PENDING:
+			if (dx <= slop && -dx <= slop && dy <= slop && -dy <= slop) {
+				/* still a tap: refine the touch-down point */
+				touch.sum_x += x;
+				touch.sum_y += y;
+				touch.samples++;
+				touch.sx = (int)(touch.sum_x / touch.samples);
+				touch.sy = (int)(touch.sum_y / touch.samples);
+				return;
+			}
+			if (DeodhaiTouchOnTitleBar(touch.sx, touch.sy) ||
+				(dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy)) {
+				touch.mode = TOUCH_DRAG;
+				DeodhaiTouchPointer(canv, touch.sx, touch.sy, DEODHAI_BUTTON_LEFT);
+				DeodhaiTouchPointer(canv, x, y, DEODHAI_BUTTON_LEFT);
+			} else {
+				touch.mode = TOUCH_SCROLL;
+				touch.last_y = y;
+				touch.scroll_acc = 0;
+			}
+			return;
+		case TOUCH_DRAG:
+			DeodhaiTouchPointer(canv, x, y, DEODHAI_BUTTON_LEFT);
+			return;
+		case TOUCH_SCROLL: {
+			int step = DeodhaiTouchScrollStep(canv);
+			touch.scroll_acc += y - touch.last_y;
+			touch.last_y = y;
+			/* finger down drags the content down: earlier content, i.e.
+			 * wheel up; finger up is wheel down */
+			while (touch.scroll_acc >= step) {
+				DeodhaiTouchScroll(canv, DEODHAI_BUTTON_SCROLL_UP);
+				touch.scroll_acc -= step;
+			}
+			while (touch.scroll_acc <= -step) {
+				DeodhaiTouchScroll(canv, DEODHAI_BUTTON_SCROLL_DOWN);
+				touch.scroll_acc += step;
+			}
+			return;
+		}
+		default:
+			return;
+		}
+	}
+
+	/* finger lifted */
+	switch (touch.mode) {
+	case TOUCH_PENDING:
+		DeodhaiTouchPointer(canv, touch.sx, touch.sy, DEODHAI_BUTTON_LEFT);
+		DeodhaiTouchPointer(canv, touch.sx, touch.sy, 0);
+		break;
+	case TOUCH_DRAG:
+		DeodhaiTouchPointer(canv, x, y, 0);
+		break;
+	default:
+		break;
+	}
+	touch.mode = TOUCH_IDLE;
+}
+
+/* per frame: a finger held still long enough is a right click */
+static void DeodhaiTouchPoll(ChCanvas* canv) {
+	if (touch.mode != TOUCH_PENDING)
+		return;
+	if (_KeGetCurrentMS() - touch.t_down < TOUCH_LONG_PRESS_MS)
+		return;
+	DeodhaiTouchPointer(canv, touch.sx, touch.sy, DEODHAI_BUTTON_RIGHT);
+	DeodhaiTouchPointer(canv, touch.sx, touch.sy, 0);
+	touch.mode = TOUCH_DONE;
 }
 
 void DeodhaiWindowShowNow(Window* win) {
@@ -1813,6 +1998,8 @@ int main(int argc, char* argv[]) {
 				 i++) {
 				if (queued.type == AU_INPUT_MOUSE)
 					DeodhaiHandleMouseInput(canv, &queued);
+				else if (queued.type == AU_INPUT_TOUCH)
+					DeodhaiHandleTouchInput(canv, &queued);
 				else if (queued.type == AU_INPUT_KEYBOARD) {
 					ChitralekhaProcessKey(queued.code);
 					char key = ChitralekhaGetKeyPress(queued.code);
@@ -1866,11 +2053,16 @@ int main(int argc, char* argv[]) {
 			memset(&event, 0, sizeof(event));
 		}
 
+		if (mice_input.type == AU_INPUT_TOUCH) {
+			DeodhaiHandleTouchInput(canv, &mice_input);
+			memset(&mice_input, 0, sizeof(AuInputMessage));
+		}
 		if (mice_input.type == AU_INPUT_MOUSE) {
 			DeodhaiHandleMouseInput(canv, &mice_input);
 			memset(&mice_input, 0, sizeof(AuInputMessage));
 		}
 
+		DeodhaiTouchPoll(canv);
 		DeodhaiIntroPoll();
 		uint64_t composeStart = _KeGetCurrentMS();
 #ifdef __DEODHAI_COMPOSE3D__

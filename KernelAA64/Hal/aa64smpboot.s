@@ -142,5 +142,19 @@ aa64_smp_trampoline:
     isb
     br x2
 
+
+// spin-table entry (Raspberry Pi 3): the firmware's spin loop jumps here
+// with x0 = 0, so the boot param block is found from MPIDR.Aff0 -- the
+// kernel uses Aff0 as the logical cpu number for spin-table cores.
+// Copied with the rest of the trampoline: adr gives the boot page base.
+.global aa64_smp_trampoline_spin
+aa64_smp_trampoline_spin:
+    mrs x1, mpidr_el1
+    and x1, x1, #0xff
+    adr x0, aa64_smp_trampoline
+    add x0, x0, #0x800              // AA64_SMP_PARAM_OFFSET
+    add x0, x0, x1, lsl #7          // AA64_SMP_PARAM_STRIDE (128)
+    b aa64_smp_trampoline
+
 .global aa64_smp_trampoline_end
 aa64_smp_trampoline_end:

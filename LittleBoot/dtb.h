@@ -72,4 +72,22 @@ extern void LBDeviceTreeInitialize(uint64_t dtb);
  */
 extern uint32_t LBDTBGetTotalSize();
 
-#endif
+/*
+ * LBDTBPropLength -- byte length of a property returned by
+ * dtb_node_find_property (which points at the property's len field:
+ * prop[0] = len, prop[1] = nameoff, prop[2...] = big-endian value cells)
+ */
+extern uint32_t LBDTBPropLength(uint32_t* prop);
+
+/*
+ * LBDTBPropReadCells -- read a value made of 'ncells' 32-bit big-endian
+ * cells starting at cell 'index' of a property's value
+ */
+extern uint64_t LBDTBPropReadCells(uint32_t* prop, int index, int ncells);
+
+/*
+ * LBDTBGetRootCells -- root node #address-cells / #size-cells
+ */
+extern void LBDTBGetRootCells(int* address_cells, int* size_cells);
+
+#endif

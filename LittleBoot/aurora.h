@@ -86,6 +86,11 @@ typedef struct _kebootinfo_{
     void* map;
     uint64_t descriptor_size;
     uint64_t mem_map_size;
+    /* physical direct map installed by the loader (BootAA64 uses
+     * 0xFFFF800000000000). LittleBoot leaves both 0: the kernel then
+     * runs P2V/V2P as identity over LittleBoot's TTBR0 identity map */
+    uint64_t physical_direct_map_base;
+    uint64_t physical_direct_map_size;
     uint32_t* graphics_framebuffer;
     size_t fb_size;
     uint16_t XResolution;
@@ -109,6 +114,11 @@ typedef struct _kebootinfo_{
     uint32_t hid;
     uint32_t uid;
     uint32_t cid;
+    uint16_t DesktopOverrideWidth;
+    uint16_t DesktopOverrideHeight;
 } KERNEL_BOOT_INFO, *PKERNEL_BOOT_INFO;
+
+/* NOTE: this must stay layout-identical to KERNEL_BOOT_INFO in
+ * BaseHdr/aurora.h -- the kernel reads it through that definition. */
 
 #endif

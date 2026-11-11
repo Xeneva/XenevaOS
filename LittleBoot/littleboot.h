@@ -59,6 +59,22 @@
 #define UART0_CR  ((volatile uint32_t*)(UART_BASE + 0x30))
 #define UART0_IMSC ((volatile uint32_t*)(UART_BASE + 0x38))
 #define UART0_ICR ((volatile uint32_t*)(UART_BASE + 0x44))
+
+/* The serial console is the mini UART (AUX) on GPIO14/15. The PL011
+ * above belongs to the on-board Bluetooth controller (GPIO30-33), which
+ * the kernel driver Drivers/Bt/RPI (rpibt.dll) programs; LittleBoot does
+ * not touch it. Register layout: BCM2835 ARM Peripherals, chapter 2. */
+#define AUX_BASE (MMIO_BASE + 0x215000)
+#define AUX_ENABLES ((volatile uint32_t*)(AUX_BASE + 0x04))
+#define AUX_MU_IO   ((volatile uint32_t*)(AUX_BASE + 0x40))
+#define AUX_MU_IER  ((volatile uint32_t*)(AUX_BASE + 0x44))
+#define AUX_MU_IIR  ((volatile uint32_t*)(AUX_BASE + 0x48))
+#define AUX_MU_LCR  ((volatile uint32_t*)(AUX_BASE + 0x4C))
+#define AUX_MU_MCR  ((volatile uint32_t*)(AUX_BASE + 0x50))
+#define AUX_MU_LSR  ((volatile uint32_t*)(AUX_BASE + 0x54))
+#define AUX_MU_CNTL ((volatile uint32_t*)(AUX_BASE + 0x60))
+#define AUX_MU_BAUD ((volatile uint32_t*)(AUX_BASE + 0x68))
+#define AUX_MU_LSR_TX_EMPTY (1 << 5)
 #endif
 
 #define UARTFR (UART_BASE + 0x18)

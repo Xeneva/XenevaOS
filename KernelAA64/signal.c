@@ -36,6 +36,7 @@
 #if defined(__GNUC__) || defined(__clang__)
 #ifndef __cplusplus
 #include <stdbool.h>
+#include <Hal/AA64/aa64lowlevel.h>
 #endif
 #endif
 
@@ -122,6 +123,7 @@ bool AuSignalDeliver(AA64Thread* current_thread) {
 void AuSignalInitializeTrampoline(AA64Thread* t) {
 	uint64_t* phys = (uint64_t*)P2V((uint64_t)AuPmmngrAllocPage(AURORA_PAGE_NORMAL));
 	memcpy(phys, &aa64_signal_return, PAGE_SIZE);
+	AA64SyncICacheRange(phys, PAGE_SIZE);
 	AuMapPageEx((uint64_t*)t->pml,
 				V2P((uint64_t)phys),
 				0xD0000000,

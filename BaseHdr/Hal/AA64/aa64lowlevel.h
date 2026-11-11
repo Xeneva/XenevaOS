@@ -179,6 +179,24 @@ AU_EXTERN AU_EXPORT void aa64_data_cache_clean_range(void* addr, size_t size);
 AU_EXTERN AU_EXPORT void aa64_dc_cvac_range(void* addr, size_t sz);
 AU_EXTERN AU_EXPORT void aa64_dc_ivac_range(void* addr, size_t sz);
 extern void aa64_clean_invalidate_dcache();
+
+/*
+ * AA64DCacheCleanPoU -- clean a kernel VA range to the point of
+ * unification, so instruction fetch can see freshly written code
+ * (any alias works, the A53/A72 data caches are PIPT)
+ */
+AU_EXTERN AU_EXPORT void AA64DCacheCleanPoU(void* addr, size_t size);
+
+/*
+ * AA64ICacheInvalidateAll -- invalidate every core's instruction cache;
+ * call after AA64DCacheCleanPoU over all newly written code
+ */
+AU_EXTERN AU_EXPORT void AA64ICacheInvalidateAll();
+
+/*
+ * AA64SyncICacheRange -- AA64DCacheCleanPoU + AA64ICacheInvalidateAll
+ */
+AU_EXTERN AU_EXPORT void AA64SyncICacheRange(void* addr, size_t size);
 extern int gic_cpu_init();
 extern uint32_t gic_read_intid();
 extern void gic_icc_eoi(uint32_t intid);

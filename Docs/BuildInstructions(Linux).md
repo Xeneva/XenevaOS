@@ -77,6 +77,39 @@ Useful options for the LLVM workflow are:
 
 The bootloader's screen-resolution menu waits for the emulated USB or virtio keyboard in an ordinary build. It queries GOP first, marks unavailable resolutions, and lets Up/Down navigation wrap across only supported modes. A normal headless run without injected keyboard input therefore remains a bounded pre-kernel smoke test. Bleed bypasses the menu and supports a complete automated headless boot.
 
+## Build for Raspberry Pi 3B/3B+
+
+The Pi does not use UEFI. Its firmware loads `kernel8.img` (LittleBoot, built from `LittleBoot/`) together with a FAT32 initramfs. LittleBoot reads `EFI/XENEVA/xnkrnl.exe` from the initramfs, maps it and jumps to KernelAA64. The kernel then uses the same initramfs as its root file system.
+
+```bash
+./Scripts/Linux/build_rpi3.sh --llvm
+```
+
+This builds LittleBoot and KernelAA64 with `BOARD=rpi3`, plus user space if `Process/Init/init.exe` is missing or `--force-user-apps` is passed. It writes these files to `Build/rpi3/`:
+
+| File | Contents |
+|------|----------|
+| `kernel8.img` | LittleBoot flat binary (loaded at `0x80000`) |
+| `xeneva.img` | FAT32 initramfs: `EFI/XENEVA/xnkrnl.exe` + `Resources/resources` + `init.exe` |
+| `boot/` | Boot partition files: Pi firmware, DTBs, `config.txt`, `kernel8.img`, `xeneva.img` |
+| `xeneva-rpi3.img` | Full SD card image (MBR, one FAT32 boot partition) |
+
+The first run fetches the Pi firmware from `raspberrypi/firmware` into `Build/rpi-firmware/`. Pass `--firmware-dir=DIR` to use a local copy. Write the card with `sudo dd if=Build/rpi3/xeneva-rpi3.img of=/dev/sdX bs=4M conv=fsync status=progress`. You can also copy the contents of `Build/rpi3/boot/` onto a FAT32-formatted card. The serial console is the PL011 on GPIO14/15 (pins 8/10) at 115200 8N1.
+
+`--qemu` boots the result on QEMU's `raspi3b` machine, and `--headless` adds a timeout. `--skip-build` repacks the images from the last rpi3 build. The script keeps that kernel in `Build/rpi3/xnkrnl.exe` because `KernelAA64/KernelAA64.exe` is shared with the QEMU virt flow. After an rpi3 build, run `build_and_run_qemu.sh` without `--skip-build`.
+
+`make -C LittleBoot` (or `make -C LittleBoot gcc`) builds only `kernel8.img`.
+
+`--isolate-cpus=LIST` reserves cores for bound threads, the same as in the QEMU script. Without it, all four cores are general purpose.
+
+On the Pi, LittleBoot does the following before it jumps to the kernel:
+
+- Enables the MMU with caches on. SDRAM is Normal write-back memory, and only the peripheral windows (`0x3F000000` and `0x40000000`) are Device memory.
+- Installs the kernel's physical direct map at `0xFFFF800000000000`.
+- Allocates a 1024x768x32 HDMI framebuffer through the VideoCore mailbox and passes it in `KERNEL_BOOT_INFO`, the same way XNLDR passes a UEFI GOP.
+
+The kernel maps every Pi register block through `AuMapMMIO`. It handles interrupts on the BCM2836 local controller: per-core CNTV timer, mailbox IPIs, and BCM2835 peripheral IRQs as ids 32+n. It starts cores 1 to 3 through the device tree spin table.
+
 ## Benchmark with the bleed build
 
 Use `--bleed` when measuring boot-to-desktop performance on the AArch64 QEMU path:

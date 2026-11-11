@@ -894,9 +894,27 @@ void virtio_device_register(struct virtio_device* vdev,
  * arguments is what stops the next id -- a virtio-blk, say -- from being a
  * 30-line copy with one hex digit changed.
  */
+/*
+ * dcl_virtio_bus_present() -- virtio devices only exist behind PCIe on the
+ * QEMU virt machine. The Raspberry Pi 3 build has no virtio transport at
+ * all (its devices get their own DCL Linux drivers), so the scans are
+ * skipped there, and on any board whose PCIe never came up.
+ */
+static bool dcl_virtio_bus_present(void) {
+#ifdef __TARGET_BOARD_RPI3__
+	return false;
+#else
+	return AuIsPCIeInitialized();
+#endif
+}
+
 static int virtio_scan_and_register(uint16_t pci_id, const char* name, int index,
 				    struct virtio_device* vdev,
 				    struct VirtioPCIDevice* au_dev) {
+	if (!dcl_virtio_bus_present()) {
+		UARTDebugOut("[dcl-virtio]: no virtio bus on this board, %s skipped\r\n", name);
+		return VIRTIO_SCAN_NO_DEVICE;
+	}
 	UARTDebugOut("[dcl-virtio]: scanning for %s\r\n", name);
 	for (int b = 0; b < 256; b++) {
 		for (int d = 0; d < 32; d++) {
@@ -935,6 +953,10 @@ int virtio_input_detect(void) {
 	static struct VirtioPCIDevice au_devs[MAX_DCL_INPUT_DEVICES];
 	int found = 0;
 
+	if (!dcl_virtio_bus_present()) {
+		UARTDebugOut("[dcl-virtio]: no virtio bus on this board, virtio-input skipped\r\n");
+		return 0;
+	}
 	UARTDebugOut("[dcl-virtio]: scanning for virtio-input\r\n");
 	for (int b = 0; b < 256 && found < MAX_DCL_INPUT_DEVICES; b++) {
 		for (int d = 0; d < 32 && found < MAX_DCL_INPUT_DEVICES; d++) {

@@ -116,9 +116,25 @@ static void fatal(const char* reason, uint64_t page, uint64_t detail) {
 	for (;;) asm volatile("wfe");
 }
 
+static void normalize(PmmRange* ranges, uint32_t* count);
+
 static void add_reservation(uint64_t first, uint64_t last) {
 	if (first >= last) return;
-	if (reserved_count == PMM_MAX_RESERVATIONS) fatal("reservation table full", first, last);
+	/* boot loaders report their allocations page by page, usually
+	 * ascending or descending: grow the previous range when adjacent */
+	if (reserved_count) {
+		PmmRange* prev = &reserved[reserved_count - 1];
+		if (first <= prev->last && last >= prev->first) {
+			if (first < prev->first) prev->first = first;
+			if (last > prev->last) prev->last = last;
+			return;
+		}
+	}
+	if (reserved_count == PMM_MAX_RESERVATIONS) {
+		normalize(reserved, &reserved_count);
+		if (reserved_count == PMM_MAX_RESERVATIONS)
+			fatal("reservation table full", first, last);
+	}
 	reserved[reserved_count++] = (PmmRange){ first, last };
 }
 

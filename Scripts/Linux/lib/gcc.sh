@@ -5,7 +5,7 @@ printf "${STY_CYAN}compiling Xeneva for AArch64 using GCC.${STY_RST}\n"
 # The EFI bootloader needs the gnu-efi sources (headers + static libs) checked
 # out next to the repository root, for both toolchains. See
 # Docs/BuildInstructions(Linux).md.
-if [ ! -d ../../gnu-efi ]; then
+if [ "${SKIP_BOOTAA64:-0}" -eq 0 ] && [ ! -d ../../gnu-efi ]; then
     printf "${STY_RED}[gcc] gnu-efi not found at repo-root/gnu-efi.${STY_RST}\n"
     printf "${STY_YELLOW}[gcc] Clone it first: git clone https://github.com/vathpela/gnu-efi.git${STY_RST}\n"
     exit 1
@@ -14,7 +14,7 @@ fi
 # the llvm path only needs gnu-efi's headers, but the gcc path also links
 # against its compiled crt0/libgnuefi/libefi, so I have to actually build it
 # for aarch64 first here (same as .github/workflows/build-check.yml does) --axiss
-if [ ! -f ../../gnu-efi/aarch64/gnuefi/crt0-efi-aarch64.o ]; then
+if [ "${SKIP_BOOTAA64:-0}" -eq 0 ] && [ ! -f ../../gnu-efi/aarch64/gnuefi/crt0-efi-aarch64.o ]; then
     printf "${STY_CYAN}[gcc] Building gnu-efi for aarch64...${STY_RST}\n"
     ( cd ../../gnu-efi && make ARCH=aarch64 CROSS_COMPILE=aarch64-linux-gnu- )
 fi
@@ -25,11 +25,16 @@ fi
 # found this the hard way. passing `make all` explicitly sidesteps it
 # without me having to reorder rules in 15 Makefiles --axiss
 
+# Target board for the bootloader + kernel (qemu_virt or rpi3); see llvm.sh.
+BOARD="${BOARD:-qemu_virt}"
+
 # EFI bootloader
-( cd ../../BootAA64 && make clean && make all )
+if [ "${SKIP_BOOTAA64:-0}" -eq 0 ]; then
+    ( cd ../../BootAA64 && make clean && make BOARD="$BOARD" all )
+fi
 
 # AArch64 kernel
-( cd ../../KernelAA64 && make clean && make SOAK="${SOAK:-0}" DEBUG_ALLOC="${DEBUG_ALLOC:-0}" all )
+( cd ../../KernelAA64 && make clean && make SOAK="${SOAK:-0}" DEBUG_ALLOC="${DEBUG_ALLOC:-0}" BOARD="$BOARD" all )
 
 if [ "${BUILD_USER_APPS:-0}" -eq 1 ]; then
     # Userspace C++ runtime + graphics library

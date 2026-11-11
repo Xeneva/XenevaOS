@@ -41,6 +41,7 @@
 #include <Ipc/auipc.h>
 #include <Fs/srvfs.h>
 #include <Hal/AA64/gic.h>
+#include <Hal/AA64/aa64lowlevel.h>
 #include <Mm/pmmngr.h>
 #include <Mm/vmmngr.h>
 #include <string.h>
@@ -466,6 +467,8 @@ void AuDriverLoad(char* filename, AuDriver* driver) {
 	uint64_t diff = new_addr - original_base;
 
 	AuKernelRelocatePE(relocatebuff, nt, diff);
+	/* copied and relocated through the D-cache: make it fetchable */
+	AA64SyncICacheRange((void*)virtual_base, nt->OptionalHeader.SizeOfImage);
 	void* entry_addr = AuGetProcAddress((void*)load_base, "AuDriverMain");
 	void* unload_addr = AuGetProcAddress((void*)load_base, "AuDriverUnload");
 	uint32_t* flags_addr = (uint32_t*)AuGetProcAddress((void*)load_base, "AuDriverFlags");

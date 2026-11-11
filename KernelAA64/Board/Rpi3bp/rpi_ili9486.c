@@ -1,7 +1,7 @@
 /**
 * BSD 2-Clause License
 *
-* Copyright (c) 2022-2025, Manas Kamal Choudhury
+* Copyright (c) 2022-2026, Manas Kamal Choudhury
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -26,240 +26,192 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 **/
-
-#if 0
-
-#include <Board/RPI3bp/rpi3bp_gpio.h>
-#include <Board/RPI3bp/rpi3bp_spi.h>
 #include <Board/RPI3bp/rpi_ili9486.h>
+#include <Board/RPI3bp/rpi3bp_spi.h>
+#include <Board/RPI3bp/rpi3bp_gpio.h>
+#include <Board/RPI3bp/rpi3bp.h>
+#include <aucon.h>
+#include <_null.h>
 
-#define GPIO_DC						 25
-#define GPIO_RST					 24 //25
-#define GPIO_LED					 23 //18
+#ifdef __TARGET_BOARD_RPI3__
 
-/* MIPI DSI Processor to Peripheral transaction types */
-#define MIPI_DSI_V_SYNC_START		 0x01
-#define MIPI_DSI_V_SYNC_END			 0x11
-#define MIPI_DSI_H_SYNC_START		 0x21
-#define MIPI_DSI_H_SYNC_END			 0x31
-#define MIPI_DSI_COMPRESSION_MODE	 0x07
-#define MIPI_DSI_END_OF_TRANSMISSION 0x08
-#define MIPI_DSI_COLOR_MODE_OFF		 0x02
-#define MIPI_DSI_COLOR_MODE_ON		 0x12
-#define MIPI_DSI_SHUTDOWN_PERIPHERAL 0x22
-#define MIPI_DSI_TURN_ON_PERIPHERAL	 0x32
-#define MIPI_DCS_ENTER_SLEEP_MODE	 0x10
-#define MIPI_DCS_EXIT_SLEEP_MODE	 0x11
-#define MIPI_DCS_SET_PIXEL_FORMAT	 0x3A
+/*
+ * ILI9486 over SPI. Commands from the ILI9486 datasheet (MIPI DCS);
+ * the power/VCOM/gamma register values are the panel vendors' published
+ * init data for these 3.5" modules. Reset: asserted for tens of us, then
+ * 120 ms before the first command (datasheet reset timing).
+ */
 
-#define LBTFT_WIDTH	 320
-#define LBTFT_HEIGHT 480
+#define MIPI_DCS_SOFT_RESET		   0x01
+#define MIPI_DCS_EXIT_SLEEP_MODE   0x11
+#define MIPI_DCS_SET_DISPLAY_ON	   0x29
+#define MIPI_DCS_SET_COLUMN_ADDR   0x2A
+#define MIPI_DCS_SET_PAGE_ADDR	   0x2B
+#define MIPI_DCS_WRITE_MEMORY	   0x2C
+#define MIPI_DCS_SET_ADDRESS_MODE  0x36
+#define MIPI_DCS_SET_PIXEL_FORMAT  0x3A
+#define ILI9486_IFMODE			   0xB0
+#define ILI9486_PWCTRL3			   0xC2
+#define ILI9486_VMCTRL1			   0xC5
+#define ILI9486_PGAMCTRL		   0xE0
+#define ILI9486_NGAMCTRL		   0xE1
+#define ILI9486_DGAMCTRL1		   0xE2
 
-void LCDWriteCommand(uint8_t cmd) {
-	AuRPIGPIOClear(GPIO_DC);
-	AuRPISPITransfer(cmd);
-}
+#define ILI_CHUNK 2048
 
-void LCDWriteData(uint8_t data) {
-	AuRPIGPIOSet(GPIO_DC);
-	AuRPISPITransfer(data);
-}
+AuRPIILI9486Config AuRPIILI9486Cfg = {
+	.chip_select = 0,
+	.dc_gpio = 24,
+	.reset_gpio = 25,
+	.backlight_gpio = 0xFF,
+	.speed_hz = 16000000,
+	.width = 480,
+	.height = 320,
+	.madctl = 0x28,
+	.reg16 = true,
+};
 
-void LCDWriteDataBuffer(const uint8_t* data, uint32_t len) {
-	AuRPIGPIOSet(GPIO_DC);
-	AuRPISPITransferBuffer(data, len);
-}
+static AuRPISPIDevice ili_spi;
+static bool ili_ready;
+static uint8_t ili_buf[ILI_CHUNK];
 
-void LCDWriteU16(uint16_t data) {
-	LCDWriteData(data >> 8);
-	LCDWriteData(data & 0xFF);
-}
-
-void LCDWriteU32(uint32_t data) {
-	LCDWriteData((data >> 24) & 0xFF);
-	LCDWriteData((data >> 16) & 0xFF);
-	LCDWriteData((data >> 8) & 0xFF);
-	LCDWriteData(data & 0xFF);
-}
-
-
-void ILI9486Init() {
-	AuRPISPITransferStart();
-	//LCDWriteCommand(0xB0);
-	//LCDWriteData(0x00);
-	LCDWriteCommand(0x01);
-	LCDWriteData(0x00);
-	for (int i = 0; i < 120000000; i++)
-		;
-
-	LCDWriteCommand(MIPI_DCS_EXIT_SLEEP_MODE);
-	LCDWriteData(0x00);
-	for (int i = 0; i < 100000000; i++)
-		;
-	LCDWriteCommand(MIPI_DCS_SET_PIXEL_FORMAT);
-	LCDWriteData(0x55);
-
-	AuTextOut("ILI9486 Software reset completed \r\n");
-
-	//LCDWriteCommand(0x28);
-	LCDWriteCommand(0xC0);
-	LCDWriteData(0x09);
-	LCDWriteData(0x09);
-	for (int i = 0; i < 1200000; i++)
-		;
-	AuTextOut("Display turned off \r\n");
-
-	LCDWriteCommand(0xC1);
-	LCDWriteData(0x41);
-	LCDWriteData(0x00);
-
-	AuTextOut("Power control command sent \r\n");
-
-	LCDWriteCommand(0xC2);
-	LCDWriteData(0x44);
-
-	for (int i = 0; i < 12000000; i++);
-	LCDWriteCommand(0xC5);
-	LCDWriteData(0x00);
-	LCDWriteData(0x00);
-	LCDWriteData(0x00);
-	LCDWriteData(0x00);
-
-	for (int i = 0; i < 12000000; i++);
-	LCDWriteCommand(0xE0);
-	LCDWriteData(0x0F);
-	LCDWriteData(0x1F);
-	LCDWriteData(0x1C);
-	LCDWriteData(0x0C);
-	LCDWriteData(0x0F);
-	LCDWriteData(0x08);
-	LCDWriteData(0x48);
-	LCDWriteData(0x98);
-	LCDWriteData(0x37);
-	LCDWriteData(0x0A);
-	LCDWriteData(0x13);
-	LCDWriteData(0x04);
-	LCDWriteData(0x11);
-	LCDWriteData(0x0D);
-	LCDWriteData(0x00);
-	for (int i = 0; i < 12000000; i++);
-
-
-	LCDWriteCommand(0xE1);
-	LCDWriteData(0x0F);
-	LCDWriteData(0x32);
-	LCDWriteData(0x2E);
-	LCDWriteData(0x0B);
-	LCDWriteData(0x0D);
-	LCDWriteData(0x05);
-	LCDWriteData(0x47);
-	LCDWriteData(0x75);
-	LCDWriteData(0x37);
-	LCDWriteData(0x06);
-	LCDWriteData(0x10);
-	LCDWriteData(0x03);
-	LCDWriteData(0x24);
-	LCDWriteData(0x20);
-	LCDWriteData(0x00);
-	for (int i = 0; i < 12000000; i++);
-
-	LCDWriteCommand(0xE2);
-	LCDWriteData(0x0F);
-	LCDWriteData(0x32);
-	LCDWriteData(0x2E);
-	LCDWriteData(0x0B);
-	LCDWriteData(0x0D);
-	LCDWriteData(0x05);
-	LCDWriteData(0x47);
-	LCDWriteData(0x75);
-	LCDWriteData(0x37);
-	LCDWriteData(0x06);
-	LCDWriteData(0x10);
-	LCDWriteData(0x03);
-	LCDWriteData(0x24);
-	LCDWriteData(0x20);
-	LCDWriteData(0x00);
-
-	
-	LCDWriteCommand(0x3A);
-	LCDWriteData(0x55);
-	
-	LCDWriteCommand(0x36);
-	LCDWriteData(0x28);
-
-	LCDWriteCommand(0x11);
-	for (int i = 0; i < 12000000; i++)
-		;
-	LCDWriteCommand(0x29);
-	for (int i = 0; i < 12000000; i++)
-		;
-
-	AuTextOut("ILI done \r\n");
-}
-
-
-void LCDSetWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-	LCDWriteCommand(0x2A);
-	LCDWriteU16(x0);
-	LCDWriteU16(x1);
-
-	LCDWriteCommand(0x2B);
-	LCDWriteU16(y0);
-	LCDWriteU16(y1);
-
-	LCDWriteCommand(0x2C);
-}
-
-void LCDClear(uint16_t color) {
-	LCDSetWindow(10, 10, LBTFT_WIDTH - 1, LBTFT_HEIGHT - 1);
-	AuTextOut("LCD Set Window completed \r\n");
-	uint8_t color_bytes[2];
-	color_bytes[0] = (color >> 8);
-	color_bytes[1] = color & 0xFF;
-
-	AuRPIGPIOSet(GPIO_DC);
-	AuTextOut("color byte [0] = %x byte 1: %x \r\n", color_bytes[0], color_bytes[1]);
-
-	for (uint32_t i = 0; i < LBTFT_WIDTH * LBTFT_HEIGHT; i++) {
-		AuRPISPITrasnferWrite(color_bytes[0]);
-		AuRPISPITrasnferWrite(color_bytes[1]);
+static void ili_send(bool data, const uint8_t* bytes, uint32_t len) {
+	AuRPIGPIOWrite(AuRPIILI9486Cfg.dc_gpio, data);
+	if (!AuRPIILI9486Cfg.reg16) {
+		AuRPISPITransfer(&ili_spi, bytes, NULL, len);
+		return;
 	}
-	AuRPISPITransferStart();
-	AuRPISPITransferStop();
-	AuTextOut("LCD Clear Completed \r\n");
-}
-
-static uint16_t RGB_TO_RGB565(uint8_t r,uint8_t g,uint8_t b) {
-	return ((r & 0xF8) << 8) |
-		((g & 0xFC) << 3) |
-		(b >> 3);
+	/* 16-bit register interface: every byte goes out as 0x00, byte */
+	while (len) {
+		uint32_t n = 0;
+		while (len && n + 2 <= ILI_CHUNK) {
+			ili_buf[n++] = 0;
+			ili_buf[n++] = *bytes++;
+			len--;
+		}
+		AuRPISPITransfer(&ili_spi, ili_buf, NULL, n);
+	}
 }
 
 /*
- * AuLCDInit -- initialize ili9486 pi display 
+ * ili_reg -- one command followed by its parameters
  */
-void AuLCDInit() {
+static void ili_reg(uint8_t cmd, const uint8_t* params, uint32_t n) {
+	ili_send(false, &cmd, 1);
+	if (n)
+		ili_send(true, params, n);
+}
 
-	AuRPIGPIOClear(GPIO_RST);
-	for (int i = 0; i < 120000000; i++);
+static void ili_window(uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye) {
+	uint8_t col[4] = {(uint8_t)(xs >> 8), (uint8_t)xs, (uint8_t)(xe >> 8), (uint8_t)xe};
+	uint8_t page[4] = {(uint8_t)(ys >> 8), (uint8_t)ys, (uint8_t)(ye >> 8), (uint8_t)ye};
+	ili_reg(MIPI_DCS_SET_COLUMN_ADDR, col, 4);
+	ili_reg(MIPI_DCS_SET_PAGE_ADDR, page, 4);
+	ili_reg(MIPI_DCS_WRITE_MEMORY, 0, 0);
+	/* pixel data follows with DC high */
+	AuRPIGPIOSet(AuRPIILI9486Cfg.dc_gpio);
+}
 
-	AuRPIGPIOSet(GPIO_RST);
-	for (int i = 0; i < 120000000; i++);
+/**
+ * @brief AuRPIILI9486Initialize -- reset and init the panel
+ */
+bool AuRPIILI9486Initialize() {
+	if (ili_ready)
+		return true;
+	if (!AuRPISPIPresent())
+		return false;
 
-	AuTextOut("[aurora]: Initializing LCD \r\n");
-	ILI9486Init();
-	//ILI9341Init();
-	AuRPIGPIOSet(GPIO_LED);
-	for (int i = 0; i < 12000000; i++);
+	ili_spi.chip_select = AuRPIILI9486Cfg.chip_select;
+	ili_spi.mode = RPI_SPI_MODE_0;
+	ili_spi.speed_hz = AuRPIILI9486Cfg.speed_hz;
 
-	AuTextOut("LCD Clearing \r\n");
-	LCDClear(RGB_TO_RGB565(0, 16, 100));
+	AuRPIGPIOSetFunction(AuRPIILI9486Cfg.dc_gpio, RPI_GPIO_FUNC_OUTPUT);
+	AuRPIGPIOSetFunction(AuRPIILI9486Cfg.reset_gpio, RPI_GPIO_FUNC_OUTPUT);
+	if (AuRPIILI9486Cfg.backlight_gpio != 0xFF) {
+		AuRPIGPIOSetFunction(AuRPIILI9486Cfg.backlight_gpio, RPI_GPIO_FUNC_OUTPUT);
+		AuRPIGPIOClear(AuRPIILI9486Cfg.backlight_gpio);
+	}
 
-	for (int i = 0; i < 12000000; i++);
-	AuTextOut("LCD Initialized \r\n");
-	AuRPISPITransferStop();
+	/* hardware reset (fbtft_reset) */
+	AuRPIGPIOClear(AuRPIILI9486Cfg.reset_gpio);
+	AuRPI3DelayUS(40);
+	AuRPIGPIOSet(AuRPIILI9486Cfg.reset_gpio);
+	AuRPIDelayMS(120);
 
-	for (;;);
+	static const uint8_t ifmode[] = {0x00};
+	static const uint8_t pixfmt[] = {0x55}; /* 16 bpp RGB565 */
+	static const uint8_t pwctrl3[] = {0x44};
+	static const uint8_t vmctrl1[] = {0x00, 0x00, 0x00, 0x00};
+	static const uint8_t pgamma[] = {0x0F, 0x1F, 0x1C, 0x0C, 0x0F, 0x08, 0x48, 0x98,
+									 0x37, 0x0A, 0x13, 0x04, 0x11, 0x0D, 0x00};
+	static const uint8_t ngamma[] = {0x0F, 0x32, 0x2E, 0x0B, 0x0D, 0x05, 0x47, 0x75,
+									 0x37, 0x06, 0x10, 0x03, 0x24, 0x20, 0x00};
+
+	ili_reg(ILI9486_IFMODE, ifmode, 1);
+	ili_reg(MIPI_DCS_EXIT_SLEEP_MODE, 0, 0);
+	AuRPIDelayMS(250);
+	ili_reg(MIPI_DCS_SET_PIXEL_FORMAT, pixfmt, 1);
+	ili_reg(ILI9486_PWCTRL3, pwctrl3, 1);
+	ili_reg(ILI9486_VMCTRL1, vmctrl1, 4);
+	ili_reg(ILI9486_PGAMCTRL, pgamma, sizeof(pgamma));
+	ili_reg(ILI9486_NGAMCTRL, ngamma, sizeof(ngamma));
+	ili_reg(ILI9486_DGAMCTRL1, ngamma, sizeof(ngamma));
+	ili_reg(MIPI_DCS_EXIT_SLEEP_MODE, 0, 0);
+	ili_reg(MIPI_DCS_SET_DISPLAY_ON, 0, 0);
+	ili_reg(MIPI_DCS_SET_ADDRESS_MODE, &AuRPIILI9486Cfg.madctl, 1);
+
+	if (AuRPIILI9486Cfg.backlight_gpio != 0xFF)
+		AuRPIGPIOSet(AuRPIILI9486Cfg.backlight_gpio);
+
+	ili_ready = true;
+	AuTextOut("[ili9486]: %dx%d panel on SPI0 CE%d \r\n", AuRPIILI9486Cfg.width,
+			  AuRPIILI9486Cfg.height, AuRPIILI9486Cfg.chip_select);
+	return true;
+}
+
+/**
+ * @brief AuRPIILI9486FillRect -- solid fill
+ */
+void AuRPIILI9486FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t rgb565) {
+	if (!ili_ready || !w || !h)
+		return;
+	ili_window(x, y, x + w - 1, y + h - 1);
+	for (uint32_t i = 0; i < ILI_CHUNK; i += 2) {
+		ili_buf[i] = rgb565 >> 8;
+		ili_buf[i + 1] = rgb565 & 0xFF;
+	}
+	uint32_t bytes = (uint32_t)w * h * 2;
+	while (bytes) {
+		uint32_t n = bytes < ILI_CHUNK ? bytes : ILI_CHUNK;
+		AuRPISPITransfer(&ili_spi, ili_buf, NULL, n);
+		bytes -= n;
+	}
+}
+
+/**
+ * @brief AuRPIILI9486Blit -- XRGB8888 to the panel as RGB565
+ */
+void AuRPIILI9486Blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint32_t* pixels,
+					  uint32_t stride) {
+	if (!ili_ready || !w || !h || !pixels)
+		return;
+	ili_window(x, y, x + w - 1, y + h - 1);
+	uint32_t n = 0;
+	for (uint32_t row = 0; row < h; row++) {
+		const uint32_t* src = pixels + (uint64_t)row * stride;
+		for (uint32_t col = 0; col < w; col++) {
+			uint32_t p = src[col];
+			uint16_t c = (uint16_t)(((p >> 8) & 0xF800) | ((p >> 5) & 0x07E0) | ((p >> 3) & 0x001F));
+			ili_buf[n++] = c >> 8;
+			ili_buf[n++] = c & 0xFF;
+			if (n == ILI_CHUNK) {
+				AuRPISPITransfer(&ili_spi, ili_buf, NULL, n);
+				n = 0;
+			}
+		}
+	}
+	if (n)
+		AuRPISPITransfer(&ili_spi, ili_buf, NULL, n);
 }
 
 #endif

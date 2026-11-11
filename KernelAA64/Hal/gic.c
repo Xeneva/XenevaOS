@@ -353,6 +353,9 @@ void GICInitializeCPU(uint32_t cpu_num, uint64_t mpidr) {
 #ifdef __TARGET_BOARD_RPI3__
 	(void)cpu_num;
 	(void)mpidr;
+	/* timer and IPI mailbox are enabled per core by the scheduler through
+	 * GICEnablePPILocal(27) / AA64SMPIPILocalInit() */
+	AuRPI3LocalCoreInit();
 #else
 	if (cpu_num >= AA64_SMP_MAX_CPUS)
 		return;
@@ -534,11 +537,22 @@ static uint64_t gicrCPUBase(uint32_t cpu) {
 }
 
 void GICREnablePPI(uint32_t cpu, uint32_t intid) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)cpu;
+	(void)intid;
+	return;
+#endif
 	size_t sgi = gicrCPUBase(cpu) + GICR_SGI_BASE;
 	gic_outl_((uint64_t*)sgi, 0x100, (1u << intid));
 }
 
 void GICRSetPPIPriority(uint32_t cpu, uint32_t intid, uint8_t prio) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)cpu;
+	(void)intid;
+	(void)prio;
+	return;
+#endif
 	size_t sgi = gicrCPUBase(cpu) + GICR_SGI_BASE;
 	uint32_t reg = intid / 4;
 	uint32_t shift = (intid % 4) * 8;
@@ -553,6 +567,10 @@ void GICRSetPPIPriority(uint32_t cpu, uint32_t intid, uint8_t prio) {
  * @param irq -- interrupt id, below 32
  */
 void GICEnablePPILocal(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	AuRPI3EnableLocalIRQ(irq);
+	return;
+#endif
 	if (irq >= 32)
 		return;
 	if (__gic.version >= GIC_VERSION_3) {
@@ -572,6 +590,13 @@ void GICEnablePPILocal(uint32_t irq) {
  * @param irq -- IRQ number
  */
 void GICEnableIRQ(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	if (irq < 32)
+		AuRPI3EnableLocalIRQ(irq);
+	else
+		AuRPI3PeripheralIRQEnable(irq - 32);
+	return;
+#endif
 	if (__gic.version >= GIC_VERSION_3) {
 		if (irq < 32) {
 			gic_outl_((uint64_t*)GICD(__gic), 0x6000 + irq * 8, 0ULL);
@@ -602,6 +627,10 @@ void GICEnableIRQ(uint32_t irq) {
 }
 
 void GICSetEdgeTriggered(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)irq;
+	return;
+#endif
 	uint32_t reg = irq / 32;
 	uint32_t bit = irq % 32;
 	volatile uint32_t* icfgr = &GICD_ICFGR(irq / 16);
@@ -615,6 +644,10 @@ void GICSetEdgeTriggered(uint32_t irq) {
 }
 
 void GICIsIRQEdgeTriggered(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)irq;
+	return;
+#endif
 	uint32_t icfgr = GICD_ICFGR(irq / 16);
 	uint32_t shift = (irq % 16) * 2;
 	uint32_t config_bits = (icfgr >> shift) & 0b11;
@@ -632,6 +665,13 @@ void GICIsIRQEdgeTriggered(uint32_t irq) {
  * @param irq -- IRQ number
  */
 void GICEnableSPIIRQ(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	if (irq < 32)
+		AuRPI3EnableLocalIRQ(irq);
+	else
+		AuRPI3PeripheralIRQEnable(irq - 32);
+	return;
+#endif
 	//if (__gic.version >= GIC_VERSION_3) {
 	if (irq < 32) {
 		gic_outl_((uint64_t*)GICD(__gic), 0x6000 + irq * 8, 0ULL);
@@ -682,6 +722,10 @@ void GICEnableSPIIRQ(uint32_t irq) {
 }
 
 void GICSetTargetCPU(int spi) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)spi; /* peripheral irqs always go to core 0 */
+	return;
+#endif
 	if (__gic.version >= GIC_VERSION_3)
 		return;
 	if (spi < 32)
@@ -705,6 +749,10 @@ void GICSetTargetCPU(int spi) {
 	isb_flush();
 }
 void GICClearPendingIRQ(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)irq; /* level sources, cleared at the device */
+	return;
+#endif
 	if (__gic.version >= GIC_VERSION_3)
 		return;
 
@@ -716,6 +764,10 @@ void GICClearPendingIRQ(uint32_t irq) {
 }
 
 void GICCheckPending(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)irq;
+	return;
+#endif
 	/* ISPENDR0 only covers IDs 0-31. SPIs live in ISPENDR1+.
 	 * The old code always read bank 0 and shifted by the full ID,
 	 * so any SPI >= 32 reported the wrong state. --axiss */
@@ -733,6 +785,10 @@ void GICCheckPending(uint32_t irq) {
  * device raises (used.idx advances) but IAR never reports it.
  */
 void GICDumpSPI(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	UARTDebugOut("[rpi3]: irq %d pending %x \n", irq, AuRPI3PeripheralIRQPending());
+	return;
+#endif
 	uint32_t reg = irq / 32;
 	uint32_t bit = irq % 32;
 	uint32_t en = *(volatile uint32_t*)(GICD(__gic) + 0x100 + reg * 4);
@@ -755,6 +811,9 @@ void GICDumpSPI(uint32_t irq) {
  * register
  */
 uint32_t GICReadIAR() {
+#ifdef __TARGET_BOARD_RPI3__
+	return 1023; /* no GIC: irq_el1_handler reads the local sources */
+#endif
 	uint32_t iar = 0;
 	if (__gic.version >= GIC_VERSION_3)
 		iar = gic_read_intid();
@@ -769,6 +828,10 @@ uint32_t GICReadIAR() {
  * @param irqnum -- interrupt ID of the device
  */
 void GICSendEOI(uint32_t irqnum) {
+#ifdef __TARGET_BOARD_RPI3__
+	(void)irqnum;
+	return;
+#endif
 	if (__gic.version >= GIC_VERSION_3)
 		gic_icc_eoi(irqnum);
 	else {
@@ -783,6 +846,10 @@ void GICSendEOI(uint32_t irqnum) {
 }
 
 void GICSetupTimer() {
+#ifdef __TARGET_BOARD_RPI3__
+	setupTimerIRQ();
+	return;
+#endif
 	mask_irqs();
 	setupTimerIRQ();
 	gic_regs[0] = 1;
@@ -855,6 +922,9 @@ void GICClearSPIHandler(int spi) {
  * @brief GICDisable -- disable the GIC 
  */
 void GICDisable() {
+#ifdef __TARGET_BOARD_RPI3__
+	return;
+#endif
 	gic_outl_((uint64_t*)__gic.gicDMMIO, GICD_CTLR, 0);
 
 	dsb_sy_barrier();
@@ -877,8 +947,9 @@ void GICDisable() {
  */
 void GICSendSGI(uint32_t cpu, uint32_t sgi) {
 #ifdef __TARGET_BOARD_RPI3__
-	(void)cpu;
-	(void)sgi;
+	if (cpu >= AA64_SMP_MAX_CPUS)
+		return;
+	AuRPI3SendIPI((uint32_t)(_aa64_percpu[cpu].mpidr & 0xFF), sgi);
 #else
 	if (cpu >= AA64_SMP_MAX_CPUS)
 		return;
@@ -903,6 +974,11 @@ void GICSendSGI(uint32_t cpu, uint32_t sgi) {
 
 /** @brief GICMaskIRQ -- stop the distributor forwarding an SPI */
 void GICMaskIRQ(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	if (irq >= 32 && irq < 96)
+		AuRPI3PeripheralIRQDisable(irq - 32);
+	return;
+#endif
 	if (irq < 32 || irq >= 1020)
 		return;
 	GICD_ICENABLE(irq / 32) = (1u << (irq % 32));
@@ -911,6 +987,11 @@ void GICMaskIRQ(uint32_t irq) {
 
 /** @brief GICUnmaskIRQ -- let the distributor forward an SPI again */
 void GICUnmaskIRQ(uint32_t irq) {
+#ifdef __TARGET_BOARD_RPI3__
+	if (irq >= 32 && irq < 96)
+		AuRPI3PeripheralIRQEnable(irq - 32);
+	return;
+#endif
 	if (irq < 32 || irq >= 1020)
 		return;
 	GICD_ISENABLER(irq / 32) = (1u << (irq % 32));

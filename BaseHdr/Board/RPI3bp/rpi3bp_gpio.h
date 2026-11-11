@@ -1,7 +1,7 @@
 /**
 * BSD 2-Clause License
 *
-* Copyright (c) 2022-2025, Manas Kamal Choudhury
+* Copyright (c) 2022-2026, Manas Kamal Choudhury
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -26,64 +26,85 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 **/
-
 #ifndef __RPI3BP_GPIO_H__
 #define __RPI3BP_GPIO_H__
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <aurora.h>
 
-/*
- * AuRPI3BPGpioMap -- map the GPIO base to kernel
- * highrr half address
- */
-extern void AuRPI3BPGpioMap();
+/* BCM2837 GPIO, 54 pins in two banks */
+#define RPI_GPIO_PIN_COUNT 54
 
+/* GPFSEL function codes */
+#define RPI_GPIO_FUNC_INPUT	 0
+#define RPI_GPIO_FUNC_OUTPUT 1
+#define RPI_GPIO_FUNC_ALT0	 4
+#define RPI_GPIO_FUNC_ALT1	 5
+#define RPI_GPIO_FUNC_ALT2	 6
+#define RPI_GPIO_FUNC_ALT3	 7
+#define RPI_GPIO_FUNC_ALT4	 3
+#define RPI_GPIO_FUNC_ALT5	 2
 
-/*
- * AuRPIGPIOSetFunction -- assign function to
- * given pin
- * @param pin -- pin number
- * @param function -- function type
- */
-extern void AuRPIGPIOSetFunction(uint8_t pin, uint8_t function);
+/* GPPUD pull modes */
+#define RPI_GPIO_PULL_NONE 0
+#define RPI_GPIO_PULL_DOWN 1
+#define RPI_GPIO_PULL_UP   2
 
-/*
- * AuRPIGPIOSet -- set a specific pin
- * @param pin -- Pin number
- */
-extern void AuRPIGPIOSet(uint8_t pin);
-
-/*
- * AuRPIGPIOClear -- clear a pin
- * @param pin -- Pin number to clear
- */
-extern void AuRPIGPIOClear(uint8_t pin);
-
-extern void AuRPIGPIOPullUpsDown();
-
-extern void AuRPIGPIOPullUP(uint8_t pin);
-
-extern void AuRPIGPIOEnableInterrupt(uint8_t pin);
-
-extern bool AuRPIGPIOCheckInterrupt(uint8_t pin);
-
-extern uint32_t AuRPIGPIOGetEvents();
-
-extern void AuRPIGPIOClearEvent(uint8_t pin);
-
-extern bool AuRPIGPIOPinLevelLow(uint8_t pin);
-
-
-extern void AuRPIGPIODisableInterrupt(uint8_t pin);
+/* both GPIO banks raise BCM2835 peripheral irq 49 (gpio_int[0]) for bank 0
+ * and 50 for bank 1; kernel interrupt ids are 32 + n on the Pi 3 */
+#define RPI_GPIO_BANK0_IRQ 49
+#define RPI_GPIO_BANK1_IRQ 50
 
 /*
- * AuRPIGPIOWrite -- write boolean value
- * to specific pin
- * @param pin -- Pin number
- * @param value -- value to write
+ * AuRPI3BPGpioMap -- map the GPIO block, safe to call twice
  */
-extern void AuRPIGPIOWrite(uint8_t pin, bool value);
+AU_EXTERN AU_EXPORT void AuRPI3BPGpioMap();
 
+AU_EXTERN AU_EXPORT void AuRPIGPIOSetFunction(uint8_t pin, uint8_t function);
+
+AU_EXTERN AU_EXPORT void AuRPIGPIOSet(uint8_t pin);
+
+AU_EXTERN AU_EXPORT void AuRPIGPIOClear(uint8_t pin);
+
+AU_EXTERN AU_EXPORT void AuRPIGPIOWrite(uint8_t pin, bool value);
+
+/*
+ * AuRPIGPIOSetPull -- RPI_GPIO_PULL_NONE / _DOWN / _UP
+ */
+AU_EXTERN AU_EXPORT void AuRPIGPIOSetPull(uint8_t pin, uint8_t mode);
+
+/* kept for older callers: AuRPIGPIOSetPull(pin, RPI_GPIO_PULL_UP) */
+AU_EXTERN AU_EXPORT void AuRPIGPIOPullUP(uint8_t pin);
+
+/*
+ * AuRPIGPIOPinLevelLow -- true if the pin reads low
+ */
+AU_EXTERN AU_EXPORT bool AuRPIGPIOPinLevelLow(uint8_t pin);
+
+/*
+ * AuRPIGPIOEnableInterrupt -- clear the pin's event, then detect falling
+ * edges on it
+ */
+AU_EXTERN AU_EXPORT void AuRPIGPIOEnableInterrupt(uint8_t pin);
+
+/*
+ * AuRPIGPIODisableInterrupt -- stop every event detect on the pin and
+ * clear its event
+ */
+AU_EXTERN AU_EXPORT void AuRPIGPIODisableInterrupt(uint8_t pin);
+
+/*
+ * AuRPIGPIOCheckInterrupt -- true (and the event cleared) if the pin has
+ * a detected event
+ */
+AU_EXTERN AU_EXPORT bool AuRPIGPIOCheckInterrupt(uint8_t pin);
+
+/*
+ * AuRPIGPIOGetEvents -- bank 0 event status (GPEDS0)
+ */
+AU_EXTERN AU_EXPORT uint32_t AuRPIGPIOGetEvents();
+
+AU_EXTERN AU_EXPORT void AuRPIGPIOClearEvent(uint8_t pin);
 
 #endif

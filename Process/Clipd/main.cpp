@@ -79,6 +79,9 @@ static void clipd_log(const char* line) {
  * in PORT_ADD, so which one it is depends on what registered first.
  * Tried in order rather than derived, because nothing here can walk /dev.
  */
+/* pause between port probes while none is found */
+static uint64_t s_probe_ms = 500;
+
 static int clipd_open_port(void) {
 	static const char* names[] = {"/dev/vport0p1", "/dev/vport1p1",
 								  "/dev/vport2p1", "/dev/vport3p1"};
@@ -245,7 +248,17 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
-		_KeProcessSleep(g_port >= 0 ? CLIP_TICK_MS : 500);
+		/* no port (e.g. no virtio-serial device at all, as on the
+		 * Raspberry Pi): look again with a growing pause, up to 10 s,
+		 * instead of four failed opens every 500 ms */
+		if (g_port >= 0) {
+			s_probe_ms = 500;
+			_KeProcessSleep(CLIP_TICK_MS);
+		} else {
+			_KeProcessSleep(s_probe_ms);
+			if (s_probe_ms < 10000)
+				s_probe_ms *= 2;
+		}
 	}
 
 	return 0;

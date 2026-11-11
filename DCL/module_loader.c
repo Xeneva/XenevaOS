@@ -4,6 +4,7 @@
 #include <Mm/vmmngr.h>
 #include <string.h>
 #include <Drivers/uart.h>
+#include <Hal/AA64/aa64lowlevel.h>
 
 /* ELF64 types */
 typedef uint64_t Elf64_Addr;
@@ -599,6 +600,10 @@ int mod_load(const void* data, size_t size, struct mod_handle* handle) {
 		AuPmmngrReleasePages(phys);
 		return -1;
 	}
+
+	/* sections were copied and relocated through the D-cache: make the
+	 * module's code visible to instruction fetch before init runs */
+	AA64SyncICacheRange((void*)virt, alloc_size);
 
 	for (Elf64_Xword i = 0; i < num_syms; i++) {
 		if (syms[i].st_name == 0)

@@ -95,4 +95,38 @@ extern void AuBtUsbReady(const AuBtUsbOps* ops);
 extern void AuBtUsbDetach(void);
 extern void AuVirtioBtInitialize(uint64_t device, int bus, int dev, int func);
 
+/* Kernel exports for Bluetooth driver modules (same linkage rules as
+ * aurora.h's AU_EXTERN AU_EXPORT, spelled out so user space can keep
+ * including this header for the ioctl definitions above). */
+#ifdef __cplusplus
+#define AU_BT_LINKAGE extern "C"
+#else
+#define AU_BT_LINKAGE extern
+#endif
+#ifdef __GNUC__
+#define AU_BT_EXPORT __attribute__((visibility("default")))
+#else
+#define AU_BT_EXPORT __declspec(dllexport)
+#endif
+
+#define BT_LOCAL_NAME_MAX 32
+
+/*
+ * AuBtSetLocalName -- name the controller advertises once the host stack
+ * brings it up: written with HCI Write Local Name, carried in the classic
+ * EIR and LE advertising data, with inquiry + page scan enabled so other
+ * devices discover it. Call before AuBtH4UartReady. Without a name
+ * (the QEMU paths) the controller stays non-discoverable.
+ */
+AU_BT_LINKAGE AU_BT_EXPORT void AuBtSetLocalName(const char* name);
+
+/*
+ * AuBtH4UartReady -- hand an already programmed PL011 (baud rate, flow
+ * control, controller firmware loaded) to the host stack as an H4
+ * transport. Runs controller bring-up on the calling thread (which must
+ * be a kernel thread, after the scheduler started) and starts bthost.
+ * Returns 0 on success, -1 if a transport is already attached.
+ */
+AU_BT_LINKAGE AU_BT_EXPORT int AuBtH4UartReady(volatile uint32_t* pl011);
+
 #endif

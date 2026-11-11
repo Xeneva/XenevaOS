@@ -14,11 +14,18 @@ if ! command -v llvm-ar >/dev/null 2>&1 && command -v clang >/dev/null 2>&1; the
     fi
 fi
 
+# Target board for the bootloader + kernel (qemu_virt or rpi3). The Raspberry
+# Pi flow (build_rpi3.sh) sets BOARD=rpi3 and SKIP_BOOTAA64=1, since the Pi
+# boots through LittleBoot (kernel8.img) instead of the EFI loader.
+BOARD="${BOARD:-qemu_virt}"
+
 # EFI bootloader
-( cd ../../BootAA64 && make clean && make BLEED="${BLEED:-0}" llvm )
+if [ "${SKIP_BOOTAA64:-0}" -eq 0 ]; then
+    ( cd ../../BootAA64 && make clean && make BLEED="${BLEED:-0}" BOARD="$BOARD" llvm )
+fi
 
 # AArch64 kernel
-( cd ../../KernelAA64 && make clean && make BLEED="${BLEED:-0}" GPUSRV="${GPUSRV:-0}" SOAK="${SOAK:-0}" DEBUG_ALLOC="${DEBUG_ALLOC:-0}" STATIC_COMPONENTS="${STATIC_COMPONENTS:-0}" llvm )
+( cd ../../KernelAA64 && make clean && make BLEED="${BLEED:-0}" GPUSRV="${GPUSRV:-0}" SOAK="${SOAK:-0}" DEBUG_ALLOC="${DEBUG_ALLOC:-0}" STATIC_COMPONENTS="${STATIC_COMPONENTS:-0}" BOARD="$BOARD" llvm )
 
 if [ "${BUILD_USER_APPS:-0}" -eq 1 ]; then
     # Userspace C++ runtime + graphics library

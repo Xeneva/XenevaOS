@@ -39,6 +39,11 @@ KernelAA64/*.elf
 KernelAA64/*.exe
 KernelAA64/*.lib
 KernelAA64/*.log
+LittleBoot/kernel8.img
+LittleBoot/littleboot.elf
+LittleBoot/littleboot.map
+Drivers/USB/dwc2-otg/dwc2.lib
+Drivers/Sound/RPI/rpisnd.lib
 KernelAA64/obj/
 fat.img
 initrd2.img

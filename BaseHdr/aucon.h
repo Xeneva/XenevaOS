@@ -150,13 +150,13 @@ void AuConsolePresentRect(int x, int y, int w, int h);
  * AuConsoleGetScreenWidth -- return the screen
  * width
  */
-extern uint32_t AuConsoleGetScreenWidth();
+AU_EXTERN AU_EXPORT uint32_t AuConsoleGetScreenWidth();
 
 /*
  * AuConsoleGetScreenHeight -- return the screen
  * height
  */
-extern uint32_t AuConsoleGetScreenHeight();
+AU_EXTERN AU_EXPORT uint32_t AuConsoleGetScreenHeight();
 
 AU_EXTERN AU_EXPORT void AuConsoleSetConInfo(uint64_t phys, uint64_t virt, size_t xres, size_t yres);
 

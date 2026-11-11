@@ -241,6 +241,39 @@ void AA64SleepMS(uint32_t ms) {
 	AuAA64BoardSleepMS(ms);
 }
 
+/**
+ * @brief AA64DCacheCleanPoU -- clean a VA range to the point of
+ * unification (dc cvau is broadcast to the inner shareable domain)
+ */
+void AA64DCacheCleanPoU(void* addr, size_t size) {
+	uint64_t ctr;
+	__asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+	uint64_t line = 4ULL << ((ctr >> 16) & 0xF);
+	uint64_t start = (uint64_t)addr & ~(line - 1);
+	uint64_t end = (uint64_t)addr + size;
+	for (uint64_t va = start; va < end; va += line)
+		__asm__ volatile("dc cvau, %0" ::"r"(va) : "memory");
+	__asm__ volatile("dsb ish" ::: "memory");
+}
+
+/**
+ * @brief AA64ICacheInvalidateAll -- invalidate the instruction caches of
+ * every core. Code loaded through the kernel's direct map is fetched at
+ * a different VA, so a by-VA invalidate would miss the user alias
+ */
+void AA64ICacheInvalidateAll() {
+	__asm__ volatile("dsb ish\n ic ialluis\n dsb ish\n isb" ::: "memory");
+}
+
+/**
+ * @brief AA64SyncICacheRange -- make freshly written code at addr visible
+ * to instruction fetch on every core
+ */
+void AA64SyncICacheRange(void* addr, size_t size) {
+	AA64DCacheCleanPoU(addr, size);
+	AA64ICacheInvalidateAll();
+}
+
 extern void enableAlignCheck();
 /**
  * @brief AA64CpuInitialize -- initialize aa64 cpu
@@ -283,15 +316,12 @@ void AA64CpuInitialize() {
 }
 
 void AA64TimerSetup() {
-#ifdef __TARGET_BOARD_RPI3__
-	/* already enabled during bcm2836-armctl-ic initialization */
-	return;
-#else
+	/* on the Raspberry Pi 3 GICEnableIRQ(27) enables the calling core's
+	 * CNTV line in the bcm2836 local interrupt controller */
 	setupTimerIRQ();
 	GICEnableIRQ(27);
 	GICClearPendingIRQ(27);
 	isb_flush();
-#endif
 }
 
 /**
@@ -320,4 +350,4 @@ void AA64CPUPostInitialize(KERNEL_BOOT_INFO* info) {
 
 uint64_t AA64CPUGetFreqencyHz() {
 	return cpuFrequency;
-}
+}

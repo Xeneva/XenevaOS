@@ -34,6 +34,17 @@
 
 #define AU_INPUT_MOUSE	  1
 #define AU_INPUT_KEYBOARD 2
+/* absolute touch screen contact (Raspberry Pi 3 XPT2046): button_state
+ * LEFT while touching, 0 on release */
+#define AU_INPUT_TOUCH	  3
+
+/* AuInputMessage.button_state bits (kernel Fs/Dev/devinput.h) */
+#define DEODHAI_BUTTON_LEFT	 0x01
+#define DEODHAI_BUTTON_RIGHT 0x02
+/* wheel steps as applications see them (Chitralekha
+ * DEODHAI_MOUSE_MSG_SCROLL_UP / _DOWN) */
+#define DEODHAI_BUTTON_SCROLL_UP   0x05
+#define DEODHAI_BUTTON_SCROLL_DOWN 0x06
 
 #define DEODHAI_MESSAGE_CREATEWIN		   50
 #define DEODHAI_MESSAGE_WINDESTROY		   51

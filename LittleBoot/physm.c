@@ -50,7 +50,8 @@ void LBInitializePmmngr(memory_region_t* map, uint64_t num_entries, void*buffer,
     stackBuffer = buffer;
     buffsize /= 2;
     allocatedPtr = allocatedStack = ((paddr_t*)buffer + buffsize);
-    allocatedCount = 1;
+    /* the kernel pops exactly allocatedCount entries below allocatedPtr */
+    allocatedCount = 0;
     
     for (int i = 0;  i < num_entries; i++){
         uint64_t base = map[i].base;
@@ -82,9 +83,11 @@ paddr_t LBPmmngrAlloc(){
 }
 
 void LBPmmngrFree(paddr_t addr){
-    uint64_t *allocScan = stackBuffer;
+    uint64_t *allocScan = allocatedStack;
     char found = 0;
-    for (uint64_t* p = stackBuffer; p < allocatedPtr; ++p){
+    /* only the allocated list: popped slots of the free stack still hold
+     * stale addresses */
+    for (uint64_t* p = allocatedStack; p < allocatedPtr; ++p){
         if (*p == addr){
             found = 1;
             allocScan = p;
@@ -97,6 +100,7 @@ void LBPmmngrFree(paddr_t addr){
 
     allocatedPtr--;
     *allocScan = * allocatedPtr;
+    allocatedCount--;
     *stackptr++ = addr;
 
 }
@@ -111,4 +115,4 @@ void* LBPmmngrGetStackPtr(){
 
 uint32_t LBPmmngrGetReservedMemCount(){
     return allocatedCount;
-}
+}

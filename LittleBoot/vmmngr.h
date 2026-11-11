@@ -44,10 +44,26 @@
 #define PTE_DEVICE PTE_ATTR_IDX_0
 #define PTE_NORMAL PTE_ATTR_IDX_1
 
+/* kernel physical direct map, same base XNLDR uses (BaseHdr PHYSICAL_MEM_BASE) */
+#define LB_DIRECT_MAP_BASE 0xFFFF800000000000ULL
+/* direct map covers L1[0..1]: SDRAM, peripherals, ARM local peripherals */
+#define LB_DIRECT_MAP_SIZE 0x80000000ULL
+
 /*
- * LBPagingInitialize -- initialize paging
+ * LBPagingInitialize -- build identity + direct map, enable MMU and caches
+ * @param ram_end -- end of ARM SDRAM
  */
-extern void LBPagingInitialize();
+extern void LBPagingInitialize(uint64_t ram_end);
+
+/*
+ * LBCacheSyncICache -- clean D-cache to PoU and invalidate I-cache
+ */
+extern void LBCacheSyncICache(uint64_t start, uint64_t end);
+
+/*
+ * LBCacheCleanRange -- clean D-cache to PoC
+ */
+extern void LBCacheCleanRange(uint64_t start, uint64_t end);
 
 /*
  * LBPagingMap -- maps a virtual address to its physical
@@ -67,4 +83,4 @@ extern void LBPageTableWalk(uint64_t virtual);
  */
 extern void LBPagingFree(uint64_t virt_addr, bool free_physical);
 
-#endif
+#endif

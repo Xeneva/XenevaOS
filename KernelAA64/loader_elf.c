@@ -13,6 +13,7 @@
 #include <Drivers/uart.h>
 #include <string.h>
 #include <_null.h>
+#include <Hal/AA64/aa64lowlevel.h>
 
 #define ELF_MAG0 0x7f
 #define ELFCLASS64 2
@@ -169,6 +170,9 @@ static int elf_map_segment(AuProcess* proc, AuMMFileBack* fb, size_t image_len, 
 						AuPmmngrReleasePage(phys);
 					return -1;
 				}
+				/* written through the direct map, fetched at the user VA */
+				AA64DCacheCleanPoU((uint8_t*)P2V(phys) + (copy_from - src),
+								   (size_t)(copy_to - copy_from));
 			}
 		}
 		if (fresh &&
@@ -178,6 +182,8 @@ static int elf_map_segment(AuProcess* proc, AuMMFileBack* fb, size_t image_len, 
 			return -1;
 		}
 	}
+	/* frames may have held another process's code: drop stale lines */
+	AA64ICacheInvalidateAll();
 	return 0;
 }
 

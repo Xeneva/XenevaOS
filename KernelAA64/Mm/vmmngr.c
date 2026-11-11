@@ -787,13 +787,15 @@ uint64_t* AuGetRootPageTable() {
  *  kernel address space
  */
 void AuVmmngrBootFree() {
-	uint64_t* cr3 = (uint64_t*)_RootPaging;
+	/* through the direct map: entry 0 is the identity map this would
+	 * otherwise be writing through while it removes it */
+	uint64_t* cr3 = (uint64_t*)P2V((uint64_t)_RootPaging);
 	dsb_ish();
 	isb_flush();
 
 	for (int i = 0; i < 256; i++)
 		cr3[i] = 0;
-	aa64_data_cache_clean_range((void*)P2V((uint64_t)cr3), 256 * sizeof(uint64_t));
+	aa64_data_cache_clean_range((void*)cr3, 256 * sizeof(uint64_t));
 	dsb_ish();
 
 	write_ttbr0_el1(_RootPaging);
@@ -850,4 +852,4 @@ bool AuVmmngrUserWalk(uint64_t va, bool write, uint64_t* span) {
 		return true;
 	}
 	return false;
-}
+}

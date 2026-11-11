@@ -1,6 +1,4 @@
 /**
-* @file usb_hid.h
-*
 * BSD 2-Clause License
 *
 * Copyright (c) 2022-2026, Manas Kamal Choudhury
@@ -28,51 +26,24 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 **/
+#ifndef __DWC2_USB_HID_H__
+#define __DWC2_USB_HID_H__
 
-#ifndef __USB_HID_H__
-#define __USB_HID_H__
+#include "usb.h"
 
-#include <stdint.h>
-#include "dwc2.h"
-#include "dwc2_reg.h"
-#include "dwc2_usbdev.h"
-#include "usb_desc.h"
-#include <Mm/dma.h>
-#include <Drivers/uart.h>
-#include <_null.h>
+/*
+ * usb_hid_attach -- bind a HID interface's interrupt IN endpoint
+ * (called during enumeration)
+ * @param report_len -- wDescriptorLength of its report descriptor, 0 if
+ * the HID descriptor did not say
+ */
+extern void usb_hid_attach(usb_device_t* dev, usb_interface_desc_t* intf,
+						   usb_endpoint_desc_t* ep, uint16_t report_len);
 
-#pragma pack(push,1)
-typedef struct _usb_hid_ {
-	uint8_t bLength;
-	uint8_t bDescriptorType;
-	uint16_t bcdHID;
-	uint8_t bCountryCode;
-	uint8_t bNumDescriptors;
-	uint8_t bClassDescType;
-	uint16_t wDescriptorLength;
-}usb_hid_desc_t;
-#pragma pack(pop)
-
-
-
-extern void USBHidInitialize(dwc2_core_regs* regs, dwc2_usb_device* dev);
-
-extern uint64_t usb_hid_get_physical();
-
-extern dwc2_usb_device* usb_hid_get_dev();
-
-extern void* usb_hid_get_interrupt_buf();
-
-extern void USBHIDSetMouse(int dx, int dy, int button);
-
-extern void USBHIDStartInterrupt(dwc2_core_regs* regs);
-
-extern void HIDRequestInterrupt(void* param);
-
-extern void HIDRequestInterrupt_NAK(void* param);
-
-extern void HIDRequestCSplit(void* param);
-
-extern void USBHIDSetNAKNormal(bool nak, bool normal);
+/*
+ * usb_hid_start -- arm the kernel timer that starts the polling thread
+ * once the scheduler runs
+ */
+extern void usb_hid_start();
 
 #endif

@@ -66,7 +66,7 @@
 #define MBOX_TAG_LAST 0
 
 /* mailbox message buffer */
-volatile unsigned int  __attribute__((aligned(16))) mbox[36];
+volatile unsigned int  __attribute__((aligned(16))) mbox[64];
 
 #define VIDEOCORE_MBOX  (MMIO_BASE+0x0000B880)
 #define MBOX_READ       ((volatile unsigned int*)(VIDEOCORE_MBOX+0x0))
@@ -101,41 +101,56 @@ int mbox_call(unsigned char ch)
     return 0;
 }
 
+#define MBOX_TAG_GETCLKRATE 0x30002
+#define MBOX_CLOCK_CORE 4
+#define LB_CONSOLE_BAUD 115200
+
+/*
+ * LBUartInit -- serial console on the mini UART (GPIO14/15, ALT5).
+ * The PL011 is left to the Bluetooth controller. The mini UART baud
+ * rate is derived from the VPU core clock; config.txt's enable_uart=1
+ * pins that clock (250 MHz on the Pi 3) so the rate stays stable, and
+ * the divisor is computed from what the firmware reports.
+ */
 void LBUartInit(){
-     register uint32_t r;
+    register uint32_t r;
+    uint32_t core = 0;
 
-    /* initialize UART */
-    *UART0_CR = 0;         // turn off UART0
-
-    /* set up clock for consistent divisor values */
-    mbox[0] = 9*4;
+    /* ask the firmware for the core clock the mini UART runs from */
+    mbox[0] = 8*4;
     mbox[1] = MBOX_REQUEST;
-    mbox[2] = MBOX_TAG_SETCLKRATE; // set clock rate
-    mbox[3] = 12;
-    mbox[4] = 8;
-    mbox[5] = 2;           // UART clock
-    mbox[6] = 4000000;     // 4Mhz
-    mbox[7] = 0;           // clear turbo
-    mbox[8] = MBOX_TAG_LAST;
-    mbox_call(MBOX_CH_PROP);
+    mbox[2] = MBOX_TAG_GETCLKRATE;
+    mbox[3] = 8;
+    mbox[4] = 0;
+    mbox[5] = MBOX_CLOCK_CORE;
+    mbox[6] = 0;
+    mbox[7] = MBOX_TAG_LAST;
+    if (mbox_call(MBOX_CH_PROP) && mbox[5] == MBOX_CLOCK_CORE)
+        core = mbox[6];
+    if (core == 0)
+        core = 250000000;
 
-    /* map UART0 to GPIO pins */
+    *AUX_ENABLES |= 1;     // enable the mini UART block
+    *AUX_MU_CNTL = 0;      // transmitter and receiver off while configuring
+    *AUX_MU_IER = 0;       // no interrupts
+    *AUX_MU_LCR = 3;       // 8 data bits
+    *AUX_MU_MCR = 0;
+    *AUX_MU_IIR = 0xC6;    // clear both FIFOs
+    /* baud = core / (8 * (reg + 1)), rounded to the nearest divisor */
+    *AUX_MU_BAUD = (core + 4 * LB_CONSOLE_BAUD) / (8 * LB_CONSOLE_BAUD) - 1;
+
+    /* GPIO14 (TXD1) / GPIO15 (RXD1) -> ALT5, no pulls */
     r=*GPFSEL1;
     r&=~((7<<12)|(7<<15)); // gpio14, gpio15
-    r|=(4<<12)|(4<<15);    // alt0
+    r|=(2<<12)|(2<<15);    // alt5
     *GPFSEL1 = r;
-    *GPPUD = 0;            // enable pins 14 and 15
+    *GPPUD = 0;
     r=150; while(r--) { asm volatile("nop"); }
     *GPPUDCLK0 = (1<<14)|(1<<15);
     r=150; while(r--) { asm volatile("nop"); }
     *GPPUDCLK0 = 0;        // flush GPIO setup
 
-    *UART0_ICR = 0x7FF;    // clear interrupts
-
-    *UART0_IBRD = 2;       // 115200 baud
-    *UART0_FBRD = 0xB;
-    *UART0_LCRH = (3 << 5) | (1 << 4);  // 8n1, enable FIFOs
-    *UART0_CR = (1<<9) | (1 << 8)| 1;     // enable Tx, Rx, UART
+    *AUX_MU_CNTL = 3;      // enable TX and RX
 }
 
 /*
@@ -143,8 +158,8 @@ void LBUartInit(){
  * @param c -- Character to put
  */
 void LBUartPutc(char c){
-   do{asm volatile("nop");}while(*UART0_FR&0x20);
-   *UART0_DR = c;
+   do{asm volatile("nop");}while(!(*AUX_MU_LSR & AUX_MU_LSR_TX_EMPTY));
+   *AUX_MU_IO = (uint32_t)(uint8_t)c;
    asm volatile ("isb\n");
 }
 
@@ -214,145 +229,271 @@ void LBUartPrintInt(uint64_t value){
 }
 
 
+/* ------------------------------------------------------------------
+ * Physical memory map handed to the kernel
+ * ------------------------------------------------------------------ */
 memory_region_t usable_regions[MAX_MEMORY_REGN];
 int usable_region_count = 0;
 
-uint64_t nextStart;
-void subtract_resv(uint64_t start, uint64_t end, uint64_t resvstart, uint64_t resvend){
-   if (resvend < start)
-      return;
-
-   start = nextStart;
-
-   if (resvstart >= start){
-      usable_regions[usable_region_count].base = start;
-      usable_regions[usable_region_count].size = resvstart - start;
-      nextStart = usable_regions[usable_region_count].base + usable_regions[usable_region_count].size;
-   }
-   usable_region_count++;
-  
-}
+typedef struct {
+    uint64_t start;
+    uint64_t end;
+} lb_range_t;
 
 extern char phys[];
 extern char end[];
 
-uint64_t nextIterationStart;
 uint64_t pmmngrdata[1024*1024];
-
-void LBSubtractRegion(uint64_t mem_base, uint64_t mem_end, uint64_t regionStart, 
-uint64_t regionEnd){
-    if (regionStart < mem_base)
-       return;
-    if (usable_region_count != 0)
-        mem_base = nextIterationStart;
-    
-    if (regionStart == mem_base)
-        nextIterationStart = regionStart + regionEnd;
-
-    if (regionStart > mem_base){
-        LBUartPutString("Memory subtracting region : ");
-        LBUartPrintHex(mem_base);
-        LBUartPutString("Memory region start: ");
-        LBUartPrintHex(regionStart);
-        usable_regions[usable_region_count].base = mem_base;
-        usable_regions[usable_region_count].size = regionStart - mem_base;
-         usable_regions[usable_region_count].page_count = usable_regions[usable_region_count].size / 0x1000;
-        nextIterationStart = mem_base + (regionEnd - mem_base);
-        usable_region_count++;
-    }
-}
-
 
 uint64_t mem_base;
 uint64_t mem_end;
 uint64_t mem_size;
 
+#define LB_PAGE_ALIGN_DOWN(x) ((x) & ~0xFFFULL)
+#define LB_PAGE_ALIGN_UP(x)   (((x) + 0xFFFULL) & ~0xFFFULL)
+
+/*
+ * LBInitializeMemoryMap -- usable RAM = [mem_base, mem_end) minus the
+ * low memory below LittleBoot (firmware armstub + spin tables), LittleBoot
+ * itself (code, .bss, page tables), the device tree and the initramfs
+ */
 void LBInitializeMemoryMap(uint64_t dtb){
-    nextStart = 0;
-    //mem_base, mem_size, mem_end;
     LBDTBGetMemorySize(&mem_base,&mem_size);
     mem_end = mem_base + mem_size;
 
     LBUartPutString("Memory end :");
     LBUartPrintHex(mem_end);
-    uint64_t keStart = (uint64_t)phys;
-    uint64_t keEnd = (uint64_t)end;
-    keEnd = (keEnd + 0x1000 - 1) & ~(0x1000 - 1);
-    LBUartPutString("Kernel start : ");
-    LBUartPrintHex(keStart);
-    LBUartPutString("Kerne End : ");
-    LBUartPrintHex(keEnd);
-    LBUartPutString("Kernel original end : ");
-    LBUartPrintHex((uint64_t)end);
 
-    LBSubtractRegion(mem_base, mem_end, keStart, keEnd);
+    lb_range_t resv[4];
+    int nresv = 0;
+    resv[nresv].start = 0;
+    resv[nresv++].end = (uint64_t)phys;
+    resv[nresv].start = (uint64_t)phys;
+    resv[nresv++].end = LB_PAGE_ALIGN_UP((uint64_t)end);
+    resv[nresv].start = LB_PAGE_ALIGN_DOWN(dtb);
+    resv[nresv++].end = LB_PAGE_ALIGN_UP(dtb + LBDTBGetTotalSize());
+    if (LBRamdiskLocate()){
+        resv[nresv].start = LB_PAGE_ALIGN_DOWN(LBRamdiskGetStartAddress());
+        resv[nresv++].end = LB_PAGE_ALIGN_UP(LBRamdiskGetEndAddress());
+    }
 
-    uint64_t dtbStart = dtb;
-    uint64_t dtbEnd = dtbStart + LBDTBGetTotalSize();
-    LBUartPutString("DTB Start : ");
-    LBUartPrintHex(dtbStart);
-    LBUartPutString("\r\n");
-    dtbEnd = (dtbEnd + 0x1000 - 1) & ~(0x1000 - 1);
-     LBUartPutString("DTB End: ");
-    LBUartPrintHex(dtbEnd);
-    LBUartPutString("\r\n");
-    LBSubtractRegion(mem_base, mem_end, dtbStart, dtbEnd);
+    /* sort by start address */
+    for (int i = 1; i < nresv; i++){
+        lb_range_t key = resv[i];
+        int j = i;
+        while (j > 0 && resv[j - 1].start > key.start){
+            resv[j] = resv[j - 1];
+            j--;
+        }
+        resv[j] = key;
+    }
 
-    /* lastly add the remaining region */
-    usable_regions[usable_region_count].base = nextIterationStart;
-    usable_regions[usable_region_count].size = mem_end - nextIterationStart;
-    usable_regions[usable_region_count].page_count = usable_regions[usable_region_count].size / 0x1000;
-    usable_region_count++;
+    for (int i = 0; i < nresv; i++){
+        LBUartPutString("Reserved : ");
+        LBUartPrintHex(resv[i].start);
+        LBUartPutString("        -> ");
+        LBUartPrintHex(resv[i].end);
+    }
+
+    uint64_t cur = mem_base;
+    usable_region_count = 0;
+    for (int i = 0; i < nresv && usable_region_count < MAX_MEMORY_REGN; i++){
+        if (resv[i].end <= cur)
+            continue;
+        if (resv[i].start >= mem_end)
+            break;
+        if (resv[i].start > cur){
+            usable_regions[usable_region_count].base = cur;
+            usable_regions[usable_region_count].size = resv[i].start - cur;
+            usable_regions[usable_region_count].page_count = (resv[i].start - cur) / 0x1000;
+            usable_region_count++;
+        }
+        cur = resv[i].end;
+    }
+    if (cur < mem_end && usable_region_count < MAX_MEMORY_REGN){
+        usable_regions[usable_region_count].base = cur;
+        usable_regions[usable_region_count].size = mem_end - cur;
+        usable_regions[usable_region_count].page_count = (mem_end - cur) / 0x1000;
+        usable_region_count++;
+    }
+
+    for (int i = 0; i < usable_region_count; i++){
+        LBUartPutString("Usable : ");
+        LBUartPrintHex(usable_regions[i].base);
+        LBUartPutString("  size : ");
+        LBUartPrintHex(usable_regions[i].size);
+    }
 }
 
-void LBExitEL2(){
-    uint64_t CurrentELPrev;
-    asm volatile ("mrs %0, CurrentEL" : "=r"(CurrentELPrev));
-    /*LBUartPutString("Current EL: ");
-    LBUartPrintInt(CurrentELPrev >> 2);
-    LBUartPutc('\r');*/
+/* ------------------------------------------------------------------
+ * HDMI framebuffer through the VideoCore property mailbox
+ * ------------------------------------------------------------------ */
+#define MBOX_TAG_SET_PHYS_WH     0x48003
+#define MBOX_TAG_SET_VIRT_WH     0x48004
+#define MBOX_TAG_SET_DEPTH       0x48005
+#define MBOX_TAG_SET_PIXEL_ORDER 0x48006
+#define MBOX_TAG_SET_VIRT_OFFSET 0x48009
+#define MBOX_TAG_ALLOCATE_BUFFER 0x40001
+#define MBOX_TAG_GET_PITCH       0x40008
 
-    uint64_t spsr_el2, sctlr_el1;
-    asm volatile ("mrs %0, SPSR_EL2\n" : "=r"(spsr_el2));
-    asm volatile ("mrs %0, SCTLR_EL1\n" : "=r"(sctlr_el1));
+#ifndef LB_FB_WIDTH
+#define LB_FB_WIDTH  1024
+#endif
+#ifndef LB_FB_HEIGHT
+#define LB_FB_HEIGHT 768
+#endif
 
-    asm volatile (
-        "ldr x0, =0x1004\n"
-        "mrs x1, SCTLR_EL2\n"
-        "orr x1, x1, x0\n"
-        "msr SCTLR_EL2, x1\n"
-        "ldr x0, =0x30d01804\n"
-        "msr SCTLR_EL1,x0\n" :::"x0", "x1"
-    );
-   // LBUartPutString("SCTLR_EL1 set \n");
+typedef struct {
+    uint64_t address;     /* ARM physical */
+    uint64_t size;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t rgb;         /* 1: bytes R,G,B in memory, 0: B,G,R */
+} lb_framebuffer_t;
 
-    asm volatile (
-        "ldr x0, =0x80000000\n"
-        "msr HCR_EL2,x0\n":::"x0");
-    
-    asm volatile ("ldr x0, =0x3c5\n"
-        "msr SPSR_EL2, x0\n":::"x0");
+static lb_framebuffer_t lbfb;
 
-    asm volatile (
-        "mov x0, sp\n"
-        "msr SP_EL1, x0\n"
-        "adr x0, in_el1\n"
-        "msr ELR_EL2, x0\n"
-        "eret\n"
-        "in_el1:\n":::"x0", "memory", "cc"
-    );
-
-   // LBUartPutString("Out of EL2 \n");
-    uint64_t CurrentEL;
-    asm volatile ("mrs %0, CurrentEL" : "=r"(CurrentEL));
-    /*LBUartPutString("Current EL: ");
-    LBUartPrintInt(CurrentEL >> 2);
-    LBUartPutString("\r\n");*/
-}
-
+#define MBOX_TAG_GET_PHYS_WH 0x40003
 
 /*
- * LittleBootMain -- little boot main 
+ * LBGetDisplaySize -- size of the mode the firmware drives on HDMI
+ * (from the monitor's EDID, or the forced mode in config.txt)
+ * @return 1 on success
+ */
+int LBGetDisplaySize(uint32_t* width, uint32_t* height){
+    mbox[0] = 8 * 4;
+    mbox[1] = MBOX_REQUEST;
+    mbox[2] = MBOX_TAG_GET_PHYS_WH;
+    mbox[3] = 8;
+    mbox[4] = 0;
+    mbox[5] = 0;
+    mbox[6] = 0;
+    mbox[7] = MBOX_TAG_LAST;
+    if (!mbox_call(MBOX_CH_PROP) || mbox[5] == 0 || mbox[6] == 0)
+        return 0;
+    *width = mbox[5];
+    *height = mbox[6];
+    return 1;
+}
+
+/*
+ * LBFramebufferInitialize -- ask the VideoCore for a 32bpp framebuffer
+ * scanned out on HDMI. Must run with the MMU off: the mailbox buffer is
+ * read back by the GPU straight from memory.
+ * @return 1 on success
+ */
+int LBFramebufferInitialize(uint32_t width, uint32_t height){
+    int i = 0;
+    mbox[i++] = 0;                       /* size, patched below */
+    mbox[i++] = MBOX_REQUEST;
+
+    mbox[i++] = MBOX_TAG_SET_PHYS_WH; mbox[i++] = 8; mbox[i++] = 8;
+    int phys_wh = i; mbox[i++] = width; mbox[i++] = height;
+
+    mbox[i++] = MBOX_TAG_SET_VIRT_WH; mbox[i++] = 8; mbox[i++] = 8;
+    mbox[i++] = width; mbox[i++] = height;
+
+    mbox[i++] = MBOX_TAG_SET_VIRT_OFFSET; mbox[i++] = 8; mbox[i++] = 8;
+    mbox[i++] = 0; mbox[i++] = 0;
+
+    mbox[i++] = MBOX_TAG_SET_DEPTH; mbox[i++] = 4; mbox[i++] = 4;
+    int depth = i; mbox[i++] = 32;
+
+    /* 0 = BGR: a 32-bit pixel reads as 0xAARRGGBB, Xeneva's format */
+    mbox[i++] = MBOX_TAG_SET_PIXEL_ORDER; mbox[i++] = 4; mbox[i++] = 4;
+    int order = i; mbox[i++] = 0;
+
+    mbox[i++] = MBOX_TAG_ALLOCATE_BUFFER; mbox[i++] = 8; mbox[i++] = 8;
+    int buf = i; mbox[i++] = 4096; mbox[i++] = 0;
+
+    mbox[i++] = MBOX_TAG_GET_PITCH; mbox[i++] = 4; mbox[i++] = 4;
+    int pitch = i; mbox[i++] = 0;
+
+    mbox[i++] = MBOX_TAG_LAST;
+    mbox[0] = i * 4;
+
+    if (!mbox_call(MBOX_CH_PROP)){
+        LBUartPutString("Framebuffer: mailbox request failed \n");
+        return 0;
+    }
+    if (mbox[depth] != 32 || mbox[buf] == 0){
+        LBUartPutString("Framebuffer: no 32bpp buffer \n");
+        return 0;
+    }
+
+    lbfb.width = mbox[phys_wh];
+    lbfb.height = mbox[phys_wh + 1];
+    lbfb.rgb = mbox[order];
+    /* bus address -> ARM physical */
+    lbfb.address = mbox[buf] & 0x3FFFFFFF;
+    lbfb.size = mbox[buf + 1];
+    lbfb.pitch = mbox[pitch];
+
+    LBUartPutString("Framebuffer : ");
+    LBUartPrintHex(lbfb.address);
+    LBUartPutString("Framebuffer size : ");
+    LBUartPrintHex(lbfb.size);
+    LBUartPutString("Framebuffer width : ");
+    LBUartPrintInt(lbfb.width);
+    LBUartPutString(" height : ");
+    LBUartPrintInt(lbfb.height);
+    LBUartPutString(" pitch : ");
+    LBUartPrintInt(lbfb.pitch);
+    LBUartPutString(lbfb.rgb ? " order : RGB\n" : " order : BGR\n");
+    return 1;
+}
+
+/* ------------------------------------------------------------------
+ * EL2 -> EL1
+ * ------------------------------------------------------------------ */
+void LBExitEL2(){
+    uint64_t current_el;
+    asm volatile ("mrs %0, CurrentEL" : "=r"(current_el));
+    if (((current_el >> 2) & 3) != 2)
+        return;
+
+    asm volatile (
+        /* EL1 sees the real MIDR/MPIDR */
+        "mrs x0, midr_el1\n"
+        "msr vpidr_el2, x0\n"
+        "mrs x0, mpidr_el1\n"
+        "msr vmpidr_el2, x0\n"
+        /* EL1/EL0 may use the physical counter and timer, no virtual
+         * offset: the kernel ticks on CNTV and measures with CNTPCT */
+        "mrs x0, cnthctl_el2\n"
+        "orr x0, x0, #3\n"
+        "msr cnthctl_el2, x0\n"
+        "msr cntvoff_el2, xzr\n"
+        /* do not trap FP/SIMD or CP15 accesses to EL2 */
+        "mov x0, #0x33ff\n"
+        "msr cptr_el2, x0\n"
+        "msr hstr_el2, xzr\n"
+        /* SCTLR_EL1: RES1 bits, MMU/caches off until LBPagingInitialize */
+        "ldr x0, =0x30d00800\n"
+        "msr sctlr_el1, x0\n"
+        /* HCR_EL2.RW: EL1 is AArch64 */
+        "ldr x0, =0x80000000\n"
+        "msr hcr_el2, x0\n"
+        /* EL1h with DAIF masked */
+        "mov x0, #0x3c5\n"
+        "msr spsr_el2, x0\n"
+        "mov x0, sp\n"
+        "msr sp_el1, x0\n"
+        "adr x0, 1f\n"
+        "msr elr_el2, x0\n"
+        "isb\n"
+        "eret\n"
+        "1:\n" ::: "x0", "memory", "cc"
+    );
+}
+
+/* the structures the kernel receives; part of LittleBoot's reserved image */
+static KERNEL_BOOT_INFO info;
+static LittleBootProtocol lbp;
+
+/*
+ * LittleBootMain -- little boot main
  * entry point
  */
  void LittleBootMain(uint64_t dtb){
@@ -367,44 +508,55 @@ void LBExitEL2(){
     LBDeviceTreeInitialize(dtb);
     LBUartPutString("Device tree initialized \n");
     LBInitializeMemoryMap(dtb);
+
+    /* the mailbox exchange has to happen while the MMU (and with it the
+     * D-cache) is still off */
+    /* never ask for more than the display shows: a small monitor gets its
+     * own size, a big one the LB_FB_WIDTH x LB_FB_HEIGHT cap */
+    uint32_t fbw = LB_FB_WIDTH, fbh = LB_FB_HEIGHT, dispw = 0, disph = 0;
+    if (LBGetDisplaySize(&dispw, &disph)){
+        LBUartPutString("Display : ");
+        LBUartPrintInt(dispw);
+        LBUartPutString(" x ");
+        LBUartPrintInt(disph);
+        LBUartPutString("\n");
+        if (dispw < fbw) fbw = dispw;
+        if (disph < fbh) fbh = disph;
+    }
+    int have_fb = LBFramebufferInitialize(fbw, fbh);
+
     /* initialize temporary physical memory */
-    /* for now, 1MiB page data area is sufficient*/
-    /* if the size of xnkrnl increases, for example*/
-    /* crosses 1MiB, we need to increase page data area*/
+    /* 1MiB page data area: the free stack holds the lowest 256MiB of
+     * usable pages, LittleBoot only needs a few MiB of them */
     LBInitializePmmngr(usable_regions, usable_region_count, pmmngrdata, 1024*1024);
 
-    
     /* virtual memory initialize */
-    LBPagingInitialize();
+    LBPagingInitialize(mem_end);
 
-    
-    /* initialize temporary heap */
-    /* initialize ram disk and mount it*/
-    /* read the kernel and load it into 
-     * memory 
-     */
+#ifdef LB_POISON_RAM
+    /* test aid (make POISON=1): QEMU hands out zeroed RAM, real boards do
+     * not. Fill every free page with junk so kernel code that relies on
+     * zeroed memory fails in QEMU too */
+    for (int r = 0; r < usable_region_count; r++){
+        volatile uint64_t* p = (volatile uint64_t*)usable_regions[r].base;
+        uint64_t n = usable_regions[r].size / 8;
+        for (uint64_t i = 0; i < n; i++)
+            p[i] = 0x7000969302000008ULL ^ (i << 12);
+    }
+    LBUartPutString("Free RAM poisoned \n");
+#endif
+
+    /* read the kernel from the initramfs and load it into memory */
     LBRamdiskInitialize();
     uint64_t stackAddr = 0xFFFFA00000000000;
     for (int i = 0; i < 0x100000 / 4096; i++){
         LBPagingMap(stackAddr + i * 4096, LBPmmngrAlloc());
     }
-   
-  
+
     LBUartPutString("Stack mapped \r\n");
-    KERNEL_BOOT_INFO info; // = (KERNEL_BOOT_INFO*)addr;
-    LittleBootProtocol lbp; // = (LittleBootProtocol*)((uint64_t)info + sizeof(KERNEL_BOOT_INFO));
-    
-    LBUartPutString("LittleBoot address : \r\n");
-    LBUartPrintHex((uint64_t)&info);
+
     memset(&lbp, 0, sizeof(LittleBootProtocol));
-     asm volatile ("dsb ish");
-     asm volatile ("isb");
-     LBUartPutString("LBP memset really completed \r\n");
     lbp.initrd_start = LBRamdiskGetStartAddress();
-    asm volatile ("dsb ish");
-    asm volatile ("isb");
-     LBUartPutString("LBP memset completed \r\n");
-    
     lbp.initrd_end = LBRamdiskGetEndAddress();
     lbp.device_tree_base = dtb;
     lbp.device_tree_end = dtb + LBDTBGetTotalSize();
@@ -418,20 +570,50 @@ void LBExitEL2(){
     lbp.physical_end = mem_end;
     lbp.num_page_count = mem_size / 0x1000;
 
-    LBUartPutString("LBInitrd end \n");
-    LBUartPrintHex(lbp.initrd_end);
-
     LBUartPutString("LittleBoot Protocol prepared \r\n");
 
     memset(&info, 0, sizeof(KERNEL_BOOT_INFO));
     info.boot_type = BOOT_LITTLEBOOT_ARM64;
+    info.physical_direct_map_base = LB_DIRECT_MAP_BASE;
+    info.physical_direct_map_size = LB_DIRECT_MAP_SIZE;
+    if (have_fb){
+        info.graphics_framebuffer = (uint32_t*)lbfb.address;
+        info.fb_size = lbfb.size;
+        info.XResolution = lbfb.width;
+        info.YResolution = lbfb.height;
+        info.pixels_per_line = lbfb.pitch / 4;
+        if (lbfb.rgb){
+            info.redmask = 0x000000FF;
+            info.bluemask = 0x00FF0000;
+        } else {
+            info.redmask = 0x00FF0000;
+            info.bluemask = 0x000000FF;
+        }
+        info.greenmask = 0x0000FF00;
+        info.resvmask = 0xFF000000;
+    }
+    info.driver_entry1 = (uint8_t*)&lbp;
+    /* last: anything allocated after this is not reported to the kernel */
     info.allocatedStack = LBPmmngrGetAllocatedPtr();
     info.reserved_mem_count = LBPmmngrGetReservedMemCount();
-    info.driver_entry1 = &lbp;
+
+    LBUartPutString("Kernel boot info : ");
     LBUartPrintHex((uint64_t)&info);
 
-   
+    /* FP/SIMD on for EL1/EL0: CPACR_EL1 is UNKNOWN out of reset on real
+     * hardware (QEMU happens to set FPEN for direct kernel boot) and the
+     * kernel's compiler may use SIMD registers before it enables them */
+    asm volatile ("msr cpacr_el1, %0\n isb" :: "r"(3ULL << 20));
+
+    /* thread id registers are UNKNOWN out of reset on real hardware (QEMU
+     * zeroes them); the kernel reads TPIDR_EL1 as its per cpu pointer */
+    asm volatile ("msr tpidr_el1, xzr\n msr tpidr_el0, xzr\n msr tpidrro_el0, xzr\n isb"
+                  ::: "memory");
+    /* generic timers off: their control registers are UNKNOWN out of
+     * reset, and the kernel unmasks IRQs briefly before its interrupt
+     * controller is set up */
+    asm volatile ("msr cntv_ctl_el0, xzr\n msr cntp_ctl_el0, xzr\n isb" ::: "memory");
+
     LBRamdiskJumpToKernel(stackAddr, 0x100000, &info);
     while(1);
  }
- 

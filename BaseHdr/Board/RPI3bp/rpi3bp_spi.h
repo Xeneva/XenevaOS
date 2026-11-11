@@ -1,7 +1,7 @@
 /**
 * BSD 2-Clause License
 *
-* Copyright (c) 2022-2025, Manas Kamal Choudhury
+* Copyright (c) 2022-2026, Manas Kamal Choudhury
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -26,42 +26,69 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 **/
-
 #ifndef __RPI3BP_SPI_H__
 #define __RPI3BP_SPI_H__
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /*
- * AuRPI3SPI0Map -- map the spi0 to kernel higher half address
+ * BCM2835/BCM2837 SPI0 master ("spi-bcm2835" in Linux), polled.
+ *
+ * Pins (ALT0): GPIO8 CE0, GPIO7 CE1, GPIO9 MISO, GPIO10 MOSI, GPIO11 SCLK.
+ * Both chip selects are driven by the controller, active low.
  */
-extern void AuRPI3SPI0Map();
+
+/* SPI clock modes (CPOL << 1 | CPHA), as in Linux */
+#define RPI_SPI_MODE_0 0
+#define RPI_SPI_MODE_1 1
+#define RPI_SPI_MODE_2 2
+#define RPI_SPI_MODE_3 3
+
+/* return codes */
+#define RPI_SPI_OK		  0
+#define RPI_SPI_ERR_NODEV (-1) /* controller not initialized / not present */
+#define RPI_SPI_ERR_ARG	  (-2)
+#define RPI_SPI_ERR_TIME  (-3) /* FIFO or DONE never came: no controller */
 
 /*
- *AuRPI3SPI0Init -- initialize SPI0 of RPI3bp
+ * One device on the bus: which chip select it sits on, its clock mode and
+ * the clock it wants. The controller rounds the clock down to the next
+ * divider it can produce.
  */
-extern void AuRPI3SPI0Init();
+typedef struct _rpi_spi_device_ {
+	uint8_t chip_select; /* 0 = CE0 (GPIO8), 1 = CE1 (GPIO7) */
+	uint8_t mode;		 /* RPI_SPI_MODE_x */
+	uint32_t speed_hz;
+} AuRPISPIDevice;
 
 /*
- * AuRPISPITransfer -- transfer a single
- * 1 byte data
- * @param data -- data to transfer
+ * AuRPISPIInitialize -- map SPI0, route its pins, power it through the
+ * firmware and read the core clock it divides. Safe to call twice.
+ * @return RPI_SPI_OK or an error code
  */
-extern void AuRPISPITransfer(uint8_t data);
+extern int AuRPISPIInitialize();
 
 /*
- * AuRPISPITransferBuffer -- transfer multiple 1 byte
- * aligned buffer data
- * @param data -- pointer to buffer
- * @param len -- Length of total datas
+ * AuRPISPIPresent -- true once AuRPISPIInitialize has succeeded
  */
-extern void AuRPISPITransferBuffer(const uint8_t* data, uint32_t len);
+extern bool AuRPISPIPresent();
 
-extern void AuRPISPITransferStart();
+/*
+ * AuRPISPITransfer -- one full duplex transfer with chip select held
+ * active for all of it
+ * @param dev -- target device
+ * @param tx -- bytes to send, NULL sends zeros
+ * @param rx -- buffer for the received bytes, NULL discards them
+ * @param len -- number of bytes
+ * @return RPI_SPI_OK or an error code
+ */
+extern int AuRPISPITransfer(const AuRPISPIDevice* dev, const uint8_t* tx, uint8_t* rx,
+							uint32_t len);
 
-extern void AuRPISPITrasnferWrite(uint32_t data);
+/*
+ * AuRPISPIGetCoreClock -- clock SPI0 divides (VPU core clock), in Hz
+ */
+extern uint32_t AuRPISPIGetCoreClock();
 
-extern void AuRPISPITransferStop();
-
-extern void AuRPISPIFifoWrite(uint32_t data);
 #endif

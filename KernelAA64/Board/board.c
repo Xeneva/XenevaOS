@@ -70,6 +70,15 @@ void AuAA64BoardInitialize() {
 }
 
 /**
+ * @brief AuAA64BoardPostSchedulerInitialize -- start board driver threads
+ */
+void AuAA64BoardPostSchedulerInitialize() {
+#ifdef __TARGET_BOARD_RPI3__
+	AuRPI3PostSchedulerInitialize();
+#endif
+}
+
+/**
  * @brief AuAA64BoardSleepUS -- calls board specific sleep function
  */
 void AuAA64BoardSleepUS(uint32_t us) {
@@ -91,6 +100,7 @@ void AuAA64BoardSleepUS(uint32_t us) {
 void AuAA64BoardSleepMS(uint32_t ms) {
 #ifdef __TARGET_BOARD_RPI3__
 	AuRPIDelayMS(ms);
+	return;
 #endif
 	AuAA64BoardSleepUS(ms * 1000ULL);
 }
@@ -123,4 +133,4 @@ uint64_t AuAA64BoardGetBootEpoch() {
 #ifdef __TARGET_BOARD_QEMU_VIRT__
 	return AuVirtGetBootEpoch();
 #endif
-}
+}

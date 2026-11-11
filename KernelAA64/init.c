@@ -87,10 +87,20 @@ static bool _littleboot_used;
  * @param c -- Character to put
  */
 void AuUartPutc(char c) {
-	char* uart0 = (char*)UART0;
-	while ((*(uart0 + 0x18) & (1 << 5)))
+#ifdef __TARGET_BOARD_RPI3__
+	/* the console is the mini UART; the PL011 is the Bluetooth link */
+	volatile uint32_t* aux = (volatile uint32_t*)RPI_CONSOLE_UART;
+	while (!(aux[RPI_AUX_MU_LSR / 4] & RPI_AUX_MU_LSR_TXE))
 		;
-	*uart0 = c;
+	aux[RPI_AUX_MU_IO / 4] = (uint32_t)(uint8_t)c;
+	return;
+#endif
+	/* volatile 32-bit accesses: the BCM2837 peripheral bus does not do
+	 * byte reads of FR / byte writes of DR (QEMU tolerates them) */
+	volatile uint32_t* uart0 = (volatile uint32_t*)UART0;
+	while (uart0[0x18 / 4] & (1 << 5))
+		;
+	uart0[0] = (uint32_t)(uint8_t)c;
 }
 
 /**
@@ -208,6 +218,10 @@ extern void DclSerialTestRun(void);
  * by bootloader
  **/
 void _AuMain(KERNEL_BOOT_INFO* info) {
+	/* TPIDR_EL1 holds the per cpu pointer (AA64GetPerCPU). It is UNKNOWN
+	 * out of reset on real hardware, and UARTDebugOut consults it long
+	 * before AA64CpuInitialize: make it read "no per cpu data yet" now */
+	__asm__ volatile("msr tpidr_el1, xzr\n isb" ::: "memory");
 	_littleboot_used = false;
 	AuUartPutString("[aurora]: kernel entry reached \r\n");
 	if (info->boot_type == BOOT_LITTLEBOOT_ARM64) {
@@ -275,9 +289,9 @@ void _AuMain(KERNEL_BOOT_INFO* info) {
 	/* initialize process token layer */
 	AuProcessTokenInitialize();
 
-#ifdef __TARGET_BOARD_RPI3__
-	XPT2046Initialise();
-#endif
+	/* Raspberry Pi 3: peripheral drivers (XPT2046 touch panel, SPI LCD,
+	 * dwc2 USB) are not started at boot for now; the HDMI framebuffer
+	 * from LittleBoot and the PL011 console are all that is needed */
 
 	/* initialize our basic requirement */
 #if defined(__TARGET_BOARD_QEMU_VIRT__) && !defined(__XENEVA_BYPASS_VIRTIO_INPUT__)
@@ -372,6 +386,9 @@ void _AuMain(KERNEL_BOOT_INFO* info) {
 	UARTDebugOut("[aurora]: boot freed up \r\n");
 
 	AuSchedulerInitialize();
+
+	/* board driver threads (Raspberry Pi 3: XPT2046 touch sampling) */
+	AuAA64BoardPostSchedulerInitialize();
 
 #ifdef __TARGET_BOARD_QEMU_VIRT__
 	/* The controller is already enumerated. Starting the HID poll thread

@@ -51,7 +51,6 @@
 #define FW_CFG 0x09020000
 #define PCIE_MMIO  0x10000000
 #define PCIE_PIP   0x3eff0000
-#define PCIE_ECAM  0x3f000000
 
 /* IRQ Mappings to GIC*/
 #define UART0_IRQ  1
@@ -86,6 +85,15 @@
 
 #define UART0_DR ((volatile uint32_t*)(UART0 + 0x00))
 #define UART0_FR ((volatile uint32_t*)(UART0 + 0x18))
+
+/* Serial console: the mini UART (AUX block) on GPIO14/15. LittleBoot sets
+ * it up; the PL011 (UART0) is owned by the Bluetooth driver (rpibt.dll).
+ * Offsets are relative to RPI_AUX_BASE. */
+#define RPI_AUX_BASE		(RPI_MMIO_BASE + 0x215000)
+#define RPI_AUX_MU_IO		0x40
+#define RPI_AUX_MU_LSR		0x54
+#define RPI_AUX_MU_LSR_TXE	(1 << 5)
+#define RPI_CONSOLE_UART	RPI_AUX_BASE
 
 #endif
 

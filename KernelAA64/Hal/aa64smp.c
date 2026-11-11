@@ -79,6 +79,7 @@
 
 extern uint8_t aa64_smp_trampoline[];
 extern uint8_t aa64_smp_trampoline_end[];
+extern uint8_t aa64_smp_trampoline_spin[];
 extern char vectors[];
 extern int64_t aa64_psci_call_hvc(uint64_t fn, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 extern int64_t aa64_psci_call_smc(uint64_t fn, uint64_t arg1, uint64_t arg2, uint64_t arg3);
@@ -211,12 +212,14 @@ static uint64_t AA64SMPBuildIdentityMap(uint64_t phys) {
 
 /**
  * @brief AA64SMPStartCPU -- fill the boot block for one core and
- * start it through PSCI CPU_ON
+ * start it, through PSCI CPU_ON or by releasing it from the firmware's
+ * spin table
  * @param cpu_num -- logical cpu number to give this core
  * @param mpidr -- target core's affinity value from the device tree
+ * @param release_addr -- spin-table cpu-release-addr, 0 for PSCI
  * @return true if the core reported in before the timeout
  */
-static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr) {
+static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr, uint64_t release_addr) {
 	uint64_t stack = AuPmmngrAllocPages(AA64_SMP_AP_STACK_PAGES, 1, 0, AURORA_PAGE_KERNEL);
 	if (stack == PMM_INVALID_PHYS) {
 		AuTextOut("[aurora]: smp: no stack for cpu %d \r\n", (uint64_t)cpu_num);
@@ -252,13 +255,25 @@ static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr) {
 	/* the trampoline reads this with the MMU off */
 	aa64_dc_cvac_range(param, sizeof(AA64SMPBootParam));
 
-	uint64_t param_phys = _smp_boot_page + AA64_SMP_PARAM_OFFSET + cpu_num * AA64_SMP_PARAM_STRIDE;
-	int64_t ret = AA64PSCICall(PSCI_FN64_CPU_ON, mpidr, _smp_boot_page, param_phys);
-	if (ret != PSCI_RET_SUCCESS) {
-		AuTextOut("[aurora]: smp: CPU_ON mpidr %x failed (%d) \r\n", mpidr, ret);
-		AuPmmngrReleasePages(stack);
-		AuPmmngrReleasePages(exc_stack);
-		return false;
+	if (release_addr) {
+		/* spin-table: the core sits in the firmware's wfe loop polling
+		 * release_addr with its caches off. Publish the trampoline's spin
+		 * entry there, push it out to memory and wake the core */
+		uint64_t entry =
+			_smp_boot_page + (uint64_t)(aa64_smp_trampoline_spin - aa64_smp_trampoline);
+		volatile uint64_t* release = (volatile uint64_t*)P2V(release_addr);
+		*release = entry;
+		__asm__ volatile("dc civac, %0\n dsb sy\n sev" ::"r"(release) : "memory");
+	} else {
+		uint64_t param_phys =
+			_smp_boot_page + AA64_SMP_PARAM_OFFSET + cpu_num * AA64_SMP_PARAM_STRIDE;
+		int64_t ret = AA64PSCICall(PSCI_FN64_CPU_ON, mpidr, _smp_boot_page, param_phys);
+		if (ret != PSCI_RET_SUCCESS) {
+			AuTextOut("[aurora]: smp: CPU_ON mpidr %x failed (%d) \r\n", mpidr, ret);
+			AuPmmngrReleasePages(stack);
+			AuPmmngrReleasePages(exc_stack);
+			return false;
+		}
 	}
 
 	/* plain counter poll, AA64SleepUS parks in wfi and nothing is
@@ -277,6 +292,21 @@ static bool AA64SMPStartCPU(uint32_t cpu_num, uint64_t mpidr) {
 }
 
 /**
+ * @brief AA64SMPGetReleaseAddr -- spin-table cpu-release-addr of a /cpus
+ * child, 0 if missing
+ */
+static uint64_t AA64SMPGetReleaseAddr(uint32_t* cpu) {
+	uint32_t ncells = 0;
+	uint32_t* cells = AuDeviceTreeGetPropCells(cpu, "cpu-release-addr", &ncells);
+	if (!cells || ncells == 0 || ncells > 2)
+		return 0;
+	uint64_t addr = 0;
+	for (uint32_t i = 0; i < ncells; i++)
+		addr = (addr << 32) | AuDTBSwap32(cells[i]);
+	return addr;
+}
+
+/**
  * @brief AA64SMPInitialize -- start every secondary core described
  * in the device tree through PSCI CPU_ON
  */
@@ -290,19 +320,18 @@ void AA64SMPInitialize() {
 		return;
 	}
 
+	/* PSCI is optional: spin-table boards (Raspberry Pi 3) have none */
 	uint32_t* psci = AuDeviceTreeGetNode("psci");
-	const char* method = AuDeviceTreeGetStringProperty(psci, "method");
-	if (!method) {
-		AuTextOut("[aurora]: smp: no psci method, staying uniprocessor \r\n");
-		return;
+	const char* method = psci ? AuDeviceTreeGetStringProperty(psci, "method") : NULL;
+	bool have_psci = method != NULL;
+	if (have_psci) {
+		_smp_psci_hvc = (strcmp(method, "hvc") == 0);
+		int64_t version = AA64PSCICall(PSCI_FN_VERSION, 0, 0, 0);
+		AuTextOut("[aurora]: smp: psci %d.%d via %s \r\n",
+				  (uint64_t)((version >> 16) & 0xFFFF),
+				  (uint64_t)(version & 0xFFFF),
+				  method);
 	}
-	_smp_psci_hvc = (strcmp(method, "hvc") == 0);
-
-	int64_t version = AA64PSCICall(PSCI_FN_VERSION, 0, 0, 0);
-	AuTextOut("[aurora]: smp: psci %d.%d via %s \r\n",
-			  (uint64_t)((version >> 16) & 0xFFFF),
-			  (uint64_t)(version & 0xFFFF),
-			  method);
 
 	size_t tramp_size = (size_t)(aa64_smp_trampoline_end - aa64_smp_trampoline);
 	if (tramp_size > AA64_SMP_PARAM_OFFSET) {
@@ -359,8 +388,24 @@ void AA64SMPInitialize() {
 		}
 
 		const char* enable = AuDeviceTreeGetStringProperty(cpu, "enable-method");
-		if (!enable || strcmp(enable, "psci") != 0) {
-			/* TODO: spin-table (RPi3) */
+		if (enable && strcmp(enable, "spin-table") == 0) {
+			/* the spin entry finds its boot block by MPIDR.Aff0, so the
+			 * logical number is Aff0 (cores 1..3 on the Pi 3) */
+			uint64_t release = AA64SMPGetReleaseAddr(cpu);
+			uint32_t slot = (uint32_t)(mpidr & 0xFF);
+			if (!release || slot == 0 || slot >= AA64_SMP_MAX_CPUS || slot < _smp_next_slot ||
+				(mpidr & ~0xFFULL) != 0) {
+				AuTextOut("[aurora]: smp: spin-table cpu mpidr %x unusable \r\n", mpidr);
+				continue;
+			}
+			_smp_next_slot = slot + 1;
+			AuTextOut("[aurora]: smp: cpu %d spin-table release at %x \r\n", (uint64_t)slot,
+					  release);
+			if (AA64SMPStartCPU(slot, mpidr, release))
+				_smp_cpu_count++;
+			continue;
+		}
+		if (!enable || strcmp(enable, "psci") != 0 || !have_psci) {
 			AuTextOut("[aurora]: smp: cpu mpidr %x enable-method %s not supported \r\n",
 					  mpidr,
 					  enable ? enable : "none");
@@ -369,7 +414,7 @@ void AA64SMPInitialize() {
 
 		/* a slot is never reused, even if its core failed or timed out */
 		uint32_t slot = _smp_next_slot++;
-		if (AA64SMPStartCPU(slot, mpidr))
+		if (AA64SMPStartCPU(slot, mpidr, 0))
 			_smp_cpu_count++;
 	}
 
@@ -450,10 +495,8 @@ int AA64SMPGetCPUStats(AA64CPUStats* out, int max) {
  * @brief AA64SMPIPILocalInit -- enable the IPI SGIs on the calling core
  */
 void AA64SMPIPILocalInit() {
-#ifndef __TARGET_BOARD_RPI3__
 	GICEnablePPILocal(AA64_IPI_RESCHED);
 	GICEnablePPILocal(AA64_IPI_DEFERRED_IRQ);
-#endif
 }
 
 /**

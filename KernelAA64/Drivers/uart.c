@@ -60,7 +60,12 @@ static inline void uart_write_reg(uint32_t reg_offset, uint32_t value) {
  * @brief UARTInitialize -- initialize uart serial output
  */
 void UARTInitialize() {
+#ifdef __TARGET_BOARD_RPI3__
+	/* console is the mini UART, already programmed by LittleBoot */
+	uartMMIO = (uint64_t*)AuMapMMIO(RPI_CONSOLE_UART, 1);
+#else
 	uartMMIO = (uint64_t*)AuMapMMIO(UART0_BASE, 1);
+#endif
 	AuTextOut("UART MMIO -> %x \n", uartMMIO);
 
 #ifdef __TARGET_BOARD_QEMU_VIRT__
@@ -94,6 +99,13 @@ bool is_uart_initialized() {
 void uartPutc(char c) {
 #if defined(__TARGET_BOARD_IMX8MP_VERDIN_DAHLIA__) || defined(__TARGET_BOARD_IMX8MP_SOC__)
 	au_imx8mp_uart_putc(c);
+#elif defined(__TARGET_BOARD_RPI3__)
+	/* mini UART: the PL011 belongs to the Bluetooth controller */
+	volatile uint32_t* aux =
+		(volatile uint32_t*)(_uart_mapped ? (uint64_t)uartMMIO : (uint64_t)RPI_CONSOLE_UART);
+	while (!(aux[RPI_AUX_MU_LSR / 4] & RPI_AUX_MU_LSR_TXE))
+		;
+	aux[RPI_AUX_MU_IO / 4] = (uint32_t)(uint8_t)c;
 #else
 
 	uint64_t* mmioBase = 0;
@@ -101,10 +113,13 @@ void uartPutc(char c) {
 		mmioBase = uartMMIO;
 	else
 		mmioBase = (uint64_t*)UART0_BASE;
-	volatile char* uart0 = (volatile char*)mmioBase;
-	while ((*(uart0 + 0x18) & (1 << 5)))
+	/* 32-bit accesses only: the BCM2837 peripheral bus does not support
+	 * byte reads of FR / byte writes of DR (QEMU does, real silicon hangs
+	 * polling a TXFF bit that never clears) */
+	volatile uint32_t* uart0 = (volatile uint32_t*)mmioBase;
+	while (uart0[0x18 / 4] & (1 << 5))
 		;
-	*uart0 = c;
+	uart0[0] = (uint32_t)(uint8_t)c;
 #endif
 }
 

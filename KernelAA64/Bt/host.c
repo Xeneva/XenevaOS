@@ -3165,6 +3165,74 @@ static void publish_dev(void) {
 	UARTDebugOut("[bt]: /dev/bt0 ready\r\n");
 }
 
+/* Name set by a board driver through AuBtSetLocalName. Empty on QEMU,
+ * where the adapter is never made discoverable. */
+static char local_name[BT_LOCAL_NAME_MAX];
+
+#define HCI_WRITE_LOCAL_NAME 0x0C13
+#define HCI_WRITE_SCAN_ENABLE 0x0C1A
+#define HCI_WRITE_EIR 0x0C52
+#define LE_SET_ADV_PARAM 0x2006
+#define LE_SET_ADV_DATA 0x2008
+#define LE_SET_ADV_EN 0x200A
+
+/* Make the controller visible as local_name: classic inquiry + page scan
+ * with the name in the EIR (phones list it without a remote name
+ * request), plus non-connectable LE advertising carrying the same name.
+ * Every step is best effort; a refusal only costs that one visibility
+ * path. */
+static void make_discoverable(void) {
+	uint8_t p[248];
+	uint8_t n = 0;
+	while (n < BT_LOCAL_NAME_MAX - 1 && local_name[n])
+		n++;
+	if (n == 0)
+		return;
+
+	memset(p, 0, sizeof p);
+	memcpy(p, local_name, n);
+	if (hci(HCI_WRITE_LOCAL_NAME, p, 248, NULL, NULL))
+		UARTDebugOut("[bt]: WARN write local name rejected\r\n");
+
+	/* FEC_Required = 0, then 240 octets of EIR: complete local name */
+	memset(p, 0, 241);
+	p[1] = (uint8_t)(n + 1);
+	p[2] = 0x09;
+	memcpy(p + 3, local_name, n);
+	if (hci(HCI_WRITE_EIR, p, 241, NULL, NULL))
+		UARTDebugOut("[bt]: WARN extended inquiry response rejected\r\n");
+
+	/* inquiry scan (discoverable) + page scan (connectable) */
+	p[0] = 0x03;
+	if (hci(HCI_WRITE_SCAN_ENABLE, p, 1, NULL, NULL))
+		UARTDebugOut("[bt]: WARN scan enable rejected\r\n");
+	else
+		UARTDebugOut("[bt]: discoverable as \"%s\"\r\n", local_name);
+
+	/* LE: ADV_NONCONN_IND every 100-150 ms on all three channels */
+	memset(p, 0, 15);
+	put16(p + 0, 0x00A0);
+	put16(p + 2, 0x00F0);
+	p[4] = 0x03;
+	p[13] = 0x07;
+	if (hci(LE_SET_ADV_PARAM, p, 15, NULL, NULL) == 0) {
+		uint8_t an = n > 26 ? 26 : n;
+		memset(p, 0, 32);
+		/* flags: LE general discoverable, simultaneous LE + BR/EDR */
+		p[1] = 2;
+		p[2] = 0x01;
+		p[3] = 0x1A;
+		p[4] = (uint8_t)(an + 1);
+		p[5] = 0x09;
+		memcpy(p + 6, local_name, an);
+		p[0] = (uint8_t)(5 + an);
+		hci(LE_SET_ADV_DATA, p, 32, NULL, NULL);
+		p[0] = 1;
+		if (hci(LE_SET_ADV_EN, p, 1, NULL, NULL) == 0)
+			UARTDebugOut("[bt]: LE advertising as \"%s\"\r\n", local_name);
+	}
+}
+
 static void identity(void) {
 	uint8_t mask[8];
 	uint8_t lehost[2];
@@ -3294,6 +3362,8 @@ static void identity(void) {
 			UARTDebugOut("[btscan]: no advertisers found\r\n");
 		}
 	}
+	if (local_name[0])
+		make_discoverable();
 	publish_dev();
 	bond_load();
 	snoop_open();
@@ -3326,6 +3396,43 @@ void AuBtUsbReady(const AuBtUsbOps* ops) {
  * HCI through the old ops table. The thread stays parked on have_usb. */
 void AuBtUsbDetach(void) {
 	have_usb = 0;
+}
+
+void AuBtSetLocalName(const char* name) {
+	int i = 0;
+	if (name)
+		for (; i < BT_LOCAL_NAME_MAX - 1 && name[i]; i++)
+			local_name[i] = name[i];
+	local_name[i] = 0;
+}
+
+/* Board drivers (Drivers/Bt/RPI) program a PL011, load the controller
+ * firmware and pass the UART here. Same polled H4 path as the QEMU
+ * UART1 bridge; the driver turns on RTS/CTS so the 16-byte RX FIFO
+ * holds off the controller between polls. */
+int AuBtH4UartReady(volatile uint32_t* pl011) {
+	AA64Thread* thr;
+	if (!pl011)
+		return -1;
+	if (have_usb || have_h4uart) {
+		UARTDebugOut("[bt]: H4 UART refused, a transport is already attached\r\n");
+		return -1;
+	}
+	bt_uart = pl011;
+	uart_rx_hold_n = 0;
+	uart_hold_rd = 0;
+	uart_tx_depth = 0;
+	uart_feed_depth = 0;
+	bt_h4_reset(&h4);
+	have_h4uart = 1;
+	UARTDebugOut("[bt]: H4 UART transport attached\r\n");
+	identity();
+	if (!bt_started) {
+		thr = AuCreateKthread(bt_thread, AuGetRootPageTable(), "bthost");
+		(void)thr;
+		bt_started = 1;
+	}
+	return 0;
 }
 
 void AuBtInitialize(void) {

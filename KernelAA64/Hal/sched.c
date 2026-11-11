@@ -870,7 +870,6 @@ void AuScheduleThread(AA64Registers* regs) {
 	if (schedIsIdle(next))
 		this_cpu->idle_tick++;
 
-#ifndef __TARGET_BOARD_RPI3__
 	/* the virtual timer is banked per core */
 	if (!want_tick && !this_cpu->tick_stopped) {
 		suspendTimer();
@@ -879,9 +878,6 @@ void AuScheduleThread(AA64Registers* regs) {
 		setupTimerIRQ();
 		this_cpu->tick_stopped = 0;
 	}
-#else
-	(void)want_tick;
-#endif
 
 	/* BKL hand over, outside the scheduler lock (order is BKL -> sched).
 	 * runThr keeps the depth it held for its next resume; next gets back
@@ -1058,9 +1054,7 @@ void AuSchedulerStart() {
 	AA64SMPIPILocalInit();
 	AA64GetPerCPU()->acct_last = get_cntpct_el0();
 	_scheduler_initialized = true;
-#ifndef __TARGET_BOARD_RPI3__
 	GICClearPendingIRQ(27);
-#endif
 	tlb_flush_vmalle1is();
 	AuVmmActivate(idle->pml);
 	aa64_restore_fp(idle->fp_regs, (uint64_t*)&idle->fpcr, (uint64_t*)&idle->fpsr);
@@ -1474,14 +1468,13 @@ void AuSchedEnterAPIdle(void) {
 	idle->state = THREAD_STATE_RUNNING;
 	AuVmmActivate(idle->pml);
 	aa64_restore_fp(idle->fp_regs, (uint64_t*)&idle->fpcr, (uint64_t*)&idle->fpsr);
-#ifndef __TARGET_BOARD_RPI3__
 	AA64SMPIPILocalInit();
 	p->acct_last = get_cntpct_el0();
-	/* the virtual timer and its PPI are banked per core */
+	/* the virtual timer and its PPI are banked per core (on the Pi 3 the
+	 * GIC calls drive the bcm2836 local interrupt controller) */
 	suspendTimer();
 	GICEnablePPILocal(27);
 	setupTimerIRQ();
-#endif
 	/* erets into AuAPIdleThread on the idle thread's own kernel stack,
 	 * spsr 0x345 unmasks IRQs */
 	first_time_sex(idle);

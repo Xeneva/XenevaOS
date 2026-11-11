@@ -171,7 +171,13 @@ uint64_t AuPCIEGetDevice(uint16_t seg, int bus, int dev, int func) {
 	if (_ecamAddress != 0) {
 		addr = _ecamAddress + ((bus << 20) | (dev << 15) | (func << 12));
 	} else {
-		acpiMcfg* mcfg = AuACPIGetMCFG();
+		/* no ECAM from the DTB or a hard coded window, and no ACPI MCFG
+		 * (Raspberry Pi 3: no PCIe at all): there is no device. Reading a
+		 * NULL table here used to take low firmware memory for a bus range
+		 * and base address. */
+		acpiMcfg* mcfg = _pcieInitialized ? AuACPIGetMCFG() : NULL;
+		if (!mcfg)
+			return 0;
 		acpiMcfgAlloc* allocs = MEM_AFTER(acpiMcfgAlloc*, mcfg);
 		if (allocs->startBusNum <= bus && bus <= allocs->endBusNum) {
 			addr = allocs->baseAddress + ((bus - allocs->startBusNum) << 20) | (dev << 15) |
@@ -192,6 +198,8 @@ uint64_t AuPCIEGetDevice(uint16_t seg, int bus, int dev, int func) {
  */
 uint32_t AuPCIERead(uint64_t device, int reg, int bus, int dev, int func) {
 	uint64_t result = 0;
+	if (!device)
+		return 0xFFFFFFFF;
 
 	int size = 0;
 	switch (reg) {
@@ -288,6 +296,8 @@ uint32_t AuPCIERead(uint64_t device, int reg, int bus, int dev, int func) {
  */
 uint64_t AuPCIERead64(uint64_t device, int reg, int size, int bus, int dev, int func) {
 	uint64_t result = 0;
+	if (!device)
+		return 0xFFFFFFFFFFFFFFFF;
 	if (size == 1) {
 		result = *RAW_OFFSET(volatile uint8_t*, device, reg);
 		return result;
@@ -312,6 +322,8 @@ uint64_t AuPCIERead64(uint64_t device, int reg, int size, int bus, int dev, int 
 * @param func -- func number
 */
 void AuPCIEWrite(uint64_t device, int reg, uint32_t val, int bus, int dev, int func) {
+	if (!device)
+		return;
 	reg = reg;
 	int size = 0;
 	switch (reg) {
@@ -394,6 +406,8 @@ void AuPCIEWrite(uint64_t device, int reg, uint32_t val, int bus, int dev, int f
 
 // {@private use|
 void AuPCIEWrite64(uint64_t device, int reg, int size, uint64_t val, int bus, int dev, int func) {
+	if (!device)
+		return;
 	if (size == 1) {
 		*RAW_OFFSET(volatile uint8_t*, device, reg) = (uint8_t)val;
 	} else if (size == 2) {

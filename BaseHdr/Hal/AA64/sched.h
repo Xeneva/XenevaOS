@@ -213,7 +213,7 @@ extern void AuScheduleThread(AA64Registers* regs);
 extern void AuScheduleNext();
 /* Park the caller for about ms and run another thread. Returns 0, or
  * -1 when the scheduler is not running yet. */
-extern int AuSchedYieldMs(uint64_t ms);
+AU_EXTERN AU_EXPORT int AuSchedYieldMs(uint64_t ms);
 extern void AuSchedulerStart();
 extern AA64Thread* AuGetIdleThread();
 extern AA64Thread* AuGetCurrentThread();

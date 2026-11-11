@@ -168,7 +168,7 @@ uint8_t ScratchPad[4096];
 
 uint32_t ExtractEFICluster(){
     struct FatDir* dirent;
-    char dos_file_name[11];
+    char dos_file_name[12];
     FatToDOSFilename("EFI", dos_file_name, 11);
     dos_file_name[11] = 0;
     for (uint32_t sector = 0; sector < sectorPerCluster; sector++){
@@ -197,7 +197,7 @@ uint32_t ExtractEFICluster(){
 uint32_t ExtractXeneva(uint32_t parentCluster){
     uint32_t EFIsector = FatClusterToSector(parentCluster);
     struct FatDir* dirent;
-    char dos_file_name[11];
+    char dos_file_name[12];
     FatToDOSFilename("XENEVA", dos_file_name, 11);
     dos_file_name[11] = 0;
     for (uint32_t sector = 0; sector < sectorPerCluster; sector++){
@@ -226,7 +226,7 @@ uint64_t align_to_page(uint64_t size){
 uint32_t ExtractKernel(uint32_t parentClust){
     uint32_t EFIsector = FatClusterToSector(parentClust);
     struct FatDir* dirent;
-    char dos_file_name[11];
+    char dos_file_name[12];
     FatToDOSFilename("xnkrnl.exe", dos_file_name, 11);
     dos_file_name[11] = 0;
     for (uint32_t sector = 0; sector < sectorPerCluster; sector++){
@@ -329,32 +329,50 @@ void LoadKernelFile(){
         sect[i].SizeOfRawData);
 
     }
+    /* caches are on now: the image was written through the D-cache and
+     * must be made visible to instruction fetch before it runs */
+    LBCacheSyncICache(kernelAddr, kernelAddr + nt->OptionalHeader.SizeOfImage);
     ent = (entry)(kernelAddr + nt->OptionalHeader.AddressOfEntryPoint);
     LBUartPrintHex((uint64_t)ent);
 }
 /*
- * LBRamdiskInitialize -- initialize ramdisk
+ * LBRamdiskLocate -- find the initramfs the firmware loaded, from
+ * /chosen linux,initrd-start/end. Called before the memory map is built
+ * so the initramfs can be kept out of LittleBoot's allocator.
+ * @return 1 if found
  */
-void LBRamdiskInitialize(){
+int LBRamdiskLocate(){
     uint32_t* rmdisk = dtb_find_node_prefix("chosen");
     if (!rmdisk){
-       LBUartPutString("Ramdisk not found \n");
-       return;
+       LBUartPutString("Ramdisk: no /chosen node \n");
+       return 0;
     }
     uint32_t *initrd_start = dtb_node_find_property(rmdisk, "linux,initrd-start");
     uint32_t *initrd_end = dtb_node_find_property(rmdisk,"linux,initrd-end");
-#ifdef RASPBERRY_PI
-    uint64_t ird_start_addr = (uint64_t)swizzle(initrd_start[0])<< 32UL | (uint64_t)swizzle(initrd_start[2]);
-    uint64_t ird_end_addr = (uint64_t)swizzle(initrd_end[0]) << 32UL | swizzle(initrd_end[2]);
-#endif
-   // LBUartPutString("IRD Start:");
-   // LBUartPrintHex(ird_start_addr);
-   // LBUartPutString("IRD END:");
-   // LBUartPrintHex(ird_end_addr);
-    LBUartPutString("\n");
-   // LBUartPrintHex(swizzle(initrd_start[1]));
-    ramdisk_start = ird_start_addr;
-    ramdisk_end = ird_end_addr;
+    if (!initrd_start || !initrd_end){
+       LBUartPutString("Ramdisk: /chosen has no linux,initrd-start/end \n");
+       return 0;
+    }
+    /* initrd_start[0] is the property length: 4 bytes = one cell
+     * (Pi firmware / QEMU on BCM2837), 8 bytes = two cells */
+    ramdisk_start = LBDTBPropReadCells(initrd_start, 0, LBDTBPropLength(initrd_start) / 4);
+    ramdisk_end = LBDTBPropReadCells(initrd_end, 0, LBDTBPropLength(initrd_end) / 4);
+    LBUartPutString("IRD Start:");
+    LBUartPrintHex(ramdisk_start);
+    LBUartPutString("IRD END:");
+    LBUartPrintHex(ramdisk_end);
+    return ramdisk_start != 0 && ramdisk_end > ramdisk_start;
+}
+
+/*
+ * LBRamdiskInitialize -- mount the initramfs located by LBRamdiskLocate
+ * and load EFI/XENEVA/xnkrnl.exe from it
+ */
+void LBRamdiskInitialize(){
+    if (ramdisk_start == 0 || ramdisk_end <= ramdisk_start){
+       LBUartPutString("Ramdisk not found \n");
+       return;
+    }
     LBUartPutString("Ramdisk initialized \n");
 
     paddr_t* addr = (paddr_t*)ScratchPad;
@@ -395,10 +413,12 @@ void LBRamdiskInitialize(){
     uint32_t xnkrnlClust = ExtractKernel(kernelClust);
     ReadKernelFile(xnkrnlClust);
     LoadKernelFile();
-    /* for (uint64_t j = loadAddr; j <= loadAddrLast; j += 0x1000){
-        LBPagingFree(j,1);
-    }
-    LBUartPutString("Kernel Read data region unmapped successfully \n");*/
+    /* the raw file copy at loadAddr is no longer needed: unmap it and give
+     * the pages back, so the kernel neither inherits the mapping (it maps
+     * the framebuffer right above it) nor loses the memory */
+    for (uint64_t j = loadAddr; j < loadAddrLast; j += 0x1000)
+        LBPagingFree(j, 1);
+    LBUartPutString("Kernel staging area released \n");
 }
 
 /*
@@ -407,23 +427,27 @@ void LBRamdiskInitialize(){
 void LBRamdiskJumpToKernel(uint64_t stack, size_t stacksz,KERNEL_BOOT_INFO* info){ 
     uint64_t bootinfo = (uint64_t)info;
       LBUartPrintHex(bootinfo);
+    /*
+     * Stack switch, argument and branch must be one asm block: as separate
+     * statements followed by a C call to ent(), the compiler is free to
+     * reuse x0 and to tail-call (clang emits "ldr x0, ent; br x0"), so the
+     * kernel would get its own entry address instead of the boot info.
+     * x0 = KERNEL_BOOT_INFO*, x1 = 30 (as before), fresh frame chain.
+     */
     __asm__ volatile(
         "add x5, %0, %1\n"
+        "sub x5, x5, #64\n"
         "mov sp, x5\n"
-        "sub sp, sp, #32\n"
-        "stp x29, x30, [sp, #-16]!\n"
-        "mov x29, sp\n"
-        "sub sp, sp,#32 \n"
+        "mov x29, xzr\n"
+        "mov x30, xzr\n"
         "mov x0, %2\n"
+        "mov x1, #30\n"
+        "br %3\n"
         :
-        :"r"(stack),"r"(stacksz),"r"(bootinfo)
-        : "x0", "sp"
+        :"r"(stack),"r"(stacksz),"r"(bootinfo),"r"(ent)
+        : "x0", "x1", "x5", "x29", "x30", "memory"
     );
-   
-    __asm__ volatile(
-        "mov x1,30\n"
-    );
-    ent();
+    __builtin_unreachable();
 }
 
 uint64_t LBRamdiskGetStartAddress(){

@@ -37,6 +37,12 @@
 /*
  * LBRamdiskInitialize -- initialize ramdisk
  */
+/*
+ * LBRamdiskLocate -- read the initramfs location from the device tree
+ * @return 1 if found
+ */
+extern int LBRamdiskLocate();
+
 extern void LBRamdiskInitialize();
 
 /*
@@ -48,4 +54,4 @@ extern uint64_t LBRamdiskGetStartAddress();
 
 extern uint64_t LBRamdiskGetEndAddress();
 
-#endif
+#endif

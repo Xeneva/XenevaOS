@@ -11,6 +11,7 @@
 #define __AU_BKL_H__
 
 #include <stdint.h>
+#include <aurora.h>
 #include <stdbool.h>
 
 /*
@@ -39,14 +40,17 @@ extern void AuBKLLock(void);
 /** drop one level of the BKL, no-op if this core does not own it */
 extern void AuBKLUnlock(void);
 
-/** drop the BKL completely, returns the depth this core held (0 if none) */
-extern uint32_t AuBKLReleaseAll(void);
+/** drop the BKL completely, returns the depth this core held (0 if none).
+ * Kernel threads that only touch their own state (driver polling threads)
+ * call it before waiting on hardware or sleeping: the scheduler hands a
+ * kernel thread one level each time it resumes it */
+AU_EXTERN AU_EXPORT uint32_t AuBKLReleaseAll(void);
 
 /** take the BKL with a given depth (0 does nothing) */
 extern void AuBKLAcquireDepth(uint32_t depth);
 
 /** true if the calling core owns the BKL */
-extern bool AuBKLHeldByMe(void);
+AU_EXTERN AU_EXPORT bool AuBKLHeldByMe(void);
 
 /** take the BKL only if that needs no waiting (recursive on the owner).
  * Interrupt handlers use this: they never spin on the BKL */

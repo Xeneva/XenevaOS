@@ -247,6 +247,9 @@ void AuLoaderMapExecFromCache(AuProcess* proc,
 						memcpy((uint8_t*)dest + dst_off,
 							   (uint8_t*)P2V(cache->physicalPage) + src_poff,
 							   chunk);
+						/* written through the direct map, fetched at the
+						 * user VA: push it to the point of unification */
+						AA64DCacheCleanPoU((uint8_t*)dest + dst_off, chunk);
 					}
 					dst_off += chunk;
 					src_off += chunk;
@@ -261,6 +264,8 @@ void AuLoaderMapExecFromCache(AuProcess* proc,
 				AuSchedYieldMs(1);
 		}
 	}
+	/* frames may have held another process's code: drop stale lines */
+	AA64ICacheInvalidateAll();
 }
 
 extern bool setStk();
